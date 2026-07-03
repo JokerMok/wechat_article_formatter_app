@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
@@ -59,6 +60,527 @@ const blockName: Record<string, string> = {
   list: "列表",
   card: "信息卡片",
 };
+
+const textImageFontFamily = "-apple-system, BlinkMacSystemFont, Helvetica Neue, PingFang SC, Hiragino Sans GB, Microsoft YaHei, Arial, sans-serif";
+
+const textImageRatios = {
+  portrait34: {
+    name: "3:4 图文",
+    width: 1080,
+    height: 1440,
+    bodyLimit: 520,
+  },
+  portrait916: {
+    name: "9:16 竖版",
+    width: 1080,
+    height: 1920,
+    bodyLimit: 760,
+  },
+} as const;
+
+const textImagePresets = {
+  warmBrown: {
+    name: "暖棕文字卡",
+    background: "#FFFBF6",
+    title: "#8A430E",
+    body: "#6B3A16",
+    rule: "#D8C5B1",
+    highlight: "#F1E7DC",
+    dots: "#E9E0D7",
+  },
+  ink: {
+    name: "黑白长文卡",
+    background: "#FBFBF8",
+    title: "#111827",
+    body: "#333333",
+    rule: "#D6D3D1",
+    highlight: "#ECEBE7",
+    dots: "#D6D3D1",
+  },
+  teal: {
+    name: "青绿知识卡",
+    background: "#F7FFFC",
+    title: "#0F766E",
+    body: "#24413D",
+    rule: "#B7E4DC",
+    highlight: "#E0F7F2",
+    dots: "#CDEDE7",
+  },
+} as const;
+
+type TextImagePresetKey = keyof typeof textImagePresets;
+type TextImageRatioKey = keyof typeof textImageRatios;
+
+type TextImagePage = {
+  title: string;
+  body: string;
+  pageNumber: number;
+  totalPages: number;
+};
+
+function font(weight: number, size: number) {
+  return `${weight} ${size}px ${textImageFontFamily}`;
+}
+
+function wrapCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  const lines: string[] = [];
+  let line = "";
+
+  for (const char of Array.from(text.trim())) {
+    const nextLine = line + char;
+    if (line && ctx.measureText(nextLine).width > maxWidth) {
+      lines.push(line);
+      line = char.trimStart();
+    } else {
+      line = nextLine;
+    }
+  }
+
+  if (line) lines.push(line);
+  return lines;
+}
+
+function blockToCarouselText(block: ReturnType<typeof parseArticle>[number]) {
+  switch (block.type) {
+    case "list":
+      return block.items.map((item) => `- ${item}`).join("\n");
+    case "card":
+      return `${block.title ? `${block.title}：` : ""}${block.body}`;
+    case "image":
+      return "";
+    default:
+      return "text" in block ? block.text : "";
+  }
+}
+
+function splitLongParagraph(text: string, maxChars: number) {
+  const sentences = text.match(/[^。！？!?；;]+[。！？!?；;]?/g) ?? [text];
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const sentence of sentences) {
+    if (sentence.length > maxChars) {
+      if (current) {
+        chunks.push(current);
+        current = "";
+      }
+      for (let index = 0; index < sentence.length; index += maxChars) {
+        chunks.push(sentence.slice(index, index + maxChars));
+      }
+      continue;
+    }
+
+    if (current && current.length + sentence.length > maxChars) {
+      chunks.push(current);
+      current = sentence;
+    } else {
+      current += sentence;
+    }
+  }
+
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function splitBodyForPages(body: string, maxChars: number) {
+  const paragraphs = body
+    .split(/\n+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const paragraph of paragraphs) {
+    const paragraphChunks = paragraph.length > maxChars ? splitLongParagraph(paragraph, maxChars) : [paragraph];
+
+    for (const chunk of paragraphChunks) {
+      if (current && current.length + chunk.length + 2 > maxChars) {
+        chunks.push(current);
+        current = chunk;
+      } else {
+        current = current ? `${current}\n\n${chunk}` : chunk;
+      }
+    }
+  }
+
+  if (current) chunks.push(current);
+  return chunks.length ? chunks : [""];
+}
+
+function pageTextLength(page: Omit<TextImagePage, "pageNumber" | "totalPages">) {
+  return page.title.length * 1.15 + page.body.length;
+}
+
+function createCarouselPages(sourceText: string, ratioKey: TextImageRatioKey): TextImagePage[] {
+  const blocks = parseArticle(sourceText);
+  const ratio = textImageRatios[ratioKey];
+  const titleBlock = blocks.find((block) => block.type === "title");
+  const articleTitle = titleBlock && "text" in titleBlock ? titleBlock.text : "文字轮播图";
+  const sections: Omit<TextImagePage, "pageNumber" | "totalPages">[] = [];
+  let currentSectionTitle = articleTitle;
+  let currentParts: string[] = [];
+
+  const flushSection = () => {
+    const body = currentParts.filter(Boolean).join("\n\n").trim();
+    if (!body && sections.length > 0) return;
+    sections.push({ title: currentSectionTitle, body });
+    currentParts = [];
+  };
+
+  for (const block of blocks) {
+    if (block.type === "title" || block.type === "image") continue;
+
+    if (block.type === "section") {
+      flushSection();
+      currentSectionTitle = block.text;
+      currentParts = [];
+      continue;
+    }
+
+    const text = blockToCarouselText(block);
+    if (text) currentParts.push(text);
+  }
+
+  flushSection();
+
+  const usefulSections = sections.filter((section) => section.title.trim() || section.body.trim());
+  const pagesDraft: Omit<TextImagePage, "pageNumber" | "totalPages">[] = [];
+  let currentPage: Omit<TextImagePage, "pageNumber" | "totalPages"> | null = null;
+
+  const pushPage = () => {
+    if (!currentPage) return;
+    if (currentPage.body.trim() || currentPage.title.trim()) pagesDraft.push(currentPage);
+    currentPage = null;
+  };
+
+  for (const section of usefulSections) {
+    const sectionChunks = splitBodyForPages(section.body, ratio.bodyLimit);
+
+    for (const chunk of sectionChunks) {
+      const pageChunk: Omit<TextImagePage, "pageNumber" | "totalPages"> = { title: section.title, body: chunk };
+      if (!currentPage) {
+        currentPage = pageChunk;
+        continue;
+      }
+
+      const mergedPage: Omit<TextImagePage, "pageNumber" | "totalPages"> = {
+        title: currentPage.title,
+        body: `${currentPage.body}\n\n${pageChunk.title}\n${pageChunk.body}`.trim(),
+      };
+
+      if (pageTextLength(mergedPage) <= ratio.bodyLimit * 1.08) {
+        currentPage = mergedPage;
+      } else {
+        pushPage();
+        currentPage = pageChunk;
+      }
+    }
+  }
+
+  pushPage();
+
+  if (pagesDraft.length === 0) {
+    pagesDraft.push({ title: articleTitle, body: sourceText.replace(articleTitle, "").trim() });
+  }
+
+  const totalPages = pagesDraft.length;
+  return pagesDraft.map((page, index) => ({
+    ...page,
+    pageNumber: index + 1,
+    totalPages,
+  }));
+}
+
+function drawPageIndicator(ctx: CanvasRenderingContext2D, pageNumber: number, totalPages: number, width: number, height: number, color: string) {
+  if (totalPages > 12) {
+    ctx.font = font(600, 28);
+    ctx.fillStyle = color;
+    ctx.textAlign = "center";
+    ctx.fillText(`${String(pageNumber).padStart(2, "0")} / ${String(totalPages).padStart(2, "0")}`, width / 2, height - 72);
+    ctx.textAlign = "left";
+    return;
+  }
+
+  const dotGap = 24;
+  const startX = width / 2 - ((totalPages - 1) * dotGap) / 2;
+  const dotY = height - 62;
+  for (let index = 0; index < totalPages; index += 1) {
+    ctx.beginPath();
+    ctx.fillStyle = index + 1 === pageNumber ? "#FFFFFF" : color;
+    ctx.arc(startX + index * dotGap, dotY, 7, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawTextImage(canvas: HTMLCanvasElement, page: TextImagePage, presetKey: TextImagePresetKey, ratioKey: TextImageRatioKey) {
+  const preset = textImagePresets[presetKey];
+  const ratio = textImageRatios[ratioKey];
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  canvas.width = ratio.width;
+  canvas.height = ratio.height;
+
+  ctx.fillStyle = preset.background;
+  ctx.fillRect(0, 0, ratio.width, ratio.height);
+
+  const left = 84;
+  const maxWidth = ratio.width - left * 2;
+  let y = 148;
+
+  ctx.fillStyle = preset.rule;
+  ctx.fillRect(left, y, maxWidth, 4);
+
+  y += 74;
+  ctx.textBaseline = "top";
+  ctx.font = font(800, 72);
+  const titleLines = page.title
+    .split("\n")
+    .flatMap((line) => wrapCanvasText(ctx, line, maxWidth))
+    .slice(0, 4);
+
+  for (const line of titleLines) {
+    const textWidth = Math.min(ctx.measureText(line).width + 16, maxWidth);
+    ctx.fillStyle = preset.highlight;
+    ctx.fillRect(left - 4, y + 54, textWidth, 24);
+    ctx.fillStyle = preset.title;
+    ctx.fillText(line, left, y);
+    y += 88;
+  }
+
+  y += 54;
+  const paragraphs = page.body
+    .split(/\n\s*\n/g)
+    .map((item) => item.replace(/\n/g, "").trim())
+    .filter(Boolean);
+
+  for (const paragraph of paragraphs) {
+    const isHeading = paragraph.length <= 18 && !/[。？！.!?，,；;：:]/.test(paragraph);
+    ctx.font = isHeading ? font(700, 40) : font(500, 36);
+    ctx.fillStyle = preset.body;
+    const lines = wrapCanvasText(ctx, paragraph, maxWidth);
+    const lineHeight = isHeading ? 60 : 64;
+
+    if (y + lines.length * lineHeight > ratio.height - 150) break;
+
+    for (const line of lines) {
+      ctx.fillText(line, left, y);
+      y += lineHeight;
+    }
+
+    y += isHeading ? 34 : 38;
+  }
+
+  drawPageIndicator(ctx, page.pageNumber, page.totalPages, ratio.width, ratio.height, preset.dots);
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("图片生成失败"));
+    }, "image/png");
+  });
+}
+
+function TextImageGenerator({ articleText }: { articleText: string }) {
+  const [sourceText, setSourceText] = useState(articleText);
+  const [presetKey, setPresetKey] = useState<TextImagePresetKey>("warmBrown");
+  const [ratioKey, setRatioKey] = useState<TextImageRatioKey>("portrait34");
+  const [selectedPageIndex, setSelectedPageIndex] = useState(0);
+  const [fileName, setFileName] = useState("文字卡片");
+  const [copiedImage, setCopiedImage] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const pages = useMemo(() => createCarouselPages(sourceText, ratioKey), [ratioKey, sourceText]);
+  const safeSelectedPageIndex = Math.min(selectedPageIndex, Math.max(pages.length - 1, 0));
+  const selectedPage = pages[safeSelectedPageIndex] ?? pages[0];
+
+  const renderImage = useCallback(() => {
+    if (!canvasRef.current || !selectedPage) return;
+    drawTextImage(canvasRef.current, selectedPage, presetKey, ratioKey);
+  }, [presetKey, ratioKey, selectedPage]);
+
+  useEffect(() => {
+    renderImage();
+  }, [renderImage]);
+
+  const createPageBlob = useCallback(
+    async (page: TextImagePage) => {
+      const canvas = document.createElement("canvas");
+      drawTextImage(canvas, page, presetKey, ratioKey);
+      return canvasToBlob(canvas);
+    },
+    [presetKey, ratioKey]
+  );
+
+  const handleDownloadImage = useCallback(async () => {
+    if (!selectedPage) return;
+
+    renderImage();
+    const blob = await createPageBlob(selectedPage);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${fileName.trim() || "text-image"}-${String(selectedPage.pageNumber).padStart(2, "0")}.png`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [createPageBlob, fileName, renderImage, selectedPage]);
+
+  const handleDownloadAllImages = useCallback(async () => {
+    for (const page of pages) {
+      const blob = await createPageBlob(page);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${fileName.trim() || "text-image"}-${String(page.pageNumber).padStart(2, "0")}.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+      await new Promise((resolve) => window.setTimeout(resolve, 80));
+    }
+  }, [createPageBlob, fileName, pages]);
+
+  const handleCopyImage = useCallback(async () => {
+    if (!selectedPage) return;
+
+    renderImage();
+    const blob = await createPageBlob(selectedPage);
+    if ("ClipboardItem" in window && navigator.clipboard?.write) {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "image/png": blob,
+        }),
+      ]);
+      setCopiedImage(true);
+      setTimeout(() => setCopiedImage(false), 1500);
+      return;
+    }
+
+    await handleDownloadImage();
+  }, [createPageBlob, handleDownloadImage, renderImage, selectedPage]);
+
+  const resetTextImage = () => {
+    setSourceText(articleText);
+    setPresetKey("warmBrown");
+    setRatioKey("portrait34");
+    setSelectedPageIndex(0);
+    setFileName("文字卡片");
+  };
+
+  return (
+    <Card className="mt-6 rounded-2xl shadow-sm">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <ImageIcon className="h-5 w-5" />
+          文章轮播图生成
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_420px]">
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <Label>轮播图源文案</Label>
+                <Button onClick={() => setSourceText(articleText)} variant="outline" className="h-8 rounded-xl px-3 text-xs">
+                  使用当前文章
+                </Button>
+              </div>
+              <Textarea value={sourceText} onChange={(event) => setSourceText(event.target.value)} className="min-h-80 rounded-2xl text-sm leading-7" />
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label>视觉风格</Label>
+                <Select value={presetKey} onValueChange={(value) => setPresetKey(value as TextImagePresetKey)}>
+                  <SelectTrigger className="rounded-xl">
+                    <span>{textImagePresets[presetKey].name}</span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(textImagePresets).map(([key, preset]) => (
+                      <SelectItem key={key} value={key}>
+                        {preset.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>图片比例</Label>
+                <Select value={ratioKey} onValueChange={(value) => setRatioKey(value as TextImageRatioKey)}>
+                  <SelectTrigger className="rounded-xl">
+                    <span>{textImageRatios[ratioKey].name}</span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(textImageRatios).map(([key, ratio]) => (
+                      <SelectItem key={key} value={key}>
+                        {ratio.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label>文件名</Label>
+                <Input value={fileName} onChange={(event) => setFileName(event.target.value)} className="rounded-xl" />
+              </div>
+
+              <div className="rounded-2xl bg-slate-100 p-4 text-xs leading-6 text-slate-600">
+                已自动拆成 <span className="font-semibold text-slate-900">{pages.length}</span> 张，短小节会合并，超长内容才继续分页。
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={handleCopyImage} className="rounded-xl">
+                <Copy className="mr-2 h-4 w-4" />
+                {copiedImage ? "已复制图片" : "复制PNG"}
+              </Button>
+              <Button onClick={handleDownloadImage} variant="outline" className="rounded-xl">
+                <FileDown className="mr-2 h-4 w-4" />
+                下载当前页
+              </Button>
+              <Button onClick={handleDownloadAllImages} variant="outline" className="rounded-xl">
+                <FileDown className="mr-2 h-4 w-4" />
+                下载全部
+              </Button>
+              <Button onClick={() => setSelectedPageIndex(0)} variant="outline" className="rounded-xl">
+                第1页
+              </Button>
+              <Button onClick={resetTextImage} variant="outline" className="rounded-xl">
+                <RefreshCcw className="mr-2 h-4 w-4" />
+                重置轮播图
+              </Button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+              {pages.map((page, index) => (
+                <button
+                  key={`${page.pageNumber}-${page.title}`}
+                  onClick={() => setSelectedPageIndex(index)}
+                  className={`rounded-xl border p-3 text-left text-xs leading-5 transition ${
+                    safeSelectedPageIndex === index ? "border-slate-900 bg-white shadow-sm" : "border-slate-200 bg-slate-50 hover:bg-white"
+                  }`}
+                >
+                  <div className="font-semibold text-slate-900">{String(page.pageNumber).padStart(2, "0")}</div>
+                  <div className="mt-1 line-clamp-2 text-slate-600">{page.title}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-col items-center gap-3 rounded-2xl border bg-slate-100 p-4">
+            <canvas ref={canvasRef} className="h-auto w-full max-w-[360px] rounded-2xl bg-white shadow-sm" />
+            <div className="text-xs text-slate-500">
+              {selectedPage ? `${selectedPage.pageNumber} / ${selectedPage.totalPages}` : "0 / 0"} · {textImageRatios[ratioKey].width}×{textImageRatios[ratioKey].height}
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function WechatArticleFormatterApp() {
   const [input, setInput] = useState(defaultArticle);
@@ -260,6 +782,8 @@ export default function WechatArticleFormatterApp() {
             </CardContent>
           </Card>
         </div>
+
+        <TextImageGenerator articleText={input} />
 
         <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {templateList.map((item) => (
