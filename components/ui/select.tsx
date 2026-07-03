@@ -58,7 +58,7 @@ const SelectValue = ({ placeholder }: { placeholder?: string }) => {
   return <span>{context.value || placeholder}</span>;
 };
 
-interface SelectContentProps extends React.HTMLAttributes<HTMLDivElement> {}
+type SelectContentProps = React.HTMLAttributes<HTMLDivElement>;
 
 const SelectContent = React.forwardRef<HTMLDivElement, SelectContentProps>(({ className, children, ...props }, ref) => {
   const context = React.useContext(SelectContext);
