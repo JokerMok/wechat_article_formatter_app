@@ -36,6 +36,18 @@ function renderTitle(block: ArticleBlock, template: StyleTemplate) {
   const visual = template.visual;
   const title = paragraph(template.blocks.title, formatInline("text" in block ? block.text : ""));
 
+  if (visual.variant === "knowledge") {
+    return `<section style="margin: 0 0 28px;">${span({ display: "block", width: "36px", height: "4px", "background-color": visual.primary, "border-radius": "999px", margin: "0 0 14px" })}${title}</section>`;
+  }
+
+  if (visual.variant === "business") {
+    return `<section style="margin: 0 0 30px;">${title}${span({ display: "block", width: "100%", height: "1px", "background-color": visual.border, margin: "10px 0 0" })}</section>`;
+  }
+
+  if (visual.variant === "tech") {
+    return `<section style="margin: 0 0 30px;">${title}${span({ display: "block", width: "88px", height: "3px", "background-color": visual.accent, "border-radius": "999px", margin: "10px 0 0" })}</section>`;
+  }
+
   if (visual.theme === "modern") {
     return `<section style="margin: 0 0 30px; text-align: center;">${span({ display: "inline-block", width: "42px", height: "4px", "background-color": visual.accent, "border-radius": "999px", margin: "0 0 12px" })}${title}${span({ display: "inline-block", width: "78px", height: "2px", "background-color": visual.border, "border-radius": "999px", margin: "6px 0 0" })}</section>`;
   }
@@ -54,6 +66,10 @@ function renderTitle(block: ArticleBlock, template: StyleTemplate) {
 function renderSection(block: ArticleBlock, template: StyleTemplate) {
   const visual = template.visual;
   const text = formatInline("text" in block ? block.text : "");
+
+  if (visual.variant) {
+    return paragraph(template.blocks.section, text);
+  }
 
   if (visual.theme === "modern") {
     return `<section style="margin: 36px 0 20px;">${paragraph(template.blocks.section, text)}${span({ display: "block", width: "100%", height: "1px", "background-color": visual.border, margin: "8px 0 0" })}</section>`;
@@ -92,13 +108,22 @@ function renderBlock(block: ArticleBlock, template: StyleTemplate) {
     case "summary":
       return `<section style="${toStyle(styles.summary)}">${formatInline(block.text)}</section>`;
     case "cta":
+      if (visual.variant) {
+        return `<section style="${toStyle(styles.cta)}">${formatInline(block.text)}</section>`;
+      }
       return `<section style="${toStyle(styles.cta)}">${span({ display: "block", "font-size": "13px", "font-weight": 700, opacity: 0.82, margin: "0 0 6px" }, visual.ctaPrefix)}${formatInline(block.text)}</section>`;
     case "image":
       return `<section style="${toStyle(styles.image)}">${span({ display: "inline-block", padding: "2px 10px", border: `1px solid ${visual.border}`, color: visual.primary, "font-size": "13px", "font-weight": 700, "border-radius": "999px", margin: "0 0 8px" }, "图片占位")}<br />${formatInline(block.text)}</section>`;
     case "list":
       return `<section style="${toStyle(styles.list)}">${block.items
-        .map((item) => {
+        .map((item, index) => {
           const matched = item.match(/^([^：:]{2,20})[:：](.+)$/);
+          const bullet =
+            visual.variant === "business"
+              ? String(index + 1).padStart(2, "0")
+              : visual.variant === "tech"
+                ? ">"
+                : visual.listSymbol;
           if (matched) {
             return paragraph(
               { margin: "0 0 12px", "font-size": `${template.body.fontSize}px`, "line-height": template.body.lineHeight },
@@ -107,7 +132,7 @@ function renderBlock(block: ArticleBlock, template: StyleTemplate) {
           }
           return paragraph(
             { margin: "0 0 12px", "font-size": `${template.body.fontSize}px`, "line-height": template.body.lineHeight },
-            `<span style="${toStyle(template.marker.listBullet)}">${visual.listSymbol}</span> ${formatInline(item)}`
+            `<span style="${toStyle(template.marker.listBullet)}">${bullet}</span> ${formatInline(item)}`
           );
         })
         .join("")}</section>`;

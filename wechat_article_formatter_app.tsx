@@ -14,35 +14,36 @@ import type { TemplateKey } from "@/lib/article-types";
 import { renderWechatHtml } from "@/lib/wechat-renderer";
 import { styleTemplates, templateList } from "@/lib/style-templates";
 
-const defaultArticle = `【项目实战】GPT Image 2深度测评：它不再是一个画图工具
+const defaultArticle = `中小企业岗位 AI 提效 SOP：先改造客服，而不是全公司上 AI
 
-说到底，AI生图正在经历一场认知革命。
-当GPT Image 2开始"思考"的时候，画图这件事的本质变了。
+很多老板第一次想用 AI，都会从“全公司都要用起来”开始。
+这一步通常是错的。
 
-不是工具升级，是范式转移。
+真正可落地的 AI 提效，不是买一批工具，而是先选一个高频、重复、容易验收的岗位，把流程拆成 SOP。
 
-为什么这次不一样？
-OpenAI这次放出的GPT Image 2，本质上在验证一个判断：下一代图像生成模型的核心竞争力，不再是"画得像不像"，而是"想得对不对"。
+核心判断：AI 提效不是工具问题，而是流程产品化问题。
 
-一、人像一致性突破：终于能"讲完一个故事"了
-核心突破：多图场景下保持同一个人脸特征
+一、为什么先从客服岗位开始
+当前问题：客服每天都在重复回答相同问题，但知识散落在聊天记录、表格、老员工经验里。
+改造目标：把高频问题、标准答案、升级规则、禁用话术整理成一个可复制的响应系统。
 
-配图：偶像九宫格案例图片
+配图：客服工单流转前后对比图
 
-以前的AI生图，每次生成都是独立事件。一张图里的人是"A"，下一张图里的人可能是"A的亲戚"。
-GPT Image 2不一样。它能理解你需要一个"连续叙事"，然后主动去维持视觉一致性。
+客服岗位的好处是边界清楚。问题有没有答对，响应有没有变快，客户有没有继续追问，都能被记录。
 
-二、叙事能力进化：12格分镜，一个角色的故事线
-如果说九宫格是"同一时刻的不同切片"，那12格分镜就是"同一角色的不同时刻"。
+二、第一版只做三个动作
+- 高频问题归类：把最近 30 天咨询记录按问题类型聚类
+- 标准答案生成：为每类问题生成可审核、可复制的回复
+- 升级规则设定：遇到价格、投诉、合同、售后争议时转人工
 
-- 入门门槛降低：你不需要学会写Prompt的技术语言
-- 应用场景拓宽：从个人创作到商业应用，边界在消融
-- 效率革命：概念到视觉的转化周期，从天缩短到小时
+三、不要一开始就追求自动回复
+关键风险：如果知识库没有经过审核，自动回复会把错误答案放大。
 
-写在最后
-AI生图正在从"执行者"变成"协作者"。
+第一阶段更适合做“AI 辅助客服”。让 AI 先起草，人工确认后发送。等命中率、满意度和风险边界稳定，再逐步自动化。
 
-💡 我整理了一些优秀的GPT Image 2玩法案例，私信"GPT"我发你。`;
+总结来看，中小企业落地 AI，不需要先追大模型能力，而要先找到一个能被验收的岗位流程。
+
+留言回复「SOP」，我把岗位 AI 提效检查表发你。`;
 
 const blockName: Record<string, string> = {
   title: "主标题",
@@ -61,7 +62,7 @@ const blockName: Record<string, string> = {
 
 export default function WechatArticleFormatterApp() {
   const [input, setInput] = useState(defaultArticle);
-  const [templateKey, setTemplateKey] = useState<TemplateKey>("baoyuDefaultBlue");
+  const [templateKey, setTemplateKey] = useState<TemplateKey>("zhenyiKnowledgeMinimal");
   const [copiedRich, setCopiedRich] = useState(false);
   const [copiedHtml, setCopiedHtml] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -110,7 +111,7 @@ export default function WechatArticleFormatterApp() {
 
   const reset = () => {
     setInput(defaultArticle);
-    setTemplateKey("baoyuDefaultBlue");
+    setTemplateKey("zhenyiKnowledgeMinimal");
   };
 
   return (
@@ -119,16 +120,16 @@ export default function WechatArticleFormatterApp() {
         <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
             <h1 className="text-3xl font-bold tracking-tight text-slate-900">微信公众号文章自动排版器</h1>
-            <p className="mt-2 text-sm text-slate-600">纯前端排版工具：输入文章，选择风格，复制富文本到公众号编辑器。</p>
+            <p className="mt-2 text-sm text-slate-600">纯前端排版工具：输入文章，选择风格，一键复制到公众号编辑器。</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button onClick={handleCopyRichText} className="rounded-xl">
               <Copy className="mr-2 h-4 w-4" />
-              {copiedRich ? "已复制富文本" : "复制富文本"}
+              {copiedRich ? "已复制，可粘贴" : "复制到公众号编辑器"}
             </Button>
             <Button onClick={handleCopyHtml} variant="outline" className="rounded-xl">
               <Code2 className="mr-2 h-4 w-4" />
-              {copiedHtml ? "已复制源码" : "复制HTML"}
+              {copiedHtml ? "已复制源码" : "复制HTML源码"}
             </Button>
           </div>
         </div>

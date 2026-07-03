@@ -105,7 +105,7 @@ function isCTA(text: string) {
 }
 
 function isQuoteLine(line: SourceLine) {
-  return line.quoted || /^(核心突破|关键判断|为什么这次不一样|对普通人的价值|当然，挑战也在|关键在于|核心就是)[:：]?/.test(line.text);
+  return line.quoted || /^(核心突破|关键判断|关键风险|为什么这次不一样|对普通人的价值|当然，挑战也在|关键在于|核心就是)[:：]?/.test(line.text);
 }
 
 export function parseArticle(raw: string): ArticleBlock[] {
@@ -122,12 +122,6 @@ export function parseArticle(raw: string): ArticleBlock[] {
 
     if (isLikelyMainTitle(line, blocks.length)) {
       blocks.push({ type: "title", text: line.text });
-      i += 1;
-      continue;
-    }
-
-    if (isCTA(line.text)) {
-      blocks.push({ type: "cta", text: line.text });
       i += 1;
       continue;
     }
@@ -152,6 +146,12 @@ export function parseArticle(raw: string): ArticleBlock[] {
 
     if (isQuoteLine(line)) {
       blocks.push({ type: "quote", text: line.text });
+      i += 1;
+      continue;
+    }
+
+    if (isCTA(line.text)) {
+      blocks.push({ type: "cta", text: line.text });
       i += 1;
       continue;
     }

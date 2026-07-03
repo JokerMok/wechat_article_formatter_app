@@ -43,4 +43,15 @@ describe("parseArticle", () => {
 
     expect(blocks.map((block) => block.type)).toEqual(["title", "section", "card"]);
   });
+
+  it("does not classify reply-related headings or risk notes as CTA", () => {
+    const blocks = parseArticle(`文章主标题
+
+三、不要一开始就追求自动回复
+关键风险：如果知识库没有经过审核，自动回复会把错误答案放大。
+
+留言回复「SOP」，我把检查表发你。`);
+
+    expect(blocks.map((block) => block.type)).toEqual(["title", "section", "quote", "cta"]);
+  });
 });

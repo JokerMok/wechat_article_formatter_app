@@ -299,7 +299,246 @@ function tint(hex: string, amount: number) {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
+function createRecommendedTemplate(options: {
+  key: TemplateKey;
+  name: string;
+  variant: "knowledge" | "business" | "tech";
+  primary: string;
+  accent: string;
+  softBg: string;
+  border: string;
+  muted: string;
+  containerBg?: string;
+  description: string;
+  audience: string;
+}): StyleTemplate {
+  const fontSize = 15;
+  const foreground = "#3F3F3F";
+  const strong = "#111827";
+  const isBusiness = options.variant === "business";
+  const isTech = options.variant === "tech";
+
+  const blocks: Record<BlockType, InlineStyle> = { ...baseBlockStyles };
+
+  blocks.title = {
+    margin: "20px 0 24px",
+    padding: isBusiness ? "16px 18px" : isTech ? "18px 18px" : "0 0 12px",
+    color: isTech ? "#FFFFFF" : strong,
+    "background-color": isBusiness ? "#F8FAFC" : isTech ? "#111827" : "transparent",
+    border: isBusiness ? `1px solid ${options.border}` : "none",
+    "border-left": isBusiness || isTech ? `5px solid ${options.primary}` : "none",
+    "border-bottom": options.variant === "knowledge" ? `2px solid ${options.border}` : "none",
+    "border-radius": isBusiness || isTech ? "8px" : "0",
+    "font-size": "22px",
+    "font-weight": 800,
+    "line-height": "1.45",
+    "letter-spacing": "0",
+    "text-align": "left",
+  };
+  blocks.section = {
+    margin: "34px 0 16px",
+    padding: isBusiness ? "8px 12px" : isTech ? "10px 12px" : "0 0 6px 10px",
+    color: isBusiness || isTech ? "#FFFFFF" : strong,
+    "background-color": isBusiness ? options.primary : isTech ? "#0F172A" : "transparent",
+    "border-left": options.variant === "knowledge" ? `4px solid ${options.primary}` : "none",
+    "border-bottom": isTech ? `2px solid ${options.accent}` : options.variant === "knowledge" ? `1px solid ${options.border}` : "none",
+    "border-radius": isBusiness || isTech ? "6px" : "0",
+    "font-size": "18px",
+    "font-weight": 800,
+    "line-height": "1.65",
+    "letter-spacing": "0",
+    "text-align": "left",
+  };
+  blocks.subsection = {
+    margin: "24px 0 10px",
+    padding: "0 0 0 10px",
+    color: isTech ? "#0F172A" : options.primary,
+    "border-left": `3px solid ${options.accent}`,
+    "font-size": "16px",
+    "font-weight": 800,
+    "line-height": "1.65",
+  };
+  blocks.paragraph = {
+    margin: "15px 0",
+    color: foreground,
+    "font-size": `${fontSize}px`,
+    "font-weight": 400,
+    "line-height": "1.75",
+    "letter-spacing": "0",
+    "text-align": "justify",
+    "word-break": "break-word",
+  };
+  blocks.lead = {
+    margin: "18px 0 22px",
+    padding: "14px 16px",
+    color: foreground,
+    "background-color": options.softBg,
+    border: isBusiness ? `1px solid ${options.border}` : "none",
+    "border-left": `4px solid ${options.primary}`,
+    "border-radius": "8px",
+    "font-size": `${fontSize}px`,
+    "line-height": "1.75",
+    "letter-spacing": "0",
+  };
+  blocks.quote = {
+    margin: "22px 0",
+    padding: "15px 16px",
+    color: isTech ? "#1F2937" : foreground,
+    "background-color": isTech ? "#F8FAFC" : options.softBg,
+    border: isBusiness ? `1px solid ${options.border}` : "none",
+    "border-left": `4px solid ${options.primary}`,
+    "border-radius": "8px",
+    "font-size": `${fontSize}px`,
+    "line-height": "1.75",
+  };
+  blocks.golden = {
+    display: "block",
+    margin: "26px 0",
+    padding: "14px 16px",
+    color: isTech ? "#FFFFFF" : strong,
+    "background-color": isTech ? "#111827" : options.softBg,
+    border: isTech ? "none" : `1px solid ${options.border}`,
+    "border-radius": "8px",
+    "font-size": "16px",
+    "font-weight": 800,
+    "line-height": "1.75",
+    "letter-spacing": "0",
+    "text-align": "left",
+  };
+  blocks.summary = {
+    margin: "28px 0",
+    padding: "18px",
+    color: isTech ? "#FFFFFF" : strong,
+    "background-color": isTech ? "#0F172A" : options.softBg,
+    border: isTech ? "none" : `1px solid ${options.border}`,
+    "border-radius": "8px",
+    "font-size": "16px",
+    "font-weight": 700,
+    "line-height": "1.8",
+  };
+  blocks.cta = {
+    margin: "32px 0 0",
+    padding: "16px 18px",
+    color: isTech ? "#FFFFFF" : options.primary,
+    "background-color": isTech ? "#111827" : options.softBg,
+    border: isTech ? "none" : `1px solid ${options.border}`,
+    "border-radius": "8px",
+    "font-size": "16px",
+    "font-weight": 800,
+    "line-height": "1.75",
+    "text-align": "left",
+  };
+  blocks.image = {
+    margin: "24px 0",
+    padding: "16px",
+    color: options.muted,
+    "background-color": "#FAFAFA",
+    border: `1px solid ${options.border}`,
+    "border-radius": "8px",
+    "font-size": "14px",
+    "line-height": "1.75",
+    "text-align": "center",
+  };
+  blocks.list = {
+    margin: "20px 0",
+    padding: "16px 18px",
+    color: foreground,
+    "background-color": options.softBg,
+    border: isBusiness || isTech ? `1px solid ${options.border}` : "none",
+    "border-radius": "8px",
+    "font-size": `${fontSize}px`,
+    "line-height": "1.75",
+  };
+  blocks.card = {
+    margin: "20px 0",
+    padding: "16px 18px",
+    color: foreground,
+    "background-color": isTech ? "#FFFFFF" : "#FFFFFF",
+    border: `1px solid ${options.border}`,
+    "border-left": isBusiness ? `4px solid ${options.primary}` : isTech ? `4px solid ${options.accent}` : `4px solid ${options.primary}`,
+    "border-radius": "8px",
+    "font-size": `${fontSize}px`,
+    "line-height": "1.75",
+  };
+
+  return {
+    key: options.key,
+    name: options.name,
+    description: options.description,
+    audience: options.audience,
+    palette: [options.primary, options.softBg, options.containerBg ?? "#FFFFFF"],
+    fontFamily: baoyuFont,
+    visual: {
+      theme: isTech ? "modern" : isBusiness ? "simple" : "default",
+      variant: options.variant,
+      primary: options.primary,
+      accent: options.accent,
+      softBg: options.softBg,
+      border: options.border,
+      muted: options.muted,
+      listSymbol: isBusiness ? "01" : isTech ? ">" : "-",
+      quoteSymbol: isBusiness ? "CASE" : isTech ? "NOTE" : "｜",
+      ctaPrefix: isBusiness ? "行动建议" : isTech ? "NEXT" : "下一步",
+    },
+    container: {
+      "max-width": "100%",
+      "box-sizing": "border-box",
+      "font-size": `${fontSize}px`,
+      "line-height": "1.75",
+      "letter-spacing": "0",
+      color: foreground,
+      "background-color": options.containerBg ?? "transparent",
+      padding: "12px 10px",
+      "border-radius": options.containerBg ? "8px" : "0",
+    },
+    body: { fontSize, lineHeight: 1.75, color: foreground },
+    blocks,
+    marker: {
+      section: { display: "none" },
+      listBullet: { color: options.primary, "font-weight": 800 },
+      imageLabel: { color: options.primary, "font-weight": 700 },
+    },
+  };
+}
+
 export const styleTemplates: Record<TemplateKey, StyleTemplate> = {
+  zhenyiKnowledgeMinimal: createRecommendedTemplate({
+    key: "zhenyiKnowledgeMinimal",
+    name: "臻一 知识简约",
+    variant: "knowledge",
+    primary: "#0F766E",
+    accent: "#99F6E4",
+    softBg: "#F0FDFA",
+    border: "#CCFBF1",
+    muted: "#64748B",
+    description: "低阅读压力的知识长文样式：白底、短段落、细边框、重点克制。",
+    audience: "AI 提效方法论、深度文章、教程复盘",
+  }),
+  zhenyiBusinessCase: createRecommendedTemplate({
+    key: "zhenyiBusinessCase",
+    name: "臻一 商务案例",
+    variant: "business",
+    primary: "#1F5EFF",
+    accent: "#F59E0B",
+    softBg: "#F8FAFC",
+    border: "#DBE4F0",
+    muted: "#64748B",
+    description: "案例和转化型文章样式：蓝色标题、诊断卡片、方案卡片、结尾 CTA。",
+    audience: "企业服务、客户案例、SOP 样板包",
+  }),
+  zhenyiTechCards: createRecommendedTemplate({
+    key: "zhenyiTechCards",
+    name: "臻一 科技卡片",
+    variant: "tech",
+    primary: "#111827",
+    accent: "#38BDF8",
+    softBg: "#F1F5F9",
+    border: "#CBD5E1",
+    muted: "#64748B",
+    containerBg: "#F8FAFC",
+    description: "科技解读样式：深色标题、浅灰信息卡、适合参数和趋势拆解。",
+    audience: "产品测评、AI 工具解读、技术趋势文章",
+  }),
   baoyuDefaultBlue: createBaoyuTemplate({
     key: "baoyuDefaultBlue",
     name: "Baoyu 经典蓝",

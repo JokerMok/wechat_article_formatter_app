@@ -27,6 +27,9 @@ export type ArticleBlock =
   | { type: "card"; title?: string; body: string };
 
 export type TemplateKey =
+  | "zhenyiKnowledgeMinimal"
+  | "zhenyiBusinessCase"
+  | "zhenyiTechCards"
   | "baoyuDefaultBlue"
   | "baoyuDefaultGreen"
   | "baoyuGracePurple"
@@ -49,6 +52,7 @@ export type StyleTemplate = {
   fontFamily: string;
   visual: {
     theme: "default" | "grace" | "simple" | "modern";
+    variant?: "knowledge" | "business" | "tech";
     primary: string;
     accent: string;
     softBg: string;
