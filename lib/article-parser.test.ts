@@ -35,23 +35,63 @@ describe("parseArticle", () => {
     expect(blocks.some((block) => block.type === "summary")).toBe(true);
   });
 
-  it("detects cards and Chinese numbered sections", () => {
+  it("keeps colon sentences as paragraphs in narrative mode", () => {
     const blocks = parseArticle(`文章主标题
 
 一、为什么要重构
 核心价值：让模板可以持续扩展`);
 
-    expect(blocks.map((block) => block.type)).toEqual(["title", "section", "card"]);
+    expect(blocks.map((block) => block.type)).toEqual(["title", "section", "paragraph"]);
+  });
+
+  it("detects explicit cards in business mode", () => {
+    const blocks = parseArticle(
+      `文章主标题
+
+一、为什么要重构
+当前问题：资料散落在不同地方。
+改造目标：整理成可复用知识库。`,
+      { mode: "business" }
+    );
+
+    expect(blocks.map((block) => block.type)).toEqual(["title", "section", "card", "card"]);
   });
 
   it("does not classify reply-related headings or risk notes as CTA", () => {
-    const blocks = parseArticle(`文章主标题
+    const blocks = parseArticle(
+      `文章主标题
 
 三、不要一开始就追求自动回复
 关键风险：如果知识库没有经过审核，自动回复会把错误答案放大。
 
-留言回复「SOP」，我把检查表发你。`);
+留言回复「SOP」，我把检查表发你。`,
+      { mode: "business" }
+    );
 
-    expect(blocks.map((block) => block.type)).toEqual(["title", "section", "quote", "cta"]);
+    expect(blocks.map((block) => block.type)).toEqual(["title", "section", "card", "cta"]);
+  });
+
+  it("strips broken bold style fragments from pasted content", () => {
+    const blocks = parseArticle(`文章主标题
+
+font-weight: 800;">你把逻辑解释清楚，不代表老板会觉得够。`);
+
+    expect(blocks[1]).toEqual({ type: "paragraph", text: "你把逻辑解释清楚，不代表老板会觉得够。" });
+  });
+
+  it("drops empty quote markers", () => {
+    const blocks = parseArticle(`文章主标题
+
+>
+> 
+＞ 
+&gt;
+
+正文内容`);
+
+    expect(blocks).toEqual([
+      { type: "title", text: "文章主标题" },
+      { type: "paragraph", text: "正文内容" },
+    ]);
   });
 });

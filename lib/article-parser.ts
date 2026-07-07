@@ -1,4 +1,4 @@
-import type { ArticleBlock } from "./article-types";
+import type { ArticleBlock, ArticleParseMode } from "./article-types";
 
 type SourceLine = {
   text: string;
@@ -6,10 +6,15 @@ type SourceLine = {
   quoted?: boolean;
 };
 
+type ParseOptions = {
+  mode?: ArticleParseMode;
+};
+
 function stripInlineMarkdown(text: string) {
   return text
     .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, url) => `图片：${alt || url}`)
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+    .replace(/font-weight:\s*800;?["”]?(?:&gt;|>)/g, "")
     .trim();
 }
 
@@ -21,6 +26,7 @@ function normalizeInput(raw: string): SourceLine[] {
     .map((rawLine) => {
       const trimmed = rawLine.trim();
       if (!trimmed) return { text: "" };
+      if (/^(>|&gt;|＞)$/.test(trimmed)) return { text: "" };
 
       const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
       if (heading) {
@@ -32,8 +38,10 @@ function normalizeInput(raw: string): SourceLine[] {
 
       const quote = trimmed.match(/^>\s?(.+)$/);
       if (quote) {
+        const quoteText = stripInlineMarkdown(quote[1]);
+        if (!quoteText) return { text: "" };
         return {
-          text: stripInlineMarkdown(quote[1]),
+          text: quoteText,
           quoted: true,
         };
       }
@@ -108,7 +116,37 @@ function isQuoteLine(line: SourceLine) {
   return line.quoted || /^(核心突破|关键判断|关键风险|为什么这次不一样|对普通人的价值|当然，挑战也在|关键在于|核心就是)[:：]?/.test(line.text);
 }
 
-export function parseArticle(raw: string): ArticleBlock[] {
+const explicitCardPrefixes: Record<ArticleParseMode, string[]> = {
+  narrative: [],
+  knowledge: ["核心判断", "关键判断", "关键风险", "核心问题", "关键结论", "注意事项", "边界说明", "使用建议", "标准动作", "实操方法"],
+  business: ["当前问题", "改造目标", "解决方案", "方案", "案例", "客户反馈", "关键风险", "边界", "行动建议", "下一步", "结果"],
+};
+
+function parseExplicitCard(text: string, mode: ArticleParseMode) {
+  const matched = text.match(/^([^：:]{2,20})[:：](.+)$/);
+  if (!matched) return null;
+
+  const title = matched[1].trim();
+  const body = matched[2].trim();
+  const prefixes = explicitCardPrefixes[mode];
+  if (!prefixes.includes(title)) return null;
+
+  return { title, body };
+}
+
+function shouldPromoteQuote(line: SourceLine, mode: ArticleParseMode) {
+  if (line.quoted) return true;
+  if (mode === "narrative") return false;
+  return isQuoteLine(line);
+}
+
+function shouldPromoteGolden(text: string, mode: ArticleParseMode) {
+  if (mode === "narrative") return false;
+  return isGoldenSentence(text);
+}
+
+export function parseArticle(raw: string, options: ParseOptions = {}): ArticleBlock[] {
+  const mode = options.mode ?? "narrative";
   const lines = normalizeInput(raw);
   const blocks: ArticleBlock[] = [];
 
@@ -144,7 +182,14 @@ export function parseArticle(raw: string): ArticleBlock[] {
       continue;
     }
 
-    if (isQuoteLine(line)) {
+    const lineCard = parseExplicitCard(line.text, mode);
+    if (lineCard && !line.quoted) {
+      blocks.push({ type: "card", title: lineCard.title, body: lineCard.body });
+      i += 1;
+      continue;
+    }
+
+    if (shouldPromoteQuote(line, mode)) {
       blocks.push({ type: "quote", text: line.text });
       i += 1;
       continue;
@@ -176,7 +221,8 @@ export function parseArticle(raw: string): ArticleBlock[] {
       !isBullet(lines[j]) &&
       !isCTA(lines[j].text) &&
       !isImagePlaceholder(lines[j]) &&
-      !isQuoteLine(lines[j])
+      !shouldPromoteQuote(lines[j], mode) &&
+      !parseExplicitCard(lines[j].text, mode)
     ) {
       paragraphLines.push(lines[j].text);
       j += 1;
@@ -185,15 +231,17 @@ export function parseArticle(raw: string): ArticleBlock[] {
     const paragraph = paragraphLines.join("");
     if (blocks.length === 1 && blocks[0].type === "title" && looksLikeLead(paragraph)) {
       blocks.push({ type: "lead", text: paragraph });
-    } else if (isGoldenSentence(paragraph)) {
+    } else if (shouldPromoteGolden(paragraph, mode)) {
       blocks.push({ type: "golden", text: paragraph });
     } else if (isSummaryIntro(paragraph)) {
       blocks.push({ type: "summary", text: paragraph });
-    } else if (/^(.{4,18})[:：](.+)$/.test(paragraph) && paragraph.length <= 90) {
-      const matched = paragraph.match(/^(.{4,18})[:：](.+)$/);
-      blocks.push({ type: "card", title: matched?.[1]?.trim(), body: matched?.[2]?.trim() || "" });
     } else {
-      blocks.push({ type: "paragraph", text: paragraph });
+      const explicitCard = parseExplicitCard(paragraph, mode);
+      if (explicitCard) {
+        blocks.push({ type: "card", title: explicitCard.title, body: explicitCard.body });
+      } else {
+        blocks.push({ type: "paragraph", text: paragraph });
+      }
     }
 
     i = j;

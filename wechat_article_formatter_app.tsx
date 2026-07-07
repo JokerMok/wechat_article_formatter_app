@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/u
 import { Copy, Code2, FileDown, Image as ImageIcon, RefreshCcw, Upload, Wand2 } from "lucide-react";
 import { parseArticle } from "@/lib/article-parser";
 import { copyRichText } from "@/lib/copy-rich-text";
-import type { TemplateKey } from "@/lib/article-types";
+import type { ArticleParseMode, TemplateKey } from "@/lib/article-types";
 import { renderWechatHtml } from "@/lib/wechat-renderer";
 import { styleTemplates, templateList } from "@/lib/style-templates";
 
@@ -59,6 +59,21 @@ const blockName: Record<string, string> = {
   image: "图片占位",
   list: "列表",
   card: "信息卡片",
+};
+
+const parseModeOptions: Record<ArticleParseMode, { name: string; description: string }> = {
+  narrative: {
+    name: "叙事长文",
+    description: "适合复盘、观点、故事类文章：只识别标题、正文、引用、列表和 CTA，不把冒号句自动转卡片。",
+  },
+  knowledge: {
+    name: "知识干货",
+    description: "适合方法论、教程类文章：显式识别核心判断、关键风险、标准动作等知识卡片。",
+  },
+  business: {
+    name: "商务案例",
+    description: "适合客户案例、方案文：显式识别当前问题、改造目标、方案、案例、行动建议等卡片。",
+  },
 };
 
 const textImageFontFamily = "-apple-system, BlinkMacSystemFont, Helvetica Neue, PingFang SC, Hiragino Sans GB, Microsoft YaHei, Arial, sans-serif";
@@ -113,13 +128,35 @@ type TextImageRatioKey = keyof typeof textImageRatios;
 
 type TextImagePage = {
   title: string;
+  focus?: string;
   body: string;
   pageNumber: number;
   totalPages: number;
 };
 
+type CarouselChunk = {
+  text: string;
+  role: "body" | "focus" | "heading" | "list";
+};
+
+type CarouselSection = {
+  title: string;
+  chunks: CarouselChunk[];
+};
+
 function font(weight: number, size: number) {
   return `${weight} ${size}px ${textImageFontFamily}`;
+}
+
+function drawRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + width, y, x + width, y + height, r);
+  ctx.arcTo(x + width, y + height, x, y + height, r);
+  ctx.arcTo(x, y + height, x, y, r);
+  ctx.arcTo(x, y, x + width, y, r);
+  ctx.closePath();
 }
 
 function wrapCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
@@ -140,16 +177,34 @@ function wrapCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: n
   return lines;
 }
 
-function blockToCarouselText(block: ReturnType<typeof parseArticle>[number]) {
+function isCarouselKeyText(text: string) {
+  const t = text.trim();
+  if (!t) return false;
+  return (
+    t.length <= 120 &&
+    (/^(核心判断|关键判断|关键风险|核心问题|关键结论|当前问题|改造目标|解决方案|边界|行动建议|下一步|结果)[:：]/.test(t) ||
+      /不是.+而是|最怕|必须|关键|核心|本质|真正|不要.+而要/.test(t))
+  );
+}
+
+function blockToCarouselChunk(block: ReturnType<typeof parseArticle>[number]): CarouselChunk | null {
   switch (block.type) {
     case "list":
-      return block.items.map((item) => `- ${item}`).join("\n");
+      return { role: "list", text: block.items.map((item) => `- ${item}`).join("\n") };
     case "card":
-      return `${block.title ? `${block.title}：` : ""}${block.body}`;
+      return { role: "focus", text: `${block.title ? `${block.title}：` : ""}${block.body}` };
+    case "quote":
+    case "golden":
+    case "lead":
+    case "summary":
+      return "text" in block ? { role: "focus", text: block.text } : null;
+    case "subsection":
+      return { role: "heading", text: block.text };
     case "image":
-      return "";
+      return null;
     default:
-      return "text" in block ? block.text : "";
+      if (!("text" in block)) return null;
+      return { role: isCarouselKeyText(block.text) ? "focus" : "body", text: block.text };
   }
 }
 
@@ -208,23 +263,53 @@ function splitBodyForPages(body: string, maxChars: number) {
 }
 
 function pageTextLength(page: Omit<TextImagePage, "pageNumber" | "totalPages">) {
-  return page.title.length * 1.15 + page.body.length;
+  const bodyParagraphs = page.body.split(/\n\s*\n/g).filter(Boolean);
+  const emphasisBlocks = bodyParagraphs.filter((paragraph) => paragraph.startsWith("重点：") || isCarouselKeyText(paragraph)).length;
+  const headingBlocks = bodyParagraphs.filter((paragraph) => paragraph.length <= 28 && /^([0-9]{1,2}\s|[0-9]{1,2}[、.．]|[一二三四五六七八九十]+[、.．])/.test(paragraph)).length;
+  return page.title.length * 1.25 + (page.focus?.length ?? 0) * 1.85 + page.body.length + emphasisBlocks * 48 + headingBlocks * 32;
+}
+
+function stringifyCarouselChunks(chunks: CarouselChunk[]) {
+  return chunks
+    .map((chunk) => {
+      if (chunk.role === "focus") return `重点：${chunk.text}`;
+      return chunk.text;
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function createPageDraftsFromSection(section: CarouselSection, maxChars: number) {
+  const explicitFocusIndex = section.chunks.findIndex((chunk) => chunk.role === "focus");
+  const fallbackFocusIndex = section.chunks.findIndex((chunk) => chunk.role === "body" && chunk.text.length <= 120);
+  const focusIndex = explicitFocusIndex >= 0 ? explicitFocusIndex : fallbackFocusIndex;
+  const focus = focusIndex >= 0 ? section.chunks[focusIndex].text : undefined;
+  const bodyChunks = section.chunks.filter((_, index) => index !== focusIndex);
+  const body = stringifyCarouselChunks(bodyChunks);
+  const effectiveMaxChars = focus ? Math.floor(maxChars * 0.76) : maxChars;
+  const bodyChunksForPages = splitBodyForPages(body, effectiveMaxChars);
+
+  return bodyChunksForPages.map((chunk, index) => ({
+    title: section.title,
+    focus: index === 0 ? focus : undefined,
+    body: chunk,
+  }));
 }
 
 function createCarouselPages(sourceText: string, ratioKey: TextImageRatioKey): TextImagePage[] {
-  const blocks = parseArticle(sourceText);
+  const blocks = parseArticle(sourceText, { mode: "knowledge" });
   const ratio = textImageRatios[ratioKey];
   const titleBlock = blocks.find((block) => block.type === "title");
   const articleTitle = titleBlock && "text" in titleBlock ? titleBlock.text : "文字轮播图";
-  const sections: Omit<TextImagePage, "pageNumber" | "totalPages">[] = [];
+  const sections: CarouselSection[] = [];
   let currentSectionTitle = articleTitle;
-  let currentParts: string[] = [];
+  let currentChunks: CarouselChunk[] = [];
 
   const flushSection = () => {
-    const body = currentParts.filter(Boolean).join("\n\n").trim();
+    const body = stringifyCarouselChunks(currentChunks);
     if (!body && sections.length > 0) return;
-    sections.push({ title: currentSectionTitle, body });
-    currentParts = [];
+    sections.push({ title: currentSectionTitle, chunks: currentChunks });
+    currentChunks = [];
   };
 
   for (const block of blocks) {
@@ -233,17 +318,17 @@ function createCarouselPages(sourceText: string, ratioKey: TextImageRatioKey): T
     if (block.type === "section") {
       flushSection();
       currentSectionTitle = block.text;
-      currentParts = [];
+      currentChunks = [];
       continue;
     }
 
-    const text = blockToCarouselText(block);
-    if (text) currentParts.push(text);
+    const chunk = blockToCarouselChunk(block);
+    if (chunk) currentChunks.push(chunk);
   }
 
   flushSection();
 
-  const usefulSections = sections.filter((section) => section.title.trim() || section.body.trim());
+  const usefulSections = sections.filter((section) => section.title.trim() || section.chunks.length > 0);
   const pagesDraft: Omit<TextImagePage, "pageNumber" | "totalPages">[] = [];
   let currentPage: Omit<TextImagePage, "pageNumber" | "totalPages"> | null = null;
 
@@ -254,10 +339,9 @@ function createCarouselPages(sourceText: string, ratioKey: TextImageRatioKey): T
   };
 
   for (const section of usefulSections) {
-    const sectionChunks = splitBodyForPages(section.body, ratio.bodyLimit);
+    const sectionPages = createPageDraftsFromSection(section, ratio.bodyLimit);
 
-    for (const chunk of sectionChunks) {
-      const pageChunk: Omit<TextImagePage, "pageNumber" | "totalPages"> = { title: section.title, body: chunk };
+    for (const pageChunk of sectionPages) {
       if (!currentPage) {
         currentPage = pageChunk;
         continue;
@@ -265,10 +349,20 @@ function createCarouselPages(sourceText: string, ratioKey: TextImageRatioKey): T
 
       const mergedPage: Omit<TextImagePage, "pageNumber" | "totalPages"> = {
         title: currentPage.title,
-        body: `${currentPage.body}\n\n${pageChunk.title}\n${pageChunk.body}`.trim(),
+        focus: currentPage.focus ?? pageChunk.focus,
+        body: [
+          currentPage.body,
+          currentPage.title === pageChunk.title ? "" : pageChunk.title,
+          currentPage.focus ? (pageChunk.focus ? `重点：${pageChunk.focus}` : "") : "",
+          pageChunk.body,
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+          .trim(),
       };
 
-      if (pageTextLength(mergedPage) <= ratio.bodyLimit * 1.08) {
+      const mergeLimit = ratio.bodyLimit * (mergedPage.focus ? 0.86 : 1.06);
+      if (pageTextLength(mergedPage) <= mergeLimit) {
         currentPage = mergedPage;
       } else {
         pushPage();
@@ -337,7 +431,7 @@ function drawTextImage(canvas: HTMLCanvasElement, page: TextImagePage, presetKey
   const titleLines = page.title
     .split("\n")
     .flatMap((line) => wrapCanvasText(ctx, line, maxWidth))
-    .slice(0, 4);
+    .slice(0, page.focus ? 3 : 4);
 
   for (const line of titleLines) {
     const textWidth = Math.min(ctx.measureText(line).width + 16, maxWidth);
@@ -348,20 +442,72 @@ function drawTextImage(canvas: HTMLCanvasElement, page: TextImagePage, presetKey
     y += 88;
   }
 
-  y += 54;
+  if (page.focus) {
+    y += 42;
+    ctx.font = font(700, 34);
+    const focusLines = wrapCanvasText(ctx, page.focus, maxWidth - 56).slice(0, ratioKey === "portrait916" ? 5 : 4);
+    const focusLineHeight = 54;
+    const focusBoxHeight = focusLines.length * focusLineHeight + 52;
+    drawRoundRect(ctx, left, y, maxWidth, focusBoxHeight, 18);
+    ctx.fillStyle = preset.highlight;
+    ctx.fill();
+    ctx.fillStyle = preset.title;
+    ctx.fillRect(left + 24, y + 26, 7, Math.max(42, focusBoxHeight - 52));
+
+    let focusY = y + 26;
+    for (const line of focusLines) {
+      ctx.fillText(line, left + 52, focusY);
+      focusY += focusLineHeight;
+    }
+
+    y += focusBoxHeight + 42;
+  } else {
+    y += 54;
+  }
+
   const paragraphs = page.body
     .split(/\n\s*\n/g)
     .map((item) => item.replace(/\n/g, "").trim())
     .filter(Boolean);
 
   for (const paragraph of paragraphs) {
-    const isHeading = paragraph.length <= 18 && !/[。？！.!?，,；;：:]/.test(paragraph);
-    ctx.font = isHeading ? font(700, 40) : font(500, 36);
-    ctx.fillStyle = preset.body;
-    const lines = wrapCanvasText(ctx, paragraph, maxWidth);
-    const lineHeight = isHeading ? 60 : 64;
+    const focusText = paragraph.replace(/^重点[:：]\s*/, "");
+    const isFocus = paragraph !== focusText || isCarouselKeyText(paragraph);
+    const isHeading =
+      !isFocus &&
+      paragraph.length <= 28 &&
+      (/^([0-9]{1,2}\s|[0-9]{1,2}[、.．]|[一二三四五六七八九十]+[、.．])/.test(paragraph) || !/[。？！.!?，,；;：:]/.test(paragraph));
+    const displayText = isFocus ? focusText : paragraph;
+    ctx.font = isHeading ? font(700, 42) : isFocus ? font(700, 34) : font(500, 36);
+    ctx.fillStyle = isHeading || isFocus ? preset.title : preset.body;
+    const lines = wrapCanvasText(ctx, displayText, isFocus ? maxWidth - 46 : maxWidth);
+    const lineHeight = isHeading ? 60 : isFocus ? 54 : 64;
+    const blockHeight = lines.length * lineHeight + (isFocus ? 32 : 0);
 
-    if (y + lines.length * lineHeight > ratio.height - 150) break;
+    if (y + blockHeight > ratio.height - 150) break;
+
+    if (isHeading) {
+      ctx.fillStyle = preset.title;
+      ctx.fillRect(left, y + 5, 7, 46);
+      ctx.fillText(displayText, left + 24, y);
+      y += lineHeight + 18;
+      continue;
+    }
+
+    if (isFocus) {
+      drawRoundRect(ctx, left, y, maxWidth, blockHeight, 16);
+      ctx.fillStyle = preset.highlight;
+      ctx.fill();
+      ctx.fillStyle = preset.title;
+      ctx.fillRect(left + 22, y + 22, 6, Math.max(34, blockHeight - 44));
+      y += 16;
+      for (const line of lines) {
+        ctx.fillText(line, left + 44, y);
+        y += lineHeight;
+      }
+      y += 32;
+      continue;
+    }
 
     for (const line of lines) {
       ctx.fillText(line, left, y);
@@ -467,7 +613,7 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
   };
 
   return (
-    <Card className="mt-6 rounded-2xl shadow-sm">
+    <Card className="rounded-2xl shadow-sm">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-lg">
           <ImageIcon className="h-5 w-5" />
@@ -585,13 +731,20 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
 export default function WechatArticleFormatterApp() {
   const [input, setInput] = useState(defaultArticle);
   const [templateKey, setTemplateKey] = useState<TemplateKey>("zhenyiKnowledgeMinimal");
+  const [parseMode, setParseMode] = useState<ArticleParseMode>("narrative");
   const [copiedRich, setCopiedRich] = useState(false);
   const [copiedHtml, setCopiedHtml] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const template = styleTemplates[templateKey];
-  const blocks = useMemo(() => parseArticle(input), [input]);
+  const blocks = useMemo(() => parseArticle(input, { mode: parseMode }), [input, parseMode]);
   const html = useMemo(() => renderWechatHtml(blocks, template), [blocks, template]);
+
+  const handleTemplateChange = (value: string) => {
+    const nextTemplateKey = value as TemplateKey;
+    setTemplateKey(nextTemplateKey);
+    setParseMode(styleTemplates[nextTemplateKey].visual.defaultParseMode ?? "narrative");
+  };
 
   const handleCopyRichText = async () => {
     try {
@@ -634,6 +787,7 @@ export default function WechatArticleFormatterApp() {
   const reset = () => {
     setInput(defaultArticle);
     setTemplateKey("zhenyiKnowledgeMinimal");
+    setParseMode("narrative");
   };
 
   return (
@@ -656,154 +810,186 @@ export default function WechatArticleFormatterApp() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-          <Card className="rounded-2xl shadow-sm xl:col-span-1">
-            <CardHeader>
-              <CardTitle className="text-lg">排版设置</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <div className="space-y-2">
-                <Label>模板风格</Label>
-                <Select value={templateKey} onValueChange={(value) => setTemplateKey(value as TemplateKey)}>
-                  <SelectTrigger className="rounded-xl">
-                    <span>{template.name}</span>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {templateList.map((item) => (
-                      <SelectItem key={item.key} value={item.key}>
-                        {item.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs leading-6 text-slate-500">{template.description}</p>
-              </div>
+        <Tabs defaultValue="formatter" className="w-full">
+          <TabsList className="mb-6 grid h-auto w-full grid-cols-2 rounded-2xl bg-slate-200/70 p-1 md:w-[420px]">
+            <TabsTrigger value="formatter" className="rounded-xl">
+              公众号排版
+            </TabsTrigger>
+            <TabsTrigger value="carousel" className="rounded-xl">
+              轮播图生成
+            </TabsTrigger>
+          </TabsList>
 
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="text-sm font-semibold text-slate-900">{template.name}</div>
-                <div className="mt-3 flex gap-2">
-                  {template.palette.map((color) => (
-                    <span key={color} className="h-5 w-12 rounded-full border border-slate-200" style={{ backgroundColor: color }} />
-                  ))}
-                </div>
-                <div className="mt-3 text-xs leading-6 text-slate-500">适合：{template.audience}</div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <Button onClick={() => fileInputRef.current?.click()} variant="outline" className="rounded-xl">
-                  <Upload className="mr-2 h-4 w-4" />
-                  导入
-                </Button>
-                <Button onClick={handleExportHtml} variant="outline" className="rounded-xl">
-                  <FileDown className="mr-2 h-4 w-4" />
-                  导出
-                </Button>
-              </div>
-
-              <input ref={fileInputRef} type="file" accept=".md,.markdown,.txt" className="hidden" onChange={handleImportMarkdown} />
-
-              <Button onClick={reset} variant="outline" className="w-full rounded-xl">
-                <RefreshCcw className="mr-2 h-4 w-4" />
-                重置示例
-              </Button>
-
-              <div className="rounded-2xl bg-slate-100 p-4 text-xs leading-6 text-slate-600">
-                图片仅做占位排版；识别“配图：”“图片：”“此处插入：”等写法，不做图片生成。
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="rounded-2xl shadow-sm xl:col-span-2">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <Wand2 className="h-5 w-5" />
-                内容输入与生成结果
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Tabs defaultValue="preview" className="w-full">
-                <TabsList className="mb-4 grid h-auto w-full grid-cols-2 rounded-xl md:grid-cols-4">
-                  <TabsTrigger value="preview">效果预览</TabsTrigger>
-                  <TabsTrigger value="input">输入文章</TabsTrigger>
-                  <TabsTrigger value="structure">结构识别</TabsTrigger>
-                  <TabsTrigger value="html">HTML源码</TabsTrigger>
-                </TabsList>
-
-                <TabsContent value="preview">
-                  <div className="min-h-[620px] rounded-2xl border bg-white p-5 md:p-7">
-                    <div dangerouslySetInnerHTML={{ __html: html }} />
+          <TabsContent value="formatter" className="space-y-6">
+            <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+              <Card className="rounded-2xl shadow-sm xl:col-span-1">
+                <CardHeader>
+                  <CardTitle className="text-lg">排版设置</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-5">
+                  <div className="space-y-2">
+                    <Label>模板风格</Label>
+                    <Select value={templateKey} onValueChange={handleTemplateChange}>
+                      <SelectTrigger className="rounded-xl">
+                        <span>{template.name}</span>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {templateList.map((item) => (
+                          <SelectItem key={item.key} value={item.key}>
+                            {item.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs leading-6 text-slate-500">{template.description}</p>
                   </div>
-                </TabsContent>
 
-                <TabsContent value="input" className="space-y-3">
-                  <Textarea
-                    value={input}
-                    onChange={(event) => setInput(event.target.value)}
-                    className="min-h-[620px] rounded-2xl font-mono text-sm"
-                    placeholder="把你的文章内容或 Markdown 粘贴到这里"
-                  />
-                </TabsContent>
+                  <div className="space-y-2">
+                    <Label>内容分层</Label>
+                    <Select value={parseMode} onValueChange={(value) => setParseMode(value as ArticleParseMode)}>
+                      <SelectTrigger className="rounded-xl">
+                        <span>{parseModeOptions[parseMode].name}</span>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Object.entries(parseModeOptions).map(([key, item]) => (
+                          <SelectItem key={key} value={key}>
+                            {item.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs leading-6 text-slate-500">{parseModeOptions[parseMode].description}</p>
+                  </div>
 
-                <TabsContent value="structure">
-                  <div className="min-h-[620px] rounded-2xl border bg-white p-4">
-                    <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-                      <Metric label="小节" value={blocks.filter((block) => block.type === "section").length} />
-                      <Metric label="图片占位" value={blocks.filter((block) => block.type === "image").length} />
-                      <Metric label="列表" value={blocks.filter((block) => block.type === "list").length} />
-                      <Metric label="金句/CTA" value={blocks.filter((block) => block.type === "golden" || block.type === "cta").length} />
-                    </div>
-
-                    <div className="space-y-3">
-                      {blocks.map((block, index) => (
-                        <div key={`${block.type}-${index}`} className="rounded-2xl border border-slate-200 p-4">
-                          <div className="mb-2 flex items-center gap-2 text-xs font-medium text-slate-500">
-                            {block.type === "image" && <ImageIcon className="h-4 w-4" />}
-                            <span>{blockName[block.type]}</span>
-                          </div>
-                          <div className="text-sm leading-7 text-slate-800">
-                            {block.type === "list"
-                              ? block.items.join(" / ")
-                              : block.type === "card"
-                                ? `${block.title || ""} ${block.body}`
-                                : "text" in block
-                                  ? block.text
-                                  : ""}
-                          </div>
-                        </div>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="text-sm font-semibold text-slate-900">{template.name}</div>
+                    <div className="mt-3 flex gap-2">
+                      {template.palette.map((color) => (
+                        <span key={color} className="h-5 w-12 rounded-full border border-slate-200" style={{ backgroundColor: color }} />
                       ))}
                     </div>
+                    <div className="mt-3 text-xs leading-6 text-slate-500">适合：{template.audience}</div>
                   </div>
-                </TabsContent>
 
-                <TabsContent value="html">
-                  <Textarea readOnly value={html} className="min-h-[620px] rounded-2xl font-mono text-xs" />
-                </TabsContent>
-              </Tabs>
-            </CardContent>
-          </Card>
-        </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Button onClick={() => fileInputRef.current?.click()} variant="outline" className="rounded-xl">
+                      <Upload className="mr-2 h-4 w-4" />
+                      导入
+                    </Button>
+                    <Button onClick={handleExportHtml} variant="outline" className="rounded-xl">
+                      <FileDown className="mr-2 h-4 w-4" />
+                      导出
+                    </Button>
+                  </div>
 
-        <TextImageGenerator articleText={input} />
+                  <input ref={fileInputRef} type="file" accept=".md,.markdown,.txt" className="hidden" onChange={handleImportMarkdown} />
 
-        <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {templateList.map((item) => (
-            <button
-              key={item.key}
-              onClick={() => setTemplateKey(item.key)}
-              className={`rounded-2xl border p-4 text-left transition ${
-                templateKey === item.key ? "border-slate-900 bg-white shadow-sm" : "border-slate-200 bg-slate-50 hover:bg-white"
-              }`}
-            >
-              <div className="text-sm font-semibold text-slate-900">{item.name}</div>
-              <div className="mt-2 text-xs leading-6 text-slate-500">{item.description}</div>
-              <div className="mt-3 flex gap-2">
-                {item.palette.map((color) => (
-                  <span key={color} className="h-4 w-10 rounded-full border border-slate-200" style={{ backgroundColor: color }} />
-                ))}
-              </div>
-            </button>
-          ))}
-        </div>
+                  <Button onClick={reset} variant="outline" className="w-full rounded-xl">
+                    <RefreshCcw className="mr-2 h-4 w-4" />
+                    重置示例
+                  </Button>
+
+                  <div className="rounded-2xl bg-slate-100 p-4 text-xs leading-6 text-slate-600">
+                    图片仅做占位排版；识别“配图：”“图片：”“此处插入：”等写法，不做图片生成。
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="rounded-2xl shadow-sm xl:col-span-2">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <Wand2 className="h-5 w-5" />
+                    内容输入与生成结果
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <Tabs defaultValue="preview" className="w-full">
+                    <TabsList className="mb-4 grid h-auto w-full grid-cols-2 rounded-xl md:grid-cols-4">
+                      <TabsTrigger value="preview">效果预览</TabsTrigger>
+                      <TabsTrigger value="input">输入文章</TabsTrigger>
+                      <TabsTrigger value="structure">结构识别</TabsTrigger>
+                      <TabsTrigger value="html">HTML源码</TabsTrigger>
+                    </TabsList>
+
+                    <TabsContent value="preview">
+                      <div className="min-h-[620px] rounded-2xl border bg-white p-5 md:p-7">
+                        <div dangerouslySetInnerHTML={{ __html: html }} />
+                      </div>
+                    </TabsContent>
+
+                    <TabsContent value="input" className="space-y-3">
+                      <Textarea
+                        value={input}
+                        onChange={(event) => setInput(event.target.value)}
+                        className="min-h-[620px] rounded-2xl font-mono text-sm"
+                        placeholder="把你的文章内容或 Markdown 粘贴到这里"
+                      />
+                    </TabsContent>
+
+                    <TabsContent value="structure">
+                      <div className="min-h-[620px] rounded-2xl border bg-white p-4">
+                        <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+                          <Metric label="小节" value={blocks.filter((block) => block.type === "section").length} />
+                          <Metric label="图片占位" value={blocks.filter((block) => block.type === "image").length} />
+                          <Metric label="列表" value={blocks.filter((block) => block.type === "list").length} />
+                          <Metric label="金句/CTA" value={blocks.filter((block) => block.type === "golden" || block.type === "cta").length} />
+                        </div>
+
+                        <div className="space-y-3">
+                          {blocks.map((block, index) => (
+                            <div key={`${block.type}-${index}`} className="rounded-2xl border border-slate-200 p-4">
+                              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-slate-500">
+                                {block.type === "image" && <ImageIcon className="h-4 w-4" />}
+                                <span>{blockName[block.type]}</span>
+                              </div>
+                              <div className="text-sm leading-7 text-slate-800">
+                                {block.type === "list"
+                                  ? block.items.join(" / ")
+                                  : block.type === "card"
+                                    ? `${block.title || ""} ${block.body}`
+                                    : "text" in block
+                                      ? block.text
+                                      : ""}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </TabsContent>
+
+                    <TabsContent value="html">
+                      <Textarea readOnly value={html} className="min-h-[620px] rounded-2xl font-mono text-xs" />
+                    </TabsContent>
+                  </Tabs>
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {templateList.map((item) => (
+                <button
+                  key={item.key}
+                  onClick={() => handleTemplateChange(item.key)}
+                  className={`rounded-2xl border p-4 text-left transition ${
+                    templateKey === item.key ? "border-slate-900 bg-white shadow-sm" : "border-slate-200 bg-slate-50 hover:bg-white"
+                  }`}
+                >
+                  <div className="text-sm font-semibold text-slate-900">{item.name}</div>
+                  <div className="mt-2 text-xs leading-6 text-slate-500">{item.description}</div>
+                  <div className="mt-3 flex gap-2">
+                    {item.palette.map((color) => (
+                      <span key={color} className="h-4 w-10 rounded-full border border-slate-200" style={{ backgroundColor: color }} />
+                    ))}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="carousel">
+            <TextImageGenerator articleText={input} />
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );

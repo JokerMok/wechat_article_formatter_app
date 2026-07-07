@@ -17,10 +17,10 @@ function toStyle(style: InlineStyle) {
 
 function formatInline(text: string) {
   let out = escapeHtml(text.trim());
-  out = out.replace(/\*\*(.*?)\*\*/g, '<strong style="font-weight: 800;">$1</strong>');
-  out = out.replace(/__(.*?)__/g, '<strong style="font-weight: 800;">$1</strong>');
+  out = out.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+  out = out.replace(/__(.*?)__/g, "<strong>$1</strong>");
   out = out.replace(/`([^`]+)`/g, '<span style="font-family: Menlo, Monaco, Consolas, monospace; background-color: #f3f4f6; padding: 1px 4px;">$1</span>');
-  out = out.replace(/"([^"]{2,})"/g, '"<strong style="font-weight: 800;">$1</strong>"');
+  out = out.replace(/"([^"]{2,})"/g, '"<strong>$1</strong>"');
   return out;
 }
 

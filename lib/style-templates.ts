@@ -471,13 +471,14 @@ function createRecommendedTemplate(options: {
     visual: {
       theme: isTech ? "modern" : isBusiness ? "simple" : "default",
       variant: options.variant,
+      defaultParseMode: options.variant === "business" ? "business" : "knowledge",
       primary: options.primary,
       accent: options.accent,
       softBg: options.softBg,
       border: options.border,
       muted: options.muted,
       listSymbol: isBusiness ? "01" : isTech ? ">" : "-",
-      quoteSymbol: isBusiness ? "CASE" : isTech ? "NOTE" : "｜",
+      quoteSymbol: isTech ? "NOTE" : "｜",
       ctaPrefix: isBusiness ? "行动建议" : isTech ? "NEXT" : "下一步",
     },
     container: {

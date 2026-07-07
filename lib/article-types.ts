@@ -26,6 +26,8 @@ export type ArticleBlock =
   | { type: "list"; items: string[] }
   | { type: "card"; title?: string; body: string };
 
+export type ArticleParseMode = "narrative" | "knowledge" | "business";
+
 export type TemplateKey =
   | "zhenyiKnowledgeMinimal"
   | "zhenyiBusinessCase"
@@ -53,6 +55,7 @@ export type StyleTemplate = {
   visual: {
     theme: "default" | "grace" | "simple" | "modern";
     variant?: "knowledge" | "business" | "tech";
+    defaultParseMode?: ArticleParseMode;
     primary: string;
     accent: string;
     softBg: string;

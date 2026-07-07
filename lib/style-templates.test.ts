@@ -35,4 +35,24 @@ describe("styleTemplates", () => {
       expect(html).not.toContain("下一步");
     }
   });
+
+  it("renders markdown strong without inline style fragments", () => {
+    const blocks = parseArticle(`文章标题
+
+你把逻辑解释清楚，不代表老板会觉得够。**重点内容**`);
+    const html = renderWechatHtml(blocks, styleTemplates.zhenyiKnowledgeMinimal);
+
+    expect(html).toContain("<strong>重点内容</strong>");
+    expect(html).not.toContain('<strong style="font-weight: 800;">重点内容</strong>');
+  });
+
+  it("keeps blockquotes as quotes in business visual templates", () => {
+    const blocks = parseArticle(`文章标题
+
+> 内容还是少了。`);
+    const html = renderWechatHtml(blocks, styleTemplates.zhenyiBusinessCase);
+
+    expect(html).toContain("内容还是少了。");
+    expect(html).not.toContain("CASE");
+  });
 });
