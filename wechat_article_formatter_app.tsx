@@ -83,13 +83,11 @@ const textImageRatios = {
     name: "3:4 图文",
     width: 1080,
     height: 1440,
-    bodyLimit: 520,
   },
   portrait916: {
     name: "9:16 竖版",
     width: 1080,
     height: 1920,
-    bodyLimit: 760,
   },
 } as const;
 
@@ -125,23 +123,107 @@ const textImagePresets = {
 
 type TextImagePresetKey = keyof typeof textImagePresets;
 type TextImageRatioKey = keyof typeof textImageRatios;
+type TextImageDensity = "regular" | "compact" | "dense";
 
 type TextImagePage = {
   title: string;
   focus?: string;
   body: string;
+  density: TextImageDensity;
   pageNumber: number;
   totalPages: number;
 };
+
+type TextImagePageDraft = Omit<TextImagePage, "pageNumber" | "totalPages" | "density"> & { density?: TextImageDensity };
 
 type CarouselChunk = {
   text: string;
   role: "body" | "focus" | "heading" | "list";
 };
 
-type CarouselSection = {
-  title: string;
-  chunks: CarouselChunk[];
+const textImageLayout = {
+  left: 84,
+  top: 148,
+  bottomPadding: 150,
+};
+
+const noLineStartPunctuation = /^[。！？；，、：,.!?;）】」』》〉%％]$/;
+
+const textImageDensityProfiles: Record<
+  TextImageDensity,
+  {
+    titleSize: number;
+    titleLine: number;
+    titleHighlightY: number;
+    titleHighlightHeight: number;
+    titleFocusGap: number;
+    titleBodyGap: number;
+    focusSize: number;
+    focusLine: number;
+    focusPaddingY: number;
+    focusAfterGap: number;
+    headingSize: number;
+    headingLine: number;
+    headingAfterGap: number;
+    bodySize: number;
+    bodyLine: number;
+    bodyAfterGap: number;
+  }
+> = {
+  regular: {
+    titleSize: 72,
+    titleLine: 88,
+    titleHighlightY: 54,
+    titleHighlightHeight: 24,
+    titleFocusGap: 42,
+    titleBodyGap: 54,
+    focusSize: 34,
+    focusLine: 54,
+    focusPaddingY: 26,
+    focusAfterGap: 42,
+    headingSize: 42,
+    headingLine: 60,
+    headingAfterGap: 18,
+    bodySize: 36,
+    bodyLine: 64,
+    bodyAfterGap: 38,
+  },
+  compact: {
+    titleSize: 66,
+    titleLine: 78,
+    titleHighlightY: 49,
+    titleHighlightHeight: 20,
+    titleFocusGap: 30,
+    titleBodyGap: 38,
+    focusSize: 31,
+    focusLine: 46,
+    focusPaddingY: 22,
+    focusAfterGap: 30,
+    headingSize: 37,
+    headingLine: 50,
+    headingAfterGap: 12,
+    bodySize: 33,
+    bodyLine: 55,
+    bodyAfterGap: 28,
+  },
+  dense: {
+    titleSize: 60,
+    titleLine: 70,
+    titleHighlightY: 44,
+    titleHighlightHeight: 18,
+    titleFocusGap: 24,
+    titleBodyGap: 30,
+    focusSize: 29,
+    focusLine: 42,
+    focusPaddingY: 18,
+    focusAfterGap: 24,
+    headingSize: 34,
+    headingLine: 46,
+    headingAfterGap: 10,
+    bodySize: 30,
+    bodyLine: 49,
+    bodyAfterGap: 22,
+  },
 };
 
 function font(weight: number, size: number) {
@@ -166,6 +248,10 @@ function wrapCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: n
   for (const char of Array.from(text.trim())) {
     const nextLine = line + char;
     if (line && ctx.measureText(nextLine).width > maxWidth) {
+      if (noLineStartPunctuation.test(char)) {
+        line = nextLine;
+        continue;
+      }
       lines.push(line);
       line = char.trimStart();
     } else {
@@ -177,8 +263,36 @@ function wrapCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: n
   return lines;
 }
 
+function cleanCarouselText(text: string) {
+  return text
+    .replace(/^\s{0,3}#{1,6}\s*/gm, "")
+    .replace(/^\s{0,3}>\s*/gm, "")
+    .replace(/^\s{0,3}(?:&gt;|＞)\s*/gm, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/\s+([。！？；，、：,.!?;])/g, "$1")
+    .replace(/([。！？；，、：,.!?;])\s+/g, "$1")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+}
+
+function cleanCarouselParagraph(text: string) {
+  return cleanCarouselText(text)
+    .replace(/\n+/g, "")
+    .replace(/^[。！？；，、：,.!?;]+/, "")
+    .replace(/[。！？；，、：,.!?;]+$/, (match) => (match.length > 1 ? match.slice(0, 1) : match))
+    .trim();
+}
+
+function isMeaningfulCarouselText(text: string) {
+  const cleaned = cleanCarouselParagraph(text);
+  return cleaned.length > 0 && !/^[。！？；，、：,.!?;]+$/.test(cleaned);
+}
+
 function isCarouselKeyText(text: string) {
-  const t = text.trim();
+  const t = cleanCarouselText(text);
   if (!t) return false;
   return (
     t.length <= 120 &&
@@ -190,21 +304,21 @@ function isCarouselKeyText(text: string) {
 function blockToCarouselChunk(block: ReturnType<typeof parseArticle>[number]): CarouselChunk | null {
   switch (block.type) {
     case "list":
-      return { role: "list", text: block.items.map((item) => `- ${item}`).join("\n") };
+      return { role: "list", text: block.items.map((item) => `- ${cleanCarouselParagraph(item)}`).join("\n") };
     case "card":
-      return { role: "focus", text: `${block.title ? `${block.title}：` : ""}${block.body}` };
+      return { role: "focus", text: cleanCarouselText(`${block.title ? `${block.title}：` : ""}${block.body}`) };
     case "quote":
     case "golden":
     case "lead":
     case "summary":
-      return "text" in block ? { role: "focus", text: block.text } : null;
+      return "text" in block ? { role: "focus", text: cleanCarouselText(block.text) } : null;
     case "subsection":
-      return { role: "heading", text: block.text };
+      return { role: "heading", text: cleanCarouselText(block.text) };
     case "image":
       return null;
     default:
       if (!("text" in block)) return null;
-      return { role: isCarouselKeyText(block.text) ? "focus" : "body", text: block.text };
+      return { role: isCarouselKeyText(block.text) ? "focus" : "body", text: cleanCarouselText(block.text) };
   }
 }
 
@@ -237,152 +351,260 @@ function splitLongParagraph(text: string, maxChars: number) {
   return chunks;
 }
 
-function splitBodyForPages(body: string, maxChars: number) {
-  const paragraphs = body
-    .split(/\n+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-  const chunks: string[] = [];
-  let current = "";
+function getBodyParagraphs(body: string) {
+  return body
+    .split(/\n\s*\n/g)
+    .map((item) => cleanCarouselParagraph(item))
+    .filter(isMeaningfulCarouselText);
+}
 
-  for (const paragraph of paragraphs) {
-    const paragraphChunks = paragraph.length > maxChars ? splitLongParagraph(paragraph, maxChars) : [paragraph];
+function getParagraphKind(paragraph: string) {
+  const focusText = paragraph.replace(/^重点[:：]\s*/, "");
+  const isFocus = paragraph !== focusText || isCarouselKeyText(paragraph);
+  const isHeading =
+    !isFocus &&
+    paragraph.length <= 28 &&
+    (/^([0-9]{1,2}\s|[0-9]{1,2}[、.．]|[一二三四五六七八九十]+[、.．])/.test(paragraph) || !/[。？！.!?，,；;：:]/.test(paragraph));
 
-    for (const chunk of paragraphChunks) {
-      if (current && current.length + chunk.length + 2 > maxChars) {
-        chunks.push(current);
-        current = chunk;
-      } else {
-        current = current ? `${current}\n\n${chunk}` : chunk;
-      }
-    }
+  return {
+    displayText: isFocus ? focusText : paragraph,
+    isFocus,
+    isHeading,
+  };
+}
+
+function chunkToParagraph(chunk: CarouselChunk) {
+  const text = cleanCarouselText(chunk.text);
+  if (chunk.role === "focus") return `重点：${text}`;
+  return text;
+}
+
+function appendParagraph(body: string, paragraph: string) {
+  const trimmed = paragraph.trim();
+  if (!trimmed) return body;
+  return body ? `${body}\n\n${trimmed}` : trimmed;
+}
+
+function measureParagraphHeight(ctx: CanvasRenderingContext2D, paragraph: string, maxWidth: number, density: TextImageDensity) {
+  const profile = textImageDensityProfiles[density];
+  const { displayText, isFocus, isHeading } = getParagraphKind(paragraph);
+  ctx.font = isHeading ? font(700, profile.headingSize) : isFocus ? font(700, profile.focusSize) : font(500, profile.bodySize);
+  const textWidth = isFocus ? maxWidth - 46 : isHeading ? maxWidth - 24 : maxWidth;
+  const lines = wrapCanvasText(ctx, displayText, textWidth);
+
+  if (isHeading) return { height: lines.length * profile.headingLine + profile.headingAfterGap, lines, displayText, isFocus, isHeading };
+  if (isFocus) return { height: lines.length * profile.focusLine + profile.focusPaddingY * 2 + profile.focusAfterGap, lines, displayText, isFocus, isHeading };
+  return { height: lines.length * profile.bodyLine + profile.bodyAfterGap, lines, displayText, isFocus, isHeading };
+}
+
+function measurePageBodyStart(ctx: CanvasRenderingContext2D, page: TextImagePageDraft, ratioKey: TextImageRatioKey) {
+  const density = page.density ?? "regular";
+  const profile = textImageDensityProfiles[density];
+  const ratio = textImageRatios[ratioKey];
+  const left = textImageLayout.left;
+  const maxWidth = ratio.width - left * 2;
+  let y = textImageLayout.top + 74;
+
+  ctx.textBaseline = "top";
+  ctx.font = font(800, profile.titleSize);
+  const titleLines = page.title
+    .split("\n")
+    .flatMap((line) => wrapCanvasText(ctx, line, maxWidth))
+    .slice(0, page.focus ? 3 : 4);
+
+  y += titleLines.length * profile.titleLine;
+
+  if (page.focus) {
+    y += profile.titleFocusGap;
+    ctx.font = font(700, profile.focusSize);
+    const focusLines = wrapCanvasText(ctx, page.focus, maxWidth - 56).slice(0, ratioKey === "portrait916" ? 5 : 4);
+    y += focusLines.length * profile.focusLine + profile.focusPaddingY * 2 + profile.focusAfterGap;
+  } else {
+    y += profile.titleBodyGap;
   }
 
-  if (current) chunks.push(current);
-  return chunks.length ? chunks : [""];
+  return y;
 }
 
-function pageTextLength(page: Omit<TextImagePage, "pageNumber" | "totalPages">) {
-  const bodyParagraphs = page.body.split(/\n\s*\n/g).filter(Boolean);
-  const emphasisBlocks = bodyParagraphs.filter((paragraph) => paragraph.startsWith("重点：") || isCarouselKeyText(paragraph)).length;
-  const headingBlocks = bodyParagraphs.filter((paragraph) => paragraph.length <= 28 && /^([0-9]{1,2}\s|[0-9]{1,2}[、.．]|[一二三四五六七八九十]+[、.．])/.test(paragraph)).length;
-  return page.title.length * 1.25 + (page.focus?.length ?? 0) * 1.85 + page.body.length + emphasisBlocks * 48 + headingBlocks * 32;
-}
-
-function stringifyCarouselChunks(chunks: CarouselChunk[]) {
-  return chunks
-    .map((chunk) => {
-      if (chunk.role === "focus") return `重点：${chunk.text}`;
-      return chunk.text;
-    })
-    .filter(Boolean)
-    .join("\n\n");
-}
-
-function createPageDraftsFromSection(section: CarouselSection, maxChars: number) {
-  const explicitFocusIndex = section.chunks.findIndex((chunk) => chunk.role === "focus");
-  const fallbackFocusIndex = section.chunks.findIndex((chunk) => chunk.role === "body" && chunk.text.length <= 120);
-  const focusIndex = explicitFocusIndex >= 0 ? explicitFocusIndex : fallbackFocusIndex;
-  const focus = focusIndex >= 0 ? section.chunks[focusIndex].text : undefined;
-  const bodyChunks = section.chunks.filter((_, index) => index !== focusIndex);
-  const body = stringifyCarouselChunks(bodyChunks);
-  const effectiveMaxChars = focus ? Math.floor(maxChars * 0.76) : maxChars;
-  const bodyChunksForPages = splitBodyForPages(body, effectiveMaxChars);
-
-  return bodyChunksForPages.map((chunk, index) => ({
-    title: section.title,
-    focus: index === 0 ? focus : undefined,
-    body: chunk,
-  }));
-}
-
-function createCarouselPages(sourceText: string, ratioKey: TextImageRatioKey): TextImagePage[] {
-  const blocks = parseArticle(sourceText, { mode: "knowledge" });
+function measureTextImagePage(ctx: CanvasRenderingContext2D, page: TextImagePageDraft, ratioKey: TextImageRatioKey) {
+  const density = page.density ?? "regular";
   const ratio = textImageRatios[ratioKey];
-  const titleBlock = blocks.find((block) => block.type === "title");
-  const articleTitle = titleBlock && "text" in titleBlock ? titleBlock.text : "文字轮播图";
-  const sections: CarouselSection[] = [];
-  let currentSectionTitle = articleTitle;
-  let currentChunks: CarouselChunk[] = [];
+  const maxWidth = ratio.width - textImageLayout.left * 2;
+  let y = measurePageBodyStart(ctx, page, ratioKey);
 
-  const flushSection = () => {
-    const body = stringifyCarouselChunks(currentChunks);
-    if (!body && sections.length > 0) return;
-    sections.push({ title: currentSectionTitle, chunks: currentChunks });
-    currentChunks = [];
-  };
+  for (const paragraph of getBodyParagraphs(page.body)) {
+    y += measureParagraphHeight(ctx, paragraph, maxWidth, density).height;
+  }
 
+  return y;
+}
+
+function createMeasureContext(ratioKey: TextImageRatioKey) {
+  if (typeof document === "undefined") return null;
+  const ratio = textImageRatios[ratioKey];
+  const canvas = document.createElement("canvas");
+  canvas.width = ratio.width;
+  canvas.height = ratio.height;
+  return canvas.getContext("2d");
+}
+
+function pageFitsCanvas(ctx: CanvasRenderingContext2D, page: TextImagePageDraft, ratioKey: TextImageRatioKey) {
+  const ratio = textImageRatios[ratioKey];
+  return measureTextImagePage(ctx, page, ratioKey) <= ratio.height - textImageLayout.bottomPadding;
+}
+
+function fitPageDensity(ctx: CanvasRenderingContext2D, page: TextImagePageDraft, ratioKey: TextImageRatioKey) {
+  const densities: TextImageDensity[] = ["regular", "compact", "dense"];
+  for (const density of densities) {
+    const candidate = { ...page, density };
+    if (pageFitsCanvas(ctx, candidate, ratioKey)) return candidate;
+  }
+  return { ...page, density: "dense" as const };
+}
+
+function splitParagraphForCanvas(paragraph: string, ratioKey: TextImageRatioKey) {
+  const chunkSize = ratioKey === "portrait916" ? 170 : 120;
+  return splitLongParagraph(paragraph, chunkSize);
+}
+
+function createPageFromChunks(title: string, chunks: CarouselChunk[]): TextImagePageDraft {
+  const hasContentAfter = (index: number) =>
+    chunks.some((otherChunk, otherIndex) => otherIndex !== index && (otherChunk.role === "body" || otherChunk.role === "list" || otherChunk.role === "focus"));
+  const explicitFocusIndex = chunks.findIndex((chunk, index) => chunk.role === "focus" && index <= 1 && hasContentAfter(index));
+  const fallbackFocusIndex = chunks.findIndex(
+    (chunk, index) =>
+      chunk.role === "body" &&
+      chunk.text.length <= 120 &&
+      index <= 1 &&
+      hasContentAfter(index)
+  );
+  const focusIndex = explicitFocusIndex >= 0 ? explicitFocusIndex : fallbackFocusIndex;
+  const focus = focusIndex >= 0 ? chunks[focusIndex].text : undefined;
+  const body = chunks
+    .filter((_, index) => index !== focusIndex)
+    .map(chunkToParagraph)
+    .reduce((current, paragraph) => appendParagraph(current, paragraph), "");
+
+  return { title, focus, body };
+}
+
+function getPageSummaryTitle(page: TextImagePageDraft) {
+  const firstHeading = getBodyParagraphs(page.body).find((paragraph) => getParagraphKind(paragraph).isHeading);
+  if (firstHeading) return firstHeading;
+  if (page.focus) return page.focus;
+  const firstParagraph = getBodyParagraphs(page.body)[0];
+  if (firstParagraph) return firstParagraph.length > 28 ? `${firstParagraph.slice(0, 28)}...` : firstParagraph;
+  return page.title;
+}
+
+function removeFirstMatchingHeading(body: string, title: string) {
+  const paragraphs = getBodyParagraphs(body);
+  const index = paragraphs.findIndex((paragraph) => paragraph === title && getParagraphKind(paragraph).isHeading);
+  if (index < 0) return body;
+  return paragraphs.filter((_, paragraphIndex) => paragraphIndex !== index).join("\n\n");
+}
+
+function createCarouselChunks(blocks: ReturnType<typeof parseArticle>) {
+  const chunks: CarouselChunk[] = [];
   for (const block of blocks) {
     if (block.type === "title" || block.type === "image") continue;
-
     if (block.type === "section") {
-      flushSection();
-      currentSectionTitle = block.text;
-      currentChunks = [];
+      const text = cleanCarouselText(block.text);
+      if (text) chunks.push({ role: "heading", text });
       continue;
     }
 
     const chunk = blockToCarouselChunk(block);
-    if (chunk) currentChunks.push(chunk);
+    if (chunk?.text.trim() && isMeaningfulCarouselText(chunk.text)) chunks.push(chunk);
   }
 
-  flushSection();
+  return chunks;
+}
 
-  const usefulSections = sections.filter((section) => section.title.trim() || section.chunks.length > 0);
-  const pagesDraft: Omit<TextImagePage, "pageNumber" | "totalPages">[] = [];
-  let currentPage: Omit<TextImagePage, "pageNumber" | "totalPages"> | null = null;
+function paginateCarouselChunks(title: string, chunks: CarouselChunk[], ratioKey: TextImageRatioKey) {
+  const ctx = createMeasureContext(ratioKey);
+  if (!ctx) return [createPageFromChunks(title, chunks)];
 
-  const pushPage = () => {
-    if (!currentPage) return;
-    if (currentPage.body.trim() || currentPage.title.trim()) pagesDraft.push(currentPage);
-    currentPage = null;
+  const pages: TextImagePageDraft[] = [];
+  let currentChunks: CarouselChunk[] = [];
+
+  const pushCurrent = () => {
+    if (!currentChunks.length) return;
+    const page = createPageFromChunks(title, currentChunks);
+    pages.push(fitPageDensity(ctx, page, ratioKey));
+    currentChunks = [];
   };
 
-  for (const section of usefulSections) {
-    const sectionPages = createPageDraftsFromSection(section, ratio.bodyLimit);
-
-    for (const pageChunk of sectionPages) {
-      if (!currentPage) {
-        currentPage = pageChunk;
-        continue;
-      }
-
-      const mergedPage: Omit<TextImagePage, "pageNumber" | "totalPages"> = {
-        title: currentPage.title,
-        focus: currentPage.focus ?? pageChunk.focus,
-        body: [
-          currentPage.body,
-          currentPage.title === pageChunk.title ? "" : pageChunk.title,
-          currentPage.focus ? (pageChunk.focus ? `重点：${pageChunk.focus}` : "") : "",
-          pageChunk.body,
-        ]
-          .filter(Boolean)
-          .join("\n\n")
-          .trim(),
-      };
-
-      const mergeLimit = ratio.bodyLimit * (mergedPage.focus ? 0.86 : 1.06);
-      if (pageTextLength(mergedPage) <= mergeLimit) {
-        currentPage = mergedPage;
-      } else {
-        pushPage();
-        currentPage = pageChunk;
-      }
+  const appendChunk = (chunk: CarouselChunk) => {
+    const candidateChunks = [...currentChunks, chunk];
+    const candidatePage = fitPageDensity(ctx, createPageFromChunks(title, candidateChunks), ratioKey);
+    if (pageFitsCanvas(ctx, candidatePage, ratioKey)) {
+      currentChunks = candidateChunks;
+      return;
     }
+
+    pushCurrent();
+    const singlePage = fitPageDensity(ctx, createPageFromChunks(title, [chunk]), ratioKey);
+    if (pageFitsCanvas(ctx, singlePage, ratioKey)) {
+      currentChunks = [chunk];
+      return;
+    }
+
+    const parts = splitParagraphForCanvas(chunk.text, ratioKey);
+    if (parts.length <= 1 && parts[0] === chunk.text) {
+      const hardSize = ratioKey === "portrait916" ? 90 : 64;
+      if (chunk.text.length <= hardSize) {
+        currentChunks = [chunk];
+        return;
+      }
+
+      for (let index = 0; index < chunk.text.length; index += hardSize) {
+        appendChunk({ ...chunk, text: chunk.text.slice(index, index + hardSize) });
+      }
+      return;
+    }
+
+    for (const part of parts) {
+      appendChunk({ ...chunk, text: part });
+    }
+  };
+
+  for (const chunk of chunks) {
+    appendChunk(chunk);
   }
 
-  pushPage();
+  pushCurrent();
+  return pages;
+}
+
+function createCarouselPages(sourceText: string, ratioKey: TextImageRatioKey): TextImagePage[] {
+  const blocks = parseArticle(sourceText, { mode: "knowledge" });
+  const titleBlock = blocks.find((block) => block.type === "title");
+  const articleTitle = titleBlock && "text" in titleBlock ? titleBlock.text : "文字轮播图";
+  const chunks = createCarouselChunks(blocks);
+  const pagesDraft = paginateCarouselChunks(articleTitle, chunks, ratioKey);
 
   if (pagesDraft.length === 0) {
-    pagesDraft.push({ title: articleTitle, body: sourceText.replace(articleTitle, "").trim() });
+    pagesDraft.push({ title: articleTitle, body: sourceText.replace(articleTitle, "").trim(), density: "regular" });
   }
 
   const totalPages = pagesDraft.length;
-  return pagesDraft.map((page, index) => ({
-    ...page,
-    pageNumber: index + 1,
-    totalPages,
-  }));
+  const ctx = createMeasureContext(ratioKey);
+  return pagesDraft.map((page, index) => {
+    const pageTitle = index === 0 ? page.title : getPageSummaryTitle(page);
+    const adjustedPage = {
+      ...page,
+      title: pageTitle,
+      body: index === 0 ? page.body : removeFirstMatchingHeading(page.body, pageTitle),
+    };
+    const fittedPage = ctx ? fitPageDensity(ctx, adjustedPage, ratioKey) : adjustedPage;
+    return {
+      ...fittedPage,
+      density: fittedPage.density ?? "regular",
+      pageNumber: index + 1,
+      totalPages,
+    };
+  });
 }
 
 function drawPageIndicator(ctx: CanvasRenderingContext2D, pageNumber: number, totalPages: number, width: number, height: number, color: string) {
@@ -409,6 +631,8 @@ function drawPageIndicator(ctx: CanvasRenderingContext2D, pageNumber: number, to
 function drawTextImage(canvas: HTMLCanvasElement, page: TextImagePage, presetKey: TextImagePresetKey, ratioKey: TextImageRatioKey) {
   const preset = textImagePresets[presetKey];
   const ratio = textImageRatios[ratioKey];
+  const density = page.density ?? "regular";
+  const profile = textImageDensityProfiles[density];
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
 
@@ -418,16 +642,16 @@ function drawTextImage(canvas: HTMLCanvasElement, page: TextImagePage, presetKey
   ctx.fillStyle = preset.background;
   ctx.fillRect(0, 0, ratio.width, ratio.height);
 
-  const left = 84;
+  const left = textImageLayout.left;
   const maxWidth = ratio.width - left * 2;
-  let y = 148;
+  let y = textImageLayout.top;
 
   ctx.fillStyle = preset.rule;
   ctx.fillRect(left, y, maxWidth, 4);
 
   y += 74;
   ctx.textBaseline = "top";
-  ctx.font = font(800, 72);
+  ctx.font = font(800, profile.titleSize);
   const titleLines = page.title
     .split("\n")
     .flatMap((line) => wrapCanvasText(ctx, line, maxWidth))
@@ -436,85 +660,76 @@ function drawTextImage(canvas: HTMLCanvasElement, page: TextImagePage, presetKey
   for (const line of titleLines) {
     const textWidth = Math.min(ctx.measureText(line).width + 16, maxWidth);
     ctx.fillStyle = preset.highlight;
-    ctx.fillRect(left - 4, y + 54, textWidth, 24);
+    ctx.fillRect(left - 4, y + profile.titleHighlightY, textWidth, profile.titleHighlightHeight);
     ctx.fillStyle = preset.title;
     ctx.fillText(line, left, y);
-    y += 88;
+    y += profile.titleLine;
   }
 
   if (page.focus) {
-    y += 42;
-    ctx.font = font(700, 34);
+    y += profile.titleFocusGap;
+    ctx.font = font(700, profile.focusSize);
     const focusLines = wrapCanvasText(ctx, page.focus, maxWidth - 56).slice(0, ratioKey === "portrait916" ? 5 : 4);
-    const focusLineHeight = 54;
-    const focusBoxHeight = focusLines.length * focusLineHeight + 52;
+    const focusBoxHeight = focusLines.length * profile.focusLine + profile.focusPaddingY * 2;
     drawRoundRect(ctx, left, y, maxWidth, focusBoxHeight, 18);
     ctx.fillStyle = preset.highlight;
     ctx.fill();
     ctx.fillStyle = preset.title;
-    ctx.fillRect(left + 24, y + 26, 7, Math.max(42, focusBoxHeight - 52));
+    ctx.fillRect(left + 24, y + profile.focusPaddingY, 7, Math.max(34, focusBoxHeight - profile.focusPaddingY * 2));
 
-    let focusY = y + 26;
+    let focusY = y + profile.focusPaddingY;
     for (const line of focusLines) {
       ctx.fillText(line, left + 52, focusY);
-      focusY += focusLineHeight;
+      focusY += profile.focusLine;
     }
 
-    y += focusBoxHeight + 42;
+    y += focusBoxHeight + profile.focusAfterGap;
   } else {
-    y += 54;
+    y += profile.titleBodyGap;
   }
 
-  const paragraphs = page.body
-    .split(/\n\s*\n/g)
-    .map((item) => item.replace(/\n/g, "").trim())
-    .filter(Boolean);
+  const paragraphs = getBodyParagraphs(page.body);
 
   for (const paragraph of paragraphs) {
-    const focusText = paragraph.replace(/^重点[:：]\s*/, "");
-    const isFocus = paragraph !== focusText || isCarouselKeyText(paragraph);
-    const isHeading =
-      !isFocus &&
-      paragraph.length <= 28 &&
-      (/^([0-9]{1,2}\s|[0-9]{1,2}[、.．]|[一二三四五六七八九十]+[、.．])/.test(paragraph) || !/[。？！.!?，,；;：:]/.test(paragraph));
-    const displayText = isFocus ? focusText : paragraph;
-    ctx.font = isHeading ? font(700, 42) : isFocus ? font(700, 34) : font(500, 36);
-    ctx.fillStyle = isHeading || isFocus ? preset.title : preset.body;
-    const lines = wrapCanvasText(ctx, displayText, isFocus ? maxWidth - 46 : maxWidth);
-    const lineHeight = isHeading ? 60 : isFocus ? 54 : 64;
-    const blockHeight = lines.length * lineHeight + (isFocus ? 32 : 0);
+    const measured = measureParagraphHeight(ctx, paragraph, maxWidth, density);
+    const lineHeight = measured.isHeading ? profile.headingLine : measured.isFocus ? profile.focusLine : profile.bodyLine;
 
-    if (y + blockHeight > ratio.height - 150) break;
+    if (y + measured.height > ratio.height - textImageLayout.bottomPadding) break;
 
-    if (isHeading) {
+    if (measured.isHeading) {
       ctx.fillStyle = preset.title;
-      ctx.fillRect(left, y + 5, 7, 46);
-      ctx.fillText(displayText, left + 24, y);
-      y += lineHeight + 18;
+      ctx.fillRect(left, y + 5, 7, Math.max(46, measured.lines.length * lineHeight - 12));
+      for (const line of measured.lines) {
+        ctx.fillText(line, left + 24, y);
+        y += lineHeight;
+      }
+      y += profile.headingAfterGap;
       continue;
     }
 
-    if (isFocus) {
-      drawRoundRect(ctx, left, y, maxWidth, blockHeight, 16);
+    if (measured.isFocus) {
+      const boxHeight = measured.height - profile.focusAfterGap;
+      drawRoundRect(ctx, left, y, maxWidth, boxHeight, 16);
       ctx.fillStyle = preset.highlight;
       ctx.fill();
       ctx.fillStyle = preset.title;
-      ctx.fillRect(left + 22, y + 22, 6, Math.max(34, blockHeight - 44));
-      y += 16;
-      for (const line of lines) {
+      ctx.fillRect(left + 22, y + 22, 6, Math.max(34, boxHeight - 44));
+      y += profile.focusPaddingY;
+      for (const line of measured.lines) {
         ctx.fillText(line, left + 44, y);
         y += lineHeight;
       }
-      y += 32;
+      y += profile.focusAfterGap;
       continue;
     }
 
-    for (const line of lines) {
+    ctx.fillStyle = preset.body;
+    for (const line of measured.lines) {
       ctx.fillText(line, left, y);
       y += lineHeight;
     }
 
-    y += isHeading ? 34 : 38;
+    y += profile.bodyAfterGap;
   }
 
   drawPageIndicator(ctx, page.pageNumber, page.totalPages, ratio.width, ratio.height, preset.dots);
