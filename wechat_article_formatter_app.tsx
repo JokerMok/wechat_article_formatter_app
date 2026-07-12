@@ -8,7 +8,23 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
-import { ChevronDown, Copy, Code2, FileDown, Image as ImageIcon, RefreshCcw, Upload, Wand2 } from "lucide-react";
+import {
+  Bold,
+  Check,
+  ChevronDown,
+  Copy,
+  Code2,
+  FileDown,
+  Image as ImageIcon,
+  Italic,
+  Pencil,
+  Redo2,
+  RefreshCcw,
+  Underline,
+  Undo2,
+  Upload,
+  Wand2,
+} from "lucide-react";
 import { parseArticle } from "@/lib/article-parser";
 import { copyRichText } from "@/lib/copy-rich-text";
 import type { ArticleParseMode, TemplateKey } from "@/lib/article-types";
@@ -295,16 +311,16 @@ function isCarouselKeyText(text: string) {
   const t = cleanCarouselText(text);
   if (!t) return false;
   return (
-    t.length <= 120 &&
+    t.length <= 90 &&
     (/^(核心判断|关键判断|关键风险|核心问题|关键结论|当前问题|改造目标|解决方案|边界|行动建议|下一步|结果)[:：]/.test(t) ||
-      /不是.+而是|最怕|必须|关键|核心|本质|真正|不要.+而要/.test(t))
+      /不是.+而是|最怕的是|必须先|本质是|真正的.+是|不要.+而要/.test(t))
   );
 }
 
 function blockToCarouselChunk(block: ReturnType<typeof parseArticle>[number]): CarouselChunk | null {
   switch (block.type) {
     case "list":
-      return { role: "list", text: block.items.map((item) => `- ${cleanCarouselParagraph(item)}`).join("\n") };
+      return { role: "list", text: block.items.map((item) => `- ${cleanCarouselParagraph(item)}`).join("\n\n") };
     case "card":
       return { role: "focus", text: cleanCarouselText(`${block.title ? `${block.title}：` : ""}${block.body}`) };
     case "quote":
@@ -318,7 +334,7 @@ function blockToCarouselChunk(block: ReturnType<typeof parseArticle>[number]): C
       return null;
     default:
       if (!("text" in block)) return null;
-      return { role: isCarouselKeyText(block.text) ? "focus" : "body", text: cleanCarouselText(block.text) };
+      return { role: "body", text: cleanCarouselText(block.text) };
   }
 }
 
@@ -360,9 +376,10 @@ function getBodyParagraphs(body: string) {
 
 function getParagraphKind(paragraph: string) {
   const focusText = paragraph.replace(/^重点[:：]\s*/, "");
-  const isFocus = paragraph !== focusText || isCarouselKeyText(paragraph);
+  const isFocus = paragraph !== focusText;
   const isHeading =
     !isFocus &&
+    !/^[-•]\s*/.test(paragraph) &&
     paragraph.length <= 28 &&
     (/^([0-9]{1,2}\s|[0-9]{1,2}[、.．]|[一二三四五六七八九十]+[、.．])/.test(paragraph) || !/[。？！.!?，,；;：:]/.test(paragraph));
 
@@ -374,9 +391,7 @@ function getParagraphKind(paragraph: string) {
 }
 
 function chunkToParagraph(chunk: CarouselChunk) {
-  const text = cleanCarouselText(chunk.text);
-  if (chunk.role === "focus") return `重点：${text}`;
-  return text;
+  return cleanCarouselText(chunk.text);
 }
 
 function appendParagraph(body: string, paragraph: string) {
@@ -409,15 +424,14 @@ function measurePageBodyStart(ctx: CanvasRenderingContext2D, page: TextImagePage
   ctx.font = font(800, profile.titleSize);
   const titleLines = page.title
     .split("\n")
-    .flatMap((line) => wrapCanvasText(ctx, line, maxWidth))
-    .slice(0, page.focus ? 3 : 4);
+    .flatMap((line) => wrapCanvasText(ctx, line, maxWidth));
 
   y += titleLines.length * profile.titleLine;
 
   if (page.focus) {
     y += profile.titleFocusGap;
     ctx.font = font(700, profile.focusSize);
-    const focusLines = wrapCanvasText(ctx, page.focus, maxWidth - 56).slice(0, ratioKey === "portrait916" ? 5 : 4);
+    const focusLines = wrapCanvasText(ctx, page.focus, maxWidth - 56);
     y += focusLines.length * profile.focusLine + profile.focusPaddingY * 2 + profile.focusAfterGap;
   } else {
     y += profile.titleBodyGap;
@@ -468,17 +482,17 @@ function splitParagraphForCanvas(paragraph: string, ratioKey: TextImageRatioKey)
 }
 
 function createPageFromChunks(title: string, chunks: CarouselChunk[]): TextImagePageDraft {
-  const hasContentAfter = (index: number) =>
-    chunks.some((otherChunk, otherIndex) => otherIndex !== index && (otherChunk.role === "body" || otherChunk.role === "list" || otherChunk.role === "focus"));
-  const explicitFocusIndex = chunks.findIndex((chunk, index) => chunk.role === "focus" && index <= 1 && hasContentAfter(index));
-  const fallbackFocusIndex = chunks.findIndex(
-    (chunk, index) =>
-      chunk.role === "body" &&
-      chunk.text.length <= 120 &&
-      index <= 1 &&
-      hasContentAfter(index)
-  );
-  const focusIndex = explicitFocusIndex >= 0 ? explicitFocusIndex : fallbackFocusIndex;
+  const normalizedTitle = cleanCarouselParagraph(title).replace(/[…。！？!?：:，,；;\s]/g, "");
+  const duplicatesTitle = (text: string) => {
+    const normalizedText = cleanCarouselParagraph(text).replace(/[…。！？!?：:，,；;\s]/g, "");
+    return normalizedText.startsWith(normalizedTitle) || normalizedTitle.startsWith(normalizedText);
+  };
+  const explicitFocusIndex = chunks.findIndex((chunk) => chunk.role === "focus" && !duplicatesTitle(chunk.text));
+  const keyTextIndex = chunks.findIndex((chunk) => {
+    if (chunk.role !== "body" || !isCarouselKeyText(chunk.text)) return false;
+    return !duplicatesTitle(chunk.text);
+  });
+  const focusIndex = explicitFocusIndex >= 0 ? explicitFocusIndex : keyTextIndex;
   const focus = focusIndex >= 0 ? chunks[focusIndex].text : undefined;
   const body = chunks
     .filter((_, index) => index !== focusIndex)
@@ -488,12 +502,60 @@ function createPageFromChunks(title: string, chunks: CarouselChunk[]): TextImage
   return { title, focus, body };
 }
 
+function deriveCarouselTitle(text: string, keyText?: string) {
+  const firstLine = text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => cleanCarouselText(line))
+    .find(Boolean);
+
+  if (!firstLine) return "文章重点整理";
+  if (/^(上一篇|上一次|前面|这件事|最近)/.test(firstLine) && keyText) return derivePageTitle(keyText);
+  const clause = firstLine.split(/[：:。！？!?]/)[0]?.trim() || firstLine;
+  if (clause.length <= 32) return clause;
+  return `${clause.slice(0, 30)}…`;
+}
+
+function derivePageTitle(text: string) {
+  const cleaned = cleanCarouselParagraph(text).replace(/^(所以|但是|同时|然后|后来|更现实的是|这件事做完以后)[，,：:]?/, "");
+  const colonParts = cleaned.split(/[：:]/);
+  const titleSource = colonParts.length > 1 && /问题|发现|想法|判断|结论|体会/.test(colonParts[0]) ? colonParts.slice(1).join("：") : cleaned;
+  const contrast = titleSource.match(/^(.{2,18}?)不是.+而是(.+?)[。！？!?]?$/);
+  if (contrast) {
+    const subject = contrast[1].trim();
+    const conclusion = contrast[2].trim();
+    const summary = /件事$/.test(subject) ? `${subject}应该先${conclusion}` : `${subject}真正的问题是${conclusion}`;
+    return summary.length <= 36 ? summary : `${summary.slice(0, 34)}…`;
+  }
+  const clause = titleSource.split(/[。！？!?；;，,]/)[0]?.trim() || titleSource;
+  if (clause.length <= 24) return clause;
+  return `${clause.slice(0, 22)}…`;
+}
+
+function getExplicitCarouselTitle(sourceText: string, blocks: ReturnType<typeof parseArticle>) {
+  const firstRawLine = sourceText
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (!firstRawLine) return undefined;
+
+  const markdownTitle = firstRawLine.match(/^#\s+(.+)$/);
+  if (markdownTitle) return cleanCarouselText(markdownTitle[1]);
+
+  const titleBlock = blocks.find((block) => block.type === "title");
+  if (!titleBlock || !("text" in titleBlock)) return undefined;
+  const cleaned = cleanCarouselText(titleBlock.text);
+  const sentenceMarks = cleaned.match(/[。！？!?；;]/g)?.length ?? 0;
+  return sentenceMarks === 0 && cleaned.length <= 64 ? cleaned : undefined;
+}
+
 function getPageSummaryTitle(page: TextImagePageDraft) {
   const firstHeading = getBodyParagraphs(page.body).find((paragraph) => getParagraphKind(paragraph).isHeading);
   if (firstHeading) return firstHeading;
-  if (page.focus) return page.focus;
   const firstParagraph = getBodyParagraphs(page.body)[0];
-  if (firstParagraph) return firstParagraph.length > 28 ? `${firstParagraph.slice(0, 28)}...` : firstParagraph;
+  if (firstParagraph) return derivePageTitle(firstParagraph);
+  if (page.focus) return derivePageTitle(page.focus);
   return page.title;
 }
 
@@ -504,10 +566,14 @@ function removeFirstMatchingHeading(body: string, title: string) {
   return paragraphs.filter((_, paragraphIndex) => paragraphIndex !== index).join("\n\n");
 }
 
-function createCarouselChunks(blocks: ReturnType<typeof parseArticle>) {
+function createCarouselChunks(blocks: ReturnType<typeof parseArticle>, includeParsedTitleAsBody = false) {
   const chunks: CarouselChunk[] = [];
   for (const block of blocks) {
-    if (block.type === "title" || block.type === "image") continue;
+    if (block.type === "title") {
+      if (includeParsedTitleAsBody) chunks.push({ role: "body", text: cleanCarouselText(block.text) });
+      continue;
+    }
+    if (block.type === "image") continue;
     if (block.type === "section") {
       const text = cleanCarouselText(block.text);
       if (text) chunks.push({ role: "heading", text });
@@ -537,7 +603,7 @@ function paginateCarouselChunks(title: string, chunks: CarouselChunk[], ratioKey
 
   const appendChunk = (chunk: CarouselChunk) => {
     const candidateChunks = [...currentChunks, chunk];
-    const candidatePage = fitPageDensity(ctx, createPageFromChunks(title, candidateChunks), ratioKey);
+    const candidatePage = { ...createPageFromChunks(title, candidateChunks), density: "compact" as const };
     if (pageFitsCanvas(ctx, candidatePage, ratioKey)) {
       currentChunks = candidateChunks;
       return;
@@ -579,9 +645,14 @@ function paginateCarouselChunks(title: string, chunks: CarouselChunk[], ratioKey
 
 function createCarouselPages(sourceText: string, ratioKey: TextImageRatioKey): TextImagePage[] {
   const blocks = parseArticle(sourceText, { mode: "knowledge" });
-  const titleBlock = blocks.find((block) => block.type === "title");
-  const articleTitle = titleBlock && "text" in titleBlock ? titleBlock.text : "文字轮播图";
-  const chunks = createCarouselChunks(blocks);
+  const explicitTitle = getExplicitCarouselTitle(sourceText, blocks);
+  const chunks = createCarouselChunks(blocks, !explicitTitle);
+  const keyText = chunks.find(
+    (chunk) =>
+      (chunk.role === "focus" || (chunk.role === "body" && isCarouselKeyText(chunk.text))) &&
+      !/^(上一篇|上一次|前面|最近)/.test(cleanCarouselParagraph(chunk.text)),
+  )?.text;
+  const articleTitle = explicitTitle ?? deriveCarouselTitle(sourceText, keyText);
   const pagesDraft = paginateCarouselChunks(articleTitle, chunks, ratioKey);
 
   if (pagesDraft.length === 0) {
@@ -607,10 +678,18 @@ function createCarouselPages(sourceText: string, ratioKey: TextImageRatioKey): T
   });
 }
 
-function drawPageIndicator(ctx: CanvasRenderingContext2D, pageNumber: number, totalPages: number, width: number, height: number, color: string) {
+function drawPageIndicator(
+  ctx: CanvasRenderingContext2D,
+  pageNumber: number,
+  totalPages: number,
+  width: number,
+  height: number,
+  activeColor: string,
+  inactiveColor: string,
+) {
   if (totalPages > 12) {
     ctx.font = font(600, 28);
-    ctx.fillStyle = color;
+    ctx.fillStyle = activeColor;
     ctx.textAlign = "center";
     ctx.fillText(`${String(pageNumber).padStart(2, "0")} / ${String(totalPages).padStart(2, "0")}`, width / 2, height - 72);
     ctx.textAlign = "left";
@@ -622,7 +701,7 @@ function drawPageIndicator(ctx: CanvasRenderingContext2D, pageNumber: number, to
   const dotY = height - 62;
   for (let index = 0; index < totalPages; index += 1) {
     ctx.beginPath();
-    ctx.fillStyle = index + 1 === pageNumber ? "#FFFFFF" : color;
+    ctx.fillStyle = index + 1 === pageNumber ? activeColor : inactiveColor;
     ctx.arc(startX + index * dotGap, dotY, 7, 0, Math.PI * 2);
     ctx.fill();
   }
@@ -654,8 +733,7 @@ function drawTextImage(canvas: HTMLCanvasElement, page: TextImagePage, presetKey
   ctx.font = font(800, profile.titleSize);
   const titleLines = page.title
     .split("\n")
-    .flatMap((line) => wrapCanvasText(ctx, line, maxWidth))
-    .slice(0, page.focus ? 3 : 4);
+    .flatMap((line) => wrapCanvasText(ctx, line, maxWidth));
 
   for (const line of titleLines) {
     const textWidth = Math.min(ctx.measureText(line).width + 16, maxWidth);
@@ -669,7 +747,7 @@ function drawTextImage(canvas: HTMLCanvasElement, page: TextImagePage, presetKey
   if (page.focus) {
     y += profile.titleFocusGap;
     ctx.font = font(700, profile.focusSize);
-    const focusLines = wrapCanvasText(ctx, page.focus, maxWidth - 56).slice(0, ratioKey === "portrait916" ? 5 : 4);
+    const focusLines = wrapCanvasText(ctx, page.focus, maxWidth - 56);
     const focusBoxHeight = focusLines.length * profile.focusLine + profile.focusPaddingY * 2;
     drawRoundRect(ctx, left, y, maxWidth, focusBoxHeight, 18);
     ctx.fillStyle = preset.highlight;
@@ -732,7 +810,7 @@ function drawTextImage(canvas: HTMLCanvasElement, page: TextImagePage, presetKey
     y += profile.bodyAfterGap;
   }
 
-  drawPageIndicator(ctx, page.pageNumber, page.totalPages, ratio.width, ratio.height, preset.dots);
+  drawPageIndicator(ctx, page.pageNumber, page.totalPages, ratio.width, ratio.height, preset.title, preset.dots);
 }
 
 function canvasToBlob(canvas: HTMLCanvasElement) {
@@ -943,8 +1021,24 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
   );
 }
 
-function EditablePreview({ html, onHtmlChange }: { html: string; onHtmlChange: (html: string) => void }) {
+type EditablePreviewProps = {
+  html: string;
+  hasChanges: boolean;
+  onHtmlChange: (html: string) => void;
+  onReset: () => void;
+};
+
+const editorCommands = [
+  { command: "bold", label: "加粗", icon: Bold },
+  { command: "italic", label: "斜体", icon: Italic },
+  { command: "underline", label: "下划线", icon: Underline },
+  { command: "undo", label: "撤销", icon: Undo2 },
+  { command: "redo", label: "重做", icon: Redo2 },
+] as const;
+
+function EditablePreview({ html, hasChanges, onHtmlChange, onReset }: EditablePreviewProps) {
   const editableRef = useRef<HTMLDivElement | null>(null);
+  const [isEditing, setIsEditing] = useState(true);
 
   useEffect(() => {
     const element = editableRef.current;
@@ -958,23 +1052,96 @@ function EditablePreview({ html, onHtmlChange }: { html: string; onHtmlChange: (
     onHtmlChange(editableRef.current?.innerHTML ?? html);
   }, [html, onHtmlChange]);
 
+  const runCommand = useCallback(
+    (command: (typeof editorCommands)[number]["command"]) => {
+      const editor = editableRef.current;
+      if (!editor) return;
+      editor.focus();
+      document.execCommand(command, false);
+      syncHtml();
+    },
+    [syncHtml],
+  );
+
+  const handlePaste = useCallback(
+    (event: React.ClipboardEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      document.execCommand("insertText", false, event.clipboardData.getData("text/plain"));
+      syncHtml();
+    },
+    [syncHtml],
+  );
+
   return (
     <div className="min-h-[620px] rounded-2xl border border-slate-200 bg-white p-5 md:p-7">
-      <div className="mb-4 flex items-center justify-between rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-500">
-        <span>可直接点击正文修改；复制和导出会使用修改后的内容。</span>
-        <span className="rounded-full bg-white px-2 py-1 font-medium text-slate-700">编辑中</span>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
+        <div className="flex flex-wrap items-center gap-1">
+          <Button
+            type="button"
+            variant={isEditing ? "default" : "outline"}
+            size="sm"
+            className="h-8 rounded-lg px-3"
+            onClick={() => {
+              setIsEditing((current) => !current);
+              requestAnimationFrame(() => editableRef.current?.focus());
+            }}
+          >
+            {isEditing ? <Check className="mr-1.5 h-4 w-4" /> : <Pencil className="mr-1.5 h-4 w-4" />}
+            {isEditing ? "完成编辑" : "编辑正文"}
+          </Button>
+
+          {isEditing && (
+            <>
+              <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
+              {editorCommands.map(({ command, label, icon: Icon }) => (
+                <Button
+                  key={command}
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 rounded-lg"
+                  title={label}
+                  aria-label={label}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => runCommand(command)}
+                >
+                  <Icon className="h-4 w-4" />
+                </Button>
+              ))}
+            </>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 text-xs text-slate-500">
+          <span>{isEditing ? "点击正文即可修改，支持选中文字后设置格式" : hasChanges ? "修改已保留" : "预览模式"}</span>
+          {hasChanges && (
+            <Button type="button" variant="ghost" size="sm" className="h-8 rounded-lg px-2 text-xs" onClick={onReset}>
+              <RefreshCcw className="mr-1.5 h-3.5 w-3.5" />
+              恢复生成版本
+            </Button>
+          )}
+        </div>
       </div>
       <div
         ref={editableRef}
-        contentEditable="true"
+        contentEditable={isEditing}
         suppressContentEditableWarning
         role="textbox"
         aria-multiline="true"
+        aria-label="文章效果编辑区"
         tabIndex={0}
         spellCheck={false}
         onInput={syncHtml}
         onBlur={syncHtml}
-        className="min-h-[560px] cursor-text rounded-xl outline-none focus:ring-2 focus:ring-slate-900/10"
+        onPaste={handlePaste}
+        onClick={(event) => {
+          if (isEditing && event.target instanceof HTMLAnchorElement) event.preventDefault();
+        }}
+        className={`min-h-[560px] rounded-xl outline-none transition ${
+          isEditing
+            ? "cursor-text border border-dashed border-slate-300 bg-white p-3 focus:border-slate-500 focus:ring-2 focus:ring-slate-900/10"
+            : "cursor-default border border-transparent p-3"
+        }`}
       />
     </div>
   );
@@ -997,6 +1164,10 @@ export default function WechatArticleFormatterApp() {
 
   const handlePreviewHtmlChange = useCallback((nextHtml: string) => {
     setEditableHtmlState({ sourceHtml: html, outputHtml: nextHtml });
+  }, [html]);
+
+  const handlePreviewReset = useCallback(() => {
+    setEditableHtmlState({ sourceHtml: html, outputHtml: html });
   }, [html]);
 
   const handleTemplateChange = (value: string) => {
@@ -1231,7 +1402,12 @@ export default function WechatArticleFormatterApp() {
                     </TabsList>
 
                     <TabsContent value="preview">
-                      <EditablePreview html={html} onHtmlChange={handlePreviewHtmlChange} />
+                      <EditablePreview
+                        html={editableHtml}
+                        hasChanges={editableHtml !== html}
+                        onHtmlChange={handlePreviewHtmlChange}
+                        onReset={handlePreviewReset}
+                      />
                     </TabsContent>
 
                     <TabsContent value="input" className="space-y-3">
