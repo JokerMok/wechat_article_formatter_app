@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
-import { Copy, Code2, FileDown, Image as ImageIcon, RefreshCcw, Upload, Wand2 } from "lucide-react";
+import { ChevronDown, Copy, Code2, FileDown, Image as ImageIcon, RefreshCcw, Upload, Wand2 } from "lucide-react";
 import { parseArticle } from "@/lib/article-parser";
 import { copyRichText } from "@/lib/copy-rich-text";
 import type { ArticleParseMode, TemplateKey } from "@/lib/article-types";
@@ -943,10 +943,48 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
   );
 }
 
+function EditablePreview({ html, onHtmlChange }: { html: string; onHtmlChange: (html: string) => void }) {
+  const editableRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const element = editableRef.current;
+    if (!element) return;
+    if (element.innerHTML !== html) {
+      element.innerHTML = html;
+    }
+  }, [html]);
+
+  const syncHtml = useCallback(() => {
+    onHtmlChange(editableRef.current?.innerHTML ?? html);
+  }, [html, onHtmlChange]);
+
+  return (
+    <div className="min-h-[620px] rounded-2xl border border-slate-200 bg-white p-5 md:p-7">
+      <div className="mb-4 flex items-center justify-between rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+        <span>可直接点击正文修改；复制和导出会使用修改后的内容。</span>
+        <span className="rounded-full bg-white px-2 py-1 font-medium text-slate-700">编辑中</span>
+      </div>
+      <div
+        ref={editableRef}
+        contentEditable="true"
+        suppressContentEditableWarning
+        role="textbox"
+        aria-multiline="true"
+        tabIndex={0}
+        spellCheck={false}
+        onInput={syncHtml}
+        onBlur={syncHtml}
+        className="min-h-[560px] cursor-text rounded-xl outline-none focus:ring-2 focus:ring-slate-900/10"
+      />
+    </div>
+  );
+}
+
 export default function WechatArticleFormatterApp() {
   const [input, setInput] = useState(defaultArticle);
   const [templateKey, setTemplateKey] = useState<TemplateKey>("zhenyiKnowledgeMinimal");
   const [parseMode, setParseMode] = useState<ArticleParseMode>("narrative");
+  const [stylePanelOpen, setStylePanelOpen] = useState(true);
   const [copiedRich, setCopiedRich] = useState(false);
   const [copiedHtml, setCopiedHtml] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -954,6 +992,12 @@ export default function WechatArticleFormatterApp() {
   const template = styleTemplates[templateKey];
   const blocks = useMemo(() => parseArticle(input, { mode: parseMode }), [input, parseMode]);
   const html = useMemo(() => renderWechatHtml(blocks, template), [blocks, template]);
+  const [editableHtmlState, setEditableHtmlState] = useState({ sourceHtml: html, outputHtml: html });
+  const editableHtml = editableHtmlState.sourceHtml === html ? editableHtmlState.outputHtml : html;
+
+  const handlePreviewHtmlChange = useCallback((nextHtml: string) => {
+    setEditableHtmlState({ sourceHtml: html, outputHtml: nextHtml });
+  }, [html]);
 
   const handleTemplateChange = (value: string) => {
     const nextTemplateKey = value as TemplateKey;
@@ -963,7 +1007,7 @@ export default function WechatArticleFormatterApp() {
 
   const handleCopyRichText = async () => {
     try {
-      await copyRichText(html);
+      await copyRichText(editableHtml);
       setCopiedRich(true);
       setTimeout(() => setCopiedRich(false), 1500);
     } catch (error) {
@@ -973,7 +1017,7 @@ export default function WechatArticleFormatterApp() {
 
   const handleCopyHtml = async () => {
     try {
-      await navigator.clipboard.writeText(html);
+      await navigator.clipboard.writeText(editableHtml);
       setCopiedHtml(true);
       setTimeout(() => setCopiedHtml(false), 1500);
     } catch (error) {
@@ -990,7 +1034,7 @@ export default function WechatArticleFormatterApp() {
   };
 
   const handleExportHtml = () => {
-    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const blob = new Blob([editableHtml], { type: "text/html;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -1036,29 +1080,99 @@ export default function WechatArticleFormatterApp() {
           </TabsList>
 
           <TabsContent value="formatter" className="space-y-6">
+            <Card className="rounded-2xl shadow-sm">
+              <CardHeader className="gap-4">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <CardTitle className="text-lg">风格选择</CardTitle>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                      <span>当前：{template.name}</span>
+                      <span>适合：{template.audience}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="hidden gap-2 md:flex">
+                      {template.palette.map((color) => (
+                        <span key={color} className="h-4 w-10 rounded-full border border-slate-200" style={{ backgroundColor: color }} />
+                      ))}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="rounded-xl"
+                      aria-expanded={stylePanelOpen}
+                      onClick={() => setStylePanelOpen((open) => !open)}
+                    >
+                      <ChevronDown className={`mr-2 h-4 w-4 transition-transform ${stylePanelOpen ? "rotate-180" : ""}`} />
+                      {stylePanelOpen ? "收起" : "展开"}
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              {stylePanelOpen && (
+                <CardContent className="space-y-5">
+                  <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
+                    <div className="space-y-2">
+                      <Label>模板风格</Label>
+                      <Select value={templateKey} onValueChange={handleTemplateChange}>
+                        <SelectTrigger className="rounded-xl">
+                          <span>{template.name}</span>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {templateList.map((item) => (
+                            <SelectItem key={item.key} value={item.key}>
+                              {item.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs leading-6 text-slate-500">{template.description}</p>
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                        <div>
+                          <div className="text-sm font-semibold text-slate-900">{template.name}</div>
+                          <div className="mt-1 text-xs leading-6 text-slate-500">适合：{template.audience}</div>
+                        </div>
+                        <div className="flex gap-2">
+                          {template.palette.map((color) => (
+                            <span key={color} className="h-5 w-12 rounded-full border border-slate-200" style={{ backgroundColor: color }} />
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    {templateList.map((item) => (
+                      <button
+                        key={item.key}
+                        onClick={() => handleTemplateChange(item.key)}
+                        className={`rounded-2xl border p-4 text-left transition ${
+                          templateKey === item.key ? "border-slate-900 bg-white shadow-sm" : "border-slate-200 bg-slate-50 hover:bg-white"
+                        }`}
+                      >
+                        <div className="text-sm font-semibold text-slate-900">{item.name}</div>
+                        <div className="mt-2 line-clamp-2 text-xs leading-6 text-slate-500">{item.description}</div>
+                        <div className="mt-3 flex gap-2">
+                          {item.palette.map((color) => (
+                            <span key={color} className="h-4 w-10 rounded-full border border-slate-200" style={{ backgroundColor: color }} />
+                          ))}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </CardContent>
+              )}
+            </Card>
+
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
               <Card className="rounded-2xl shadow-sm xl:col-span-1">
                 <CardHeader>
                   <CardTitle className="text-lg">排版设置</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-5">
-                  <div className="space-y-2">
-                    <Label>模板风格</Label>
-                    <Select value={templateKey} onValueChange={handleTemplateChange}>
-                      <SelectTrigger className="rounded-xl">
-                        <span>{template.name}</span>
-                      </SelectTrigger>
-                      <SelectContent>
-                        {templateList.map((item) => (
-                          <SelectItem key={item.key} value={item.key}>
-                            {item.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs leading-6 text-slate-500">{template.description}</p>
-                  </div>
-
                   <div className="space-y-2">
                     <Label>内容分层</Label>
                     <Select value={parseMode} onValueChange={(value) => setParseMode(value as ArticleParseMode)}>
@@ -1074,16 +1188,6 @@ export default function WechatArticleFormatterApp() {
                       </SelectContent>
                     </Select>
                     <p className="text-xs leading-6 text-slate-500">{parseModeOptions[parseMode].description}</p>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="text-sm font-semibold text-slate-900">{template.name}</div>
-                    <div className="mt-3 flex gap-2">
-                      {template.palette.map((color) => (
-                        <span key={color} className="h-5 w-12 rounded-full border border-slate-200" style={{ backgroundColor: color }} />
-                      ))}
-                    </div>
-                    <div className="mt-3 text-xs leading-6 text-slate-500">适合：{template.audience}</div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
@@ -1127,9 +1231,7 @@ export default function WechatArticleFormatterApp() {
                     </TabsList>
 
                     <TabsContent value="preview">
-                      <div className="min-h-[620px] rounded-2xl border bg-white p-5 md:p-7">
-                        <div dangerouslySetInnerHTML={{ __html: html }} />
-                      </div>
+                      <EditablePreview html={html} onHtmlChange={handlePreviewHtmlChange} />
                     </TabsContent>
 
                     <TabsContent value="input" className="space-y-3">
@@ -1173,31 +1275,11 @@ export default function WechatArticleFormatterApp() {
                     </TabsContent>
 
                     <TabsContent value="html">
-                      <Textarea readOnly value={html} className="min-h-[620px] rounded-2xl font-mono text-xs" />
+                      <Textarea readOnly value={editableHtml} className="min-h-[620px] rounded-2xl font-mono text-xs" />
                     </TabsContent>
                   </Tabs>
                 </CardContent>
               </Card>
-            </div>
-
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {templateList.map((item) => (
-                <button
-                  key={item.key}
-                  onClick={() => handleTemplateChange(item.key)}
-                  className={`rounded-2xl border p-4 text-left transition ${
-                    templateKey === item.key ? "border-slate-900 bg-white shadow-sm" : "border-slate-200 bg-slate-50 hover:bg-white"
-                  }`}
-                >
-                  <div className="text-sm font-semibold text-slate-900">{item.name}</div>
-                  <div className="mt-2 text-xs leading-6 text-slate-500">{item.description}</div>
-                  <div className="mt-3 flex gap-2">
-                    {item.palette.map((color) => (
-                      <span key={color} className="h-4 w-10 rounded-full border border-slate-200" style={{ backgroundColor: color }} />
-                    ))}
-                  </div>
-                </button>
-              ))}
             </div>
           </TabsContent>
 

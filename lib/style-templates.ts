@@ -5,12 +5,17 @@ const baoyuFont = "-apple-system-font, BlinkMacSystemFont, Helvetica Neue, PingF
 const colorPresets = {
   blue: "#0F4C81",
   green: "#009874",
+  vermilion: "#FA5151",
+  yellow: "#FECE00",
   purple: "#92617E",
   rose: "#B76E79",
+  olive: "#556B2F",
   sky: "#55C9EA",
   orange: "#D97757",
   red: "#A93226",
   black: "#333333",
+  gray: "#A9A9A9",
+  pink: "#FFB7C5",
 };
 
 type BaoyuTheme = "default" | "grace" | "simple" | "modern";
@@ -48,6 +53,9 @@ function createBaoyuTemplate(options: {
   const muted = "#666666";
   const softBg = tint(primary, options.theme === "modern" ? 0.9 : 0.92);
   const borderSoft = tint(primary, options.theme === "modern" ? 0.72 : 0.78);
+  const titleSize =
+    options.theme === "modern" ? 28 : options.theme === "default" ? Math.round(fontSize * 1.2) : Math.round(fontSize * 1.4);
+  const letterSpacing = options.theme === "modern" ? "0" : "0.1em";
 
   const shared = {
     container: {
@@ -55,11 +63,12 @@ function createBaoyuTemplate(options: {
       "box-sizing": "border-box",
       "font-size": `${fontSize}px`,
       "line-height": options.theme === "modern" ? "2" : "1.9",
-      "letter-spacing": options.theme === "modern" ? "0" : "0.06em",
+      "letter-spacing": letterSpacing,
       color: foreground,
       "background-color": options.containerBg ?? "transparent",
-      padding: options.theme === "modern" ? "18px 14px" : "0",
-      "border-radius": options.theme === "modern" ? "24px" : "0",
+      border: options.theme === "modern" ? "1px solid rgba(255,255,255,0.01)" : "none",
+      padding: options.theme === "modern" ? "12px" : "0",
+      "border-radius": options.theme === "modern" ? "25px" : "0",
     },
     body: { fontSize, lineHeight: options.theme === "modern" ? 2 : 1.9, color: foreground },
   };
@@ -69,17 +78,17 @@ function createBaoyuTemplate(options: {
   blocks.title = {
     display: "table",
     margin: options.theme === "modern" ? "20px auto 26px" : "32px auto 22px",
-    padding: options.theme === "modern" ? "6px 22px" : options.theme === "simple" ? "8px 10px" : "10px 22px",
+    padding: options.theme === "modern" ? "6px 22px" : options.theme === "default" ? "0 16px" : "8px 16px",
     color: options.theme === "modern" ? "#FFFFFF" : foreground,
     "background-color": options.theme === "modern" ? primary : "transparent",
     "border-bottom": options.theme === "default" || options.theme === "grace" ? `2px solid ${primary}` : "none",
-    "border-radius": options.theme === "modern" ? "999px" : options.theme === "simple" ? "8px 24px 8px 24px" : "0",
-    "font-size": `${options.theme === "modern" ? 28 : Math.round(fontSize * 1.4)}px`,
+    "border-radius": options.theme === "modern" ? "15px" : options.theme === "simple" ? "8px 24px 8px 24px" : "0",
+    "font-size": `${titleSize}px`,
     "font-weight": 800,
     "line-height": "1.45",
     "text-align": "center",
     "letter-spacing": "0.02em",
-    "text-shadow": options.theme === "grace" || options.theme === "simple" ? "1px 1px 3px rgba(0,0,0,0.08)" : "none",
+    "text-shadow": options.theme === "grace" ? "2px 2px 4px rgba(0,0,0,0.1)" : options.theme === "simple" ? "1px 1px 3px rgba(0,0,0,0.05)" : "none",
   };
 
   blocks.section = sectionStyle(options.theme, primary, accent, fontSize);
@@ -90,9 +99,9 @@ function createBaoyuTemplate(options: {
     "font-size": `${options.theme === "modern" ? 15 : fontSize}px`,
     "font-weight": 400,
     "line-height": options.theme === "modern" ? "2" : "1.9",
-    "letter-spacing": options.theme === "modern" ? "0" : "0.06em",
+    "letter-spacing": letterSpacing,
     "text-align": "justify",
-    "word-break": "break-word",
+    "word-break": options.theme === "modern" ? "break-all" : "break-word",
   };
   blocks.lead = {
     margin: "22px 8px",
@@ -103,20 +112,23 @@ function createBaoyuTemplate(options: {
     color: foreground,
     "font-size": `${fontSize}px`,
     "line-height": options.theme === "modern" ? "2" : "1.9",
-    "letter-spacing": options.theme === "modern" ? "0" : "0.06em",
+    "letter-spacing": letterSpacing,
   };
   blocks.quote = {
     margin: options.theme === "modern" ? "12px 0" : "18px 8px",
-    padding: options.theme === "modern" ? "15px 16px" : "16px",
+    padding: options.theme === "modern" ? "15px 16px" : options.theme === "grace" || options.theme === "simple" ? "16px 16px 16px 32px" : "16px",
     "background-color": options.theme === "modern" ? "rgba(255,255,255,0.6)" : "#F7F7F7",
     "border-left": `${options.theme === "modern" ? 7 : 4}px solid ${options.theme === "modern" ? accent : primary}`,
+    "border-top": options.theme === "simple" ? "1px solid rgba(0,0,0,0.04)" : "none",
+    "border-right": options.theme === "simple" ? "1px solid rgba(0,0,0,0.04)" : "none",
+    "border-bottom": options.theme === "simple" ? "1px solid rgba(0,0,0,0.04)" : "none",
     "border-radius": options.theme === "grace" || options.theme === "modern" ? "8px" : "6px",
-    color: options.theme === "grace" || options.theme === "simple" ? "rgba(0,0,0,0.68)" : foreground,
-    "box-shadow": options.theme === "grace" ? "0 8px 18px rgba(0,0,0,0.06)" : options.theme === "modern" ? "0 6px 16px rgba(0,0,0,0.05)" : "none",
+    color: options.theme === "grace" || options.theme === "simple" ? "rgba(0,0,0,0.6)" : foreground,
+    "box-shadow": options.theme === "grace" ? "0 4px 6px rgba(0,0,0,0.05)" : options.theme === "modern" ? "0 6px 16px rgba(0,0,0,0.05)" : "none",
     "font-style": options.theme === "grace" || options.theme === "simple" ? "italic" : "normal",
     "font-size": `${fontSize}px`,
     "line-height": options.theme === "modern" ? "2" : "1.9",
-    "letter-spacing": options.theme === "modern" ? "0" : "0.06em",
+    "letter-spacing": letterSpacing,
   };
   blocks.golden = {
     display: "table",
@@ -161,6 +173,7 @@ function createBaoyuTemplate(options: {
     "background-color": options.theme === "modern" ? "rgba(255,255,255,0.72)" : "#FAFAFA",
     border: `1px solid ${borderSoft}`,
     "border-radius": options.theme === "modern" ? "18px" : options.theme === "simple" ? "8px 24px 8px 24px" : "8px",
+    "box-shadow": options.theme === "grace" ? "0 4px 8px rgba(0,0,0,0.1)" : "none",
     "font-size": "14px",
     "line-height": "1.8",
     "text-align": "center",
@@ -556,6 +569,14 @@ export const styleTemplates: Record<TemplateKey, StyleTemplate> = {
     description: "default + green：经典结构配绿色主色，适合知识和工具类文章。",
     audience: "教程、工具、知识普及",
   }),
+  baoyuDefaultVermilion: createBaoyuTemplate({
+    key: "baoyuDefaultVermilion",
+    name: "Baoyu 经典朱红",
+    theme: "default",
+    primary: colorPresets.vermilion,
+    description: "default + vermilion：经典公众号结构配高识别朱红，适合通知和活动稿。",
+    audience: "活动通知、产品发布、转化型短文",
+  }),
   baoyuGracePurple: createBaoyuTemplate({
     key: "baoyuGracePurple",
     name: "Baoyu 优雅紫",
@@ -572,6 +593,15 @@ export const styleTemplates: Record<TemplateKey, StyleTemplate> = {
     description: "grace + rose：更柔和的优雅模板，适合人物、品牌和情绪内容。",
     audience: "人物稿、品牌稿、生活方式",
   }),
+  baoyuGracePink: createBaoyuTemplate({
+    key: "baoyuGracePink",
+    name: "Baoyu 优雅樱粉",
+    theme: "grace",
+    primary: colorPresets.pink,
+    accent: "#B76E79",
+    description: "grace + pink：柔和阴影和樱粉主色，适合轻情绪和品牌故事。",
+    audience: "品牌故事、生活方式、人物随笔",
+  }),
   baoyuSimpleGreen: createBaoyuTemplate({
     key: "baoyuSimpleGreen",
     name: "Baoyu 简洁绿",
@@ -587,6 +617,14 @@ export const styleTemplates: Record<TemplateKey, StyleTemplate> = {
     primary: colorPresets.sky,
     description: "simple + sky：清爽轻量，适合产品更新、清单和说明文。",
     audience: "产品说明、清单、轻教程",
+  }),
+  baoyuSimpleOlive: createBaoyuTemplate({
+    key: "baoyuSimpleOlive",
+    name: "Baoyu 简洁橄榄",
+    theme: "simple",
+    primary: colorPresets.olive,
+    description: "simple + olive：低饱和、耐读的知识卡片风格，适合长文拆解。",
+    audience: "深度笔记、知识拆解、方法论文章",
   }),
   baoyuModernOrange: createBaoyuTemplate({
     key: "baoyuModernOrange",
