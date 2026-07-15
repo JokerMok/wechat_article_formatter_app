@@ -141,11 +141,32 @@ type TextImagePresetKey = keyof typeof textImagePresets;
 type TextImageRatioKey = keyof typeof textImageRatios;
 type TextImageDensity = "regular" | "compact" | "dense";
 
+type TextImageLayoutSettings = {
+  lineSpacing: number;
+  paragraphSpacing: number;
+  titleSpacing: number;
+  verticalPadding: number;
+};
+
+const textImageDensityOptions: Record<TextImageDensity, string> = {
+  regular: "舒展",
+  compact: "紧凑",
+  dense: "密集",
+};
+
+const defaultTextImageLayoutSettings: TextImageLayoutSettings = {
+  lineSpacing: 100,
+  paragraphSpacing: 100,
+  titleSpacing: 100,
+  verticalPadding: 100,
+};
+
 type TextImagePage = {
   title: string;
   focus?: string;
   body: string;
   density: TextImageDensity;
+  layout?: TextImageLayoutSettings;
   pageNumber: number;
   totalPages: number;
 };
@@ -242,6 +263,31 @@ const textImageDensityProfiles: Record<
   },
 };
 
+function scaleTextImageSpacing(value: number, percentage: number) {
+  return Math.round((value * percentage) / 100);
+}
+
+function getTextImageLayoutSettings(page: TextImagePageDraft | TextImagePage) {
+  return { ...defaultTextImageLayoutSettings, ...page.layout };
+}
+
+function getTextImageProfile(page: TextImagePageDraft | TextImagePage) {
+  const base = textImageDensityProfiles[page.density ?? "regular"];
+  const layout = getTextImageLayoutSettings(page);
+  return {
+    ...base,
+    titleLine: scaleTextImageSpacing(base.titleLine, layout.lineSpacing),
+    focusLine: scaleTextImageSpacing(base.focusLine, layout.lineSpacing),
+    headingLine: scaleTextImageSpacing(base.headingLine, layout.lineSpacing),
+    bodyLine: scaleTextImageSpacing(base.bodyLine, layout.lineSpacing),
+    titleFocusGap: scaleTextImageSpacing(base.titleFocusGap, layout.titleSpacing),
+    titleBodyGap: scaleTextImageSpacing(base.titleBodyGap, layout.titleSpacing),
+    focusAfterGap: scaleTextImageSpacing(base.focusAfterGap, layout.paragraphSpacing),
+    headingAfterGap: scaleTextImageSpacing(base.headingAfterGap, layout.paragraphSpacing),
+    bodyAfterGap: scaleTextImageSpacing(base.bodyAfterGap, layout.paragraphSpacing),
+  };
+}
+
 function font(weight: number, size: number) {
   return `${weight} ${size}px ${textImageFontFamily}`;
 }
@@ -259,23 +305,26 @@ function drawRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number, widt
 
 function wrapCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
   const lines: string[] = [];
-  let line = "";
+  const sourceLines = text.trim().split("\n");
 
-  for (const char of Array.from(text.trim())) {
-    const nextLine = line + char;
-    if (line && ctx.measureText(nextLine).width > maxWidth) {
-      if (noLineStartPunctuation.test(char)) {
+  for (const sourceLine of sourceLines) {
+    let line = "";
+    for (const char of Array.from(sourceLine.trim())) {
+      const nextLine = line + char;
+      if (line && ctx.measureText(nextLine).width > maxWidth) {
+        if (noLineStartPunctuation.test(char)) {
+          line = nextLine;
+          continue;
+        }
+        lines.push(line);
+        line = char.trimStart();
+      } else {
         line = nextLine;
-        continue;
       }
-      lines.push(line);
-      line = char.trimStart();
-    } else {
-      line = nextLine;
     }
+    if (line) lines.push(line);
   }
 
-  if (line) lines.push(line);
   return lines;
 }
 
@@ -400,8 +449,8 @@ function appendParagraph(body: string, paragraph: string) {
   return body ? `${body}\n\n${trimmed}` : trimmed;
 }
 
-function measureParagraphHeight(ctx: CanvasRenderingContext2D, paragraph: string, maxWidth: number, density: TextImageDensity) {
-  const profile = textImageDensityProfiles[density];
+function measureParagraphHeight(ctx: CanvasRenderingContext2D, paragraph: string, maxWidth: number, page: TextImagePageDraft | TextImagePage) {
+  const profile = getTextImageProfile(page);
   const { displayText, isFocus, isHeading } = getParagraphKind(paragraph);
   ctx.font = isHeading ? font(700, profile.headingSize) : isFocus ? font(700, profile.focusSize) : font(500, profile.bodySize);
   const textWidth = isFocus ? maxWidth - 46 : isHeading ? maxWidth - 24 : maxWidth;
@@ -413,12 +462,12 @@ function measureParagraphHeight(ctx: CanvasRenderingContext2D, paragraph: string
 }
 
 function measurePageBodyStart(ctx: CanvasRenderingContext2D, page: TextImagePageDraft, ratioKey: TextImageRatioKey) {
-  const density = page.density ?? "regular";
-  const profile = textImageDensityProfiles[density];
+  const profile = getTextImageProfile(page);
+  const layout = getTextImageLayoutSettings(page);
   const ratio = textImageRatios[ratioKey];
   const left = textImageLayout.left;
   const maxWidth = ratio.width - left * 2;
-  let y = textImageLayout.top + 74;
+  let y = scaleTextImageSpacing(textImageLayout.top, layout.verticalPadding) + 74;
 
   ctx.textBaseline = "top";
   ctx.font = font(800, profile.titleSize);
@@ -441,13 +490,12 @@ function measurePageBodyStart(ctx: CanvasRenderingContext2D, page: TextImagePage
 }
 
 function measureTextImagePage(ctx: CanvasRenderingContext2D, page: TextImagePageDraft, ratioKey: TextImageRatioKey) {
-  const density = page.density ?? "regular";
   const ratio = textImageRatios[ratioKey];
   const maxWidth = ratio.width - textImageLayout.left * 2;
   let y = measurePageBodyStart(ctx, page, ratioKey);
 
   for (const paragraph of getBodyParagraphs(page.body)) {
-    y += measureParagraphHeight(ctx, paragraph, maxWidth, density).height;
+    y += measureParagraphHeight(ctx, paragraph, maxWidth, page).height;
   }
 
   return y;
@@ -464,7 +512,9 @@ function createMeasureContext(ratioKey: TextImageRatioKey) {
 
 function pageFitsCanvas(ctx: CanvasRenderingContext2D, page: TextImagePageDraft, ratioKey: TextImageRatioKey) {
   const ratio = textImageRatios[ratioKey];
-  return measureTextImagePage(ctx, page, ratioKey) <= ratio.height - textImageLayout.bottomPadding;
+  const layout = getTextImageLayoutSettings(page);
+  const bottomPadding = scaleTextImageSpacing(textImageLayout.bottomPadding, layout.verticalPadding);
+  return measureTextImagePage(ctx, page, ratioKey) <= ratio.height - bottomPadding;
 }
 
 function fitPageDensity(ctx: CanvasRenderingContext2D, page: TextImagePageDraft, ratioKey: TextImageRatioKey) {
@@ -710,8 +760,8 @@ function drawPageIndicator(
 function drawTextImage(canvas: HTMLCanvasElement, page: TextImagePage, presetKey: TextImagePresetKey, ratioKey: TextImageRatioKey) {
   const preset = textImagePresets[presetKey];
   const ratio = textImageRatios[ratioKey];
-  const density = page.density ?? "regular";
-  const profile = textImageDensityProfiles[density];
+  const profile = getTextImageProfile(page);
+  const layout = getTextImageLayoutSettings(page);
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
 
@@ -723,7 +773,8 @@ function drawTextImage(canvas: HTMLCanvasElement, page: TextImagePage, presetKey
 
   const left = textImageLayout.left;
   const maxWidth = ratio.width - left * 2;
-  let y = textImageLayout.top;
+  let y = scaleTextImageSpacing(textImageLayout.top, layout.verticalPadding);
+  const bottomPadding = scaleTextImageSpacing(textImageLayout.bottomPadding, layout.verticalPadding);
 
   ctx.fillStyle = preset.rule;
   ctx.fillRect(left, y, maxWidth, 4);
@@ -769,10 +820,10 @@ function drawTextImage(canvas: HTMLCanvasElement, page: TextImagePage, presetKey
   const paragraphs = getBodyParagraphs(page.body);
 
   for (const paragraph of paragraphs) {
-    const measured = measureParagraphHeight(ctx, paragraph, maxWidth, density);
+    const measured = measureParagraphHeight(ctx, paragraph, maxWidth, page);
     const lineHeight = measured.isHeading ? profile.headingLine : measured.isFocus ? profile.focusLine : profile.bodyLine;
 
-    if (y + measured.height > ratio.height - textImageLayout.bottomPadding) break;
+    if (y + measured.height > ratio.height - bottomPadding) break;
 
     if (measured.isHeading) {
       ctx.fillStyle = preset.title;
@@ -822,6 +873,41 @@ function canvasToBlob(canvas: HTMLCanvasElement) {
   });
 }
 
+function TextImageSpacingControl({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3 text-xs">
+        <Label>{label}</Label>
+        <span className="tabular-nums text-slate-500">{value}%</span>
+      </div>
+      <input
+        type="range"
+        aria-label={label}
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="h-2 w-full cursor-pointer accent-slate-900"
+      />
+    </div>
+  );
+}
+
 function TextImageGenerator({ articleText }: { articleText: string }) {
   const [sourceText, setSourceText] = useState(articleText);
   const [presetKey, setPresetKey] = useState<TextImagePresetKey>("warmBrown");
@@ -830,9 +916,73 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
   const [fileName, setFileName] = useState("文字卡片");
   const [copiedImage, setCopiedImage] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const pages = useMemo(() => createCarouselPages(sourceText, ratioKey), [ratioKey, sourceText]);
+  const generatedPages = useMemo(() => createCarouselPages(sourceText, ratioKey), [ratioKey, sourceText]);
+  const generationKey = `${ratioKey}\u0000${sourceText}`;
+  const [editedPagesState, setEditedPagesState] = useState<{
+    generationKey: string;
+    pages: TextImagePage[];
+    changedPageIndexes: number[];
+  }>(() => ({ generationKey, pages: generatedPages, changedPageIndexes: [] }));
+  const pages = useMemo(
+    () => (editedPagesState.generationKey === generationKey ? editedPagesState.pages : generatedPages),
+    [editedPagesState.generationKey, editedPagesState.pages, generatedPages, generationKey],
+  );
+  const changedPageIndexes = useMemo(
+    () => (editedPagesState.generationKey === generationKey ? editedPagesState.changedPageIndexes : []),
+    [editedPagesState.changedPageIndexes, editedPagesState.generationKey, generationKey],
+  );
   const safeSelectedPageIndex = Math.min(selectedPageIndex, Math.max(pages.length - 1, 0));
   const selectedPage = pages[safeSelectedPageIndex] ?? pages[0];
+  const selectedPageChanged = changedPageIndexes.includes(safeSelectedPageIndex);
+  const selectedPageLayout = selectedPage ? getTextImageLayoutSettings(selectedPage) : defaultTextImageLayoutSettings;
+  const selectedPageFits = useMemo(() => {
+    if (!selectedPage) return true;
+    const ctx = createMeasureContext(ratioKey);
+    return ctx ? pageFitsCanvas(ctx, selectedPage, ratioKey) : true;
+  }, [ratioKey, selectedPage]);
+
+  const updateSelectedPage = useCallback(
+    (patch: Partial<Pick<TextImagePage, "title" | "focus" | "body" | "density" | "layout">>) => {
+      if (!selectedPage) return;
+      const nextPages = pages.map((page, index) =>
+        index === safeSelectedPageIndex
+          ? {
+              ...page,
+              ...patch,
+              focus: patch.focus === "" ? undefined : patch.focus ?? page.focus,
+            }
+          : page,
+      );
+      setEditedPagesState({
+        generationKey,
+        pages: nextPages,
+        changedPageIndexes: Array.from(new Set([...changedPageIndexes, safeSelectedPageIndex])),
+      });
+    },
+    [changedPageIndexes, generationKey, pages, safeSelectedPageIndex, selectedPage],
+  );
+
+  const updateSelectedPageSpacing = useCallback(
+    (key: keyof TextImageLayoutSettings, value: number) => {
+      if (!selectedPage) return;
+      updateSelectedPage({ layout: { ...getTextImageLayoutSettings(selectedPage), [key]: value } });
+    },
+    [selectedPage, updateSelectedPage],
+  );
+
+  const restoreSelectedPage = useCallback(() => {
+    const generatedPage = generatedPages[safeSelectedPageIndex];
+    if (!generatedPage) return;
+    setEditedPagesState({
+      generationKey,
+      pages: pages.map((page, index) => (index === safeSelectedPageIndex ? generatedPage : page)),
+      changedPageIndexes: changedPageIndexes.filter((index) => index !== safeSelectedPageIndex),
+    });
+  }, [changedPageIndexes, generatedPages, generationKey, pages, safeSelectedPageIndex]);
+
+  const regeneratePages = useCallback(() => {
+    setEditedPagesState({ generationKey, pages: generatedPages, changedPageIndexes: [] });
+  }, [generatedPages, generationKey]);
 
   const renderImage = useCallback(() => {
     if (!canvasRef.current || !selectedPage) return;
@@ -898,11 +1048,15 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
   }, [createPageBlob, handleDownloadImage, renderImage, selectedPage]);
 
   const resetTextImage = () => {
+    const nextRatioKey: TextImageRatioKey = "portrait34";
+    const nextPages = createCarouselPages(articleText, nextRatioKey);
+    const nextGenerationKey = `${nextRatioKey}\u0000${articleText}`;
     setSourceText(articleText);
     setPresetKey("warmBrown");
-    setRatioKey("portrait34");
+    setRatioKey(nextRatioKey);
     setSelectedPageIndex(0);
     setFileName("文字卡片");
+    setEditedPagesState({ generationKey: nextGenerationKey, pages: nextPages, changedPageIndexes: [] });
   };
 
   return (
@@ -919,7 +1073,17 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-3">
                 <Label>轮播图源文案</Label>
-                <Button onClick={() => setSourceText(articleText)} variant="outline" className="h-8 rounded-xl px-3 text-xs">
+                <Button
+                  onClick={() => {
+                    const nextPages = createCarouselPages(articleText, ratioKey);
+                    const nextGenerationKey = `${ratioKey}\u0000${articleText}`;
+                    setSourceText(articleText);
+                    setEditedPagesState({ generationKey: nextGenerationKey, pages: nextPages, changedPageIndexes: [] });
+                    setSelectedPageIndex(0);
+                  }}
+                  variant="outline"
+                  className="h-8 rounded-xl px-3 text-xs"
+                >
                   使用当前文章
                 </Button>
               </div>
@@ -960,6 +1124,158 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
               </div>
             </div>
 
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <Label>页面</Label>
+                <span className="text-xs text-slate-500">共 {pages.length} 页</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                {pages.map((page, index) => (
+                  <button
+                    key={`${page.pageNumber}-${index}`}
+                    onClick={() => setSelectedPageIndex(index)}
+                    className={`min-h-20 rounded-xl border p-3 text-left text-xs leading-5 transition ${
+                      safeSelectedPageIndex === index ? "border-slate-900 bg-white shadow-sm" : "border-slate-200 bg-slate-50 hover:bg-white"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2 font-semibold text-slate-900">
+                      <span>{String(page.pageNumber).padStart(2, "0")}</span>
+                      {changedPageIndexes.includes(index) && <span className="text-[10px] font-medium text-amber-700">已修改</span>}
+                    </div>
+                    <div className="mt-1 line-clamp-2 text-slate-600">{page.title}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {selectedPage && (
+              <div className="space-y-4 border-y border-slate-200 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">第 {selectedPage.pageNumber} 页内容</div>
+                  </div>
+                  <div className="flex gap-2">
+                    {selectedPageChanged && (
+                      <Button type="button" variant="ghost" size="sm" className="h-8 rounded-lg px-2 text-xs" onClick={restoreSelectedPage}>
+                        <RefreshCcw className="mr-1.5 h-3.5 w-3.5" />
+                        恢复本页
+                      </Button>
+                    )}
+                    {changedPageIndexes.length > 0 && (
+                      <Button type="button" variant="outline" size="sm" className="h-8 rounded-lg px-2 text-xs" onClick={regeneratePages}>
+                        重新生成全部
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_160px]">
+                  <div className="space-y-2">
+                    <Label htmlFor="carousel-page-title">标题</Label>
+                    <Input
+                      id="carousel-page-title"
+                      value={selectedPage.title}
+                      onChange={(event) => updateSelectedPage({ title: event.target.value })}
+                      className="rounded-xl"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>文字密度</Label>
+                    <Select value={selectedPage.density} onValueChange={(value) => updateSelectedPage({ density: value as TextImageDensity })}>
+                      <SelectTrigger className="rounded-xl">
+                        <span>{textImageDensityOptions[selectedPage.density]}</span>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Object.entries(textImageDensityOptions).map(([key, name]) => (
+                          <SelectItem key={key} value={key}>
+                            {name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="space-y-3 rounded-xl bg-slate-50 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <Label>间距</Label>
+                    {selectedPage.layout && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 rounded-lg px-2 text-xs"
+                        onClick={() => updateSelectedPage({ layout: { ...defaultTextImageLayoutSettings } })}
+                      >
+                        恢复默认
+                      </Button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+                    <TextImageSpacingControl
+                      label="文字行距"
+                      value={selectedPageLayout.lineSpacing}
+                      min={75}
+                      max={150}
+                      step={5}
+                      onChange={(value) => updateSelectedPageSpacing("lineSpacing", value)}
+                    />
+                    <TextImageSpacingControl
+                      label="段落空行"
+                      value={selectedPageLayout.paragraphSpacing}
+                      min={0}
+                      max={200}
+                      step={10}
+                      onChange={(value) => updateSelectedPageSpacing("paragraphSpacing", value)}
+                    />
+                    <TextImageSpacingControl
+                      label="标题后间距"
+                      value={selectedPageLayout.titleSpacing}
+                      min={0}
+                      max={200}
+                      step={10}
+                      onChange={(value) => updateSelectedPageSpacing("titleSpacing", value)}
+                    />
+                    <TextImageSpacingControl
+                      label="上下留白"
+                      value={selectedPageLayout.verticalPadding}
+                      min={60}
+                      max={140}
+                      step={5}
+                      onChange={(value) => updateSelectedPageSpacing("verticalPadding", value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="carousel-page-focus">重点</Label>
+                  <Textarea
+                    id="carousel-page-focus"
+                    value={selectedPage.focus ?? ""}
+                    onChange={(event) => updateSelectedPage({ focus: event.target.value })}
+                    placeholder="留空则不显示重点框"
+                    className="min-h-24 rounded-xl text-sm leading-6"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="carousel-page-body">正文</Label>
+                  <Textarea
+                    id="carousel-page-body"
+                    value={selectedPage.body}
+                    onChange={(event) => updateSelectedPage({ body: event.target.value })}
+                    className="min-h-52 rounded-xl text-sm leading-7"
+                  />
+                </div>
+
+                {!selectedPageFits && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                    当前内容超出画布。请删减文字，或把文字密度调为“紧凑”“密集”。
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div className="space-y-2">
                 <Label>文件名</Label>
@@ -992,24 +1308,9 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
                 重置轮播图
               </Button>
             </div>
-
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-              {pages.map((page, index) => (
-                <button
-                  key={`${page.pageNumber}-${page.title}`}
-                  onClick={() => setSelectedPageIndex(index)}
-                  className={`rounded-xl border p-3 text-left text-xs leading-5 transition ${
-                    safeSelectedPageIndex === index ? "border-slate-900 bg-white shadow-sm" : "border-slate-200 bg-slate-50 hover:bg-white"
-                  }`}
-                >
-                  <div className="font-semibold text-slate-900">{String(page.pageNumber).padStart(2, "0")}</div>
-                  <div className="mt-1 line-clamp-2 text-slate-600">{page.title}</div>
-                </button>
-              ))}
-            </div>
           </div>
 
-          <div className="flex flex-col items-center gap-3 rounded-2xl border bg-slate-100 p-4">
+          <div className="flex flex-col items-center gap-3 rounded-2xl border bg-slate-100 p-4 lg:sticky lg:top-4 lg:self-start">
             <canvas ref={canvasRef} className="h-auto w-full max-w-[360px] rounded-2xl bg-white shadow-sm" />
             <div className="text-xs text-slate-500">
               {selectedPage ? `${selectedPage.pageNumber} / ${selectedPage.totalPages}` : "0 / 0"} · {textImageRatios[ratioKey].width}×{textImageRatios[ratioKey].height}
