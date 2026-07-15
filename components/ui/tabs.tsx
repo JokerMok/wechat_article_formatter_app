@@ -61,9 +61,17 @@ interface TabsContentProps extends React.HTMLAttributes<HTMLDivElement> {
 const TabsContent = React.forwardRef<HTMLDivElement, TabsContentProps>(({ className, value: contentValue, ...props }, ref) => {
   const context = React.useContext(TabsContext);
   if (!context) throw new Error("TabsContent must be used within Tabs");
-  if (context.value !== contentValue) return null;
+  const isActive = context.value === contentValue;
 
-  return <div ref={ref} className={cn("mt-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2", className)} {...props} />;
+  return (
+    <div
+      ref={ref}
+      hidden={!isActive}
+      aria-hidden={!isActive}
+      className={cn("mt-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2", className)}
+      {...props}
+    />
+  );
 });
 TabsContent.displayName = "TabsContent";
 

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,6 +9,11 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
+  ArrowDown,
+  ArrowUp,
   Bold,
   Check,
   ChevronDown,
@@ -16,10 +21,16 @@ import {
   Code2,
   FileDown,
   Image as ImageIcon,
+  ImagePlus,
   Italic,
+  Layers,
   Pencil,
   Redo2,
   RefreshCcw,
+  Replace,
+  SendToBack,
+  BringToFront,
+  Trash2,
   Underline,
   Undo2,
   Upload,
@@ -148,6 +159,18 @@ type TextImageLayoutSettings = {
   verticalPadding: number;
 };
 
+type TextImageSticker = {
+  id: string;
+  name: string;
+  src: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+  opacity: number;
+};
+
 const textImageDensityOptions: Record<TextImageDensity, string> = {
   regular: "舒展",
   compact: "紧凑",
@@ -167,6 +190,7 @@ type TextImagePage = {
   body: string;
   density: TextImageDensity;
   layout?: TextImageLayoutSettings;
+  stickers?: TextImageSticker[];
   pageNumber: number;
   totalPages: number;
 };
@@ -185,6 +209,48 @@ const textImageLayout = {
 };
 
 const noLineStartPunctuation = /^[。！？；，、：,.!?;）】」』》〉%％]$/;
+
+const supportedImageTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+const subscribeToClientReady = () => () => undefined;
+const getClientReadySnapshot = () => true;
+const getServerReadySnapshot = () => false;
+
+function createLocalImageId(prefix: string) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function readImageFile(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    if (!supportedImageTypes.has(file.type)) {
+      reject(new Error("仅支持 PNG、JPG 和 WebP 图片"));
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      reject(new Error("单张图片不能超过 10MB"));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error("图片读取失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+const localImageCache = new Map<string, Promise<HTMLImageElement>>();
+
+function loadLocalImage(src: string) {
+  const cached = localImageCache.get(src);
+  if (cached) return cached;
+
+  const pending = new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new window.Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("图片加载失败"));
+    image.src = src;
+  });
+  localImageCache.set(src, pending);
+  return pending;
+}
 
 const textImageDensityProfiles: Record<
   TextImageDensity,
@@ -757,7 +823,56 @@ function drawPageIndicator(
   }
 }
 
-function drawTextImage(canvas: HTMLCanvasElement, page: TextImagePage, presetKey: TextImagePresetKey, ratioKey: TextImageRatioKey) {
+function drawSticker(
+  ctx: CanvasRenderingContext2D,
+  sticker: TextImageSticker,
+  image: HTMLImageElement,
+  selected: boolean,
+) {
+  const centerX = sticker.x + sticker.width / 2;
+  const centerY = sticker.y + sticker.height / 2;
+  ctx.save();
+  ctx.translate(centerX, centerY);
+  ctx.rotate((sticker.rotation * Math.PI) / 180);
+  ctx.globalAlpha = sticker.opacity / 100;
+  ctx.drawImage(image, -sticker.width / 2, -sticker.height / 2, sticker.width, sticker.height);
+  ctx.globalAlpha = 1;
+
+  if (selected) {
+    ctx.strokeStyle = "#0f172a";
+    ctx.lineWidth = 4;
+    ctx.setLineDash([12, 8]);
+    ctx.strokeRect(-sticker.width / 2, -sticker.height / 2, sticker.width, sticker.height);
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#ffffff";
+    ctx.strokeStyle = "#0f172a";
+    for (const [x, y] of [
+      [-sticker.width / 2, -sticker.height / 2],
+      [sticker.width / 2, -sticker.height / 2],
+      [-sticker.width / 2, sticker.height / 2],
+      [sticker.width / 2, sticker.height / 2],
+    ]) {
+      ctx.beginPath();
+      ctx.arc(x, y, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+async function drawTextImage(
+  canvas: HTMLCanvasElement,
+  page: TextImagePage,
+  presetKey: TextImagePresetKey,
+  ratioKey: TextImageRatioKey,
+  selectedStickerId?: string,
+  shouldDraw?: () => boolean,
+) {
+  const stickers = page.stickers ?? [];
+  const stickerImages = await Promise.all(stickers.map(async (sticker) => [sticker.id, await loadLocalImage(sticker.src)] as const));
+  if (shouldDraw && !shouldDraw()) return;
+  const stickerImageMap = new Map(stickerImages);
   const preset = textImagePresets[presetKey];
   const ratio = textImageRatios[ratioKey];
   const profile = getTextImageProfile(page);
@@ -861,6 +976,11 @@ function drawTextImage(canvas: HTMLCanvasElement, page: TextImagePage, presetKey
     y += profile.bodyAfterGap;
   }
 
+  for (const sticker of stickers) {
+    const image = stickerImageMap.get(sticker.id);
+    if (image) drawSticker(ctx, sticker, image, sticker.id === selectedStickerId);
+  }
+
   drawPageIndicator(ctx, page.pageNumber, page.totalPages, ratio.width, ratio.height, preset.title, preset.dots);
 }
 
@@ -879,6 +999,7 @@ function TextImageSpacingControl({
   min,
   max,
   step,
+  suffix = "%",
   onChange,
 }: {
   label: string;
@@ -886,13 +1007,14 @@ function TextImageSpacingControl({
   min: number;
   max: number;
   step: number;
+  suffix?: string;
   onChange: (value: number) => void;
 }) {
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-3 text-xs">
         <Label>{label}</Label>
-        <span className="tabular-nums text-slate-500">{value}%</span>
+        <span className="tabular-nums text-slate-500">{value}{suffix}</span>
       </div>
       <input
         type="range"
@@ -908,16 +1030,45 @@ function TextImageSpacingControl({
   );
 }
 
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function isPointInsideSticker(x: number, y: number, sticker: TextImageSticker) {
+  const centerX = sticker.x + sticker.width / 2;
+  const centerY = sticker.y + sticker.height / 2;
+  const angle = (-sticker.rotation * Math.PI) / 180;
+  const translatedX = x - centerX;
+  const translatedY = y - centerY;
+  const localX = translatedX * Math.cos(angle) - translatedY * Math.sin(angle);
+  const localY = translatedX * Math.sin(angle) + translatedY * Math.cos(angle);
+  return Math.abs(localX) <= sticker.width / 2 && Math.abs(localY) <= sticker.height / 2;
+}
+
 function TextImageGenerator({ articleText }: { articleText: string }) {
+  const isClientReady = useSyncExternalStore(subscribeToClientReady, getClientReadySnapshot, getServerReadySnapshot);
   const [sourceText, setSourceText] = useState(articleText);
   const [presetKey, setPresetKey] = useState<TextImagePresetKey>("warmBrown");
   const [ratioKey, setRatioKey] = useState<TextImageRatioKey>("portrait34");
   const [selectedPageIndex, setSelectedPageIndex] = useState(0);
   const [fileName, setFileName] = useState("文字卡片");
   const [copiedImage, setCopiedImage] = useState(false);
+  const [selectedStickerId, setSelectedStickerId] = useState<string>();
+  const [imageError, setImageError] = useState("");
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const generatedPages = useMemo(() => createCarouselPages(sourceText, ratioKey), [ratioKey, sourceText]);
-  const generationKey = `${ratioKey}\u0000${sourceText}`;
+  const stickerInputRef = useRef<HTMLInputElement | null>(null);
+  const previewRenderIdRef = useRef(0);
+  const stickerDragRef = useRef<{
+    pointerId: number;
+    stickerId: string;
+    offsetX: number;
+    offsetY: number;
+  } | undefined>(undefined);
+  const generatedPages = useMemo(
+    () => (isClientReady ? createCarouselPages(sourceText, ratioKey) : []),
+    [isClientReady, ratioKey, sourceText],
+  );
+  const generationKey = isClientReady ? `${ratioKey}\u0000${sourceText}` : "__pending__";
   const [editedPagesState, setEditedPagesState] = useState<{
     generationKey: string;
     pages: TextImagePage[];
@@ -933,6 +1084,10 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
   );
   const safeSelectedPageIndex = Math.min(selectedPageIndex, Math.max(pages.length - 1, 0));
   const selectedPage = pages[safeSelectedPageIndex] ?? pages[0];
+  const selectedSticker = selectedPage?.stickers?.find((sticker) => sticker.id === selectedStickerId);
+  const selectedStickerWidthPercent = selectedSticker
+    ? Math.round((selectedSticker.width / textImageRatios[ratioKey].width) * 100)
+    : 30;
   const selectedPageChanged = changedPageIndexes.includes(safeSelectedPageIndex);
   const selectedPageLayout = selectedPage ? getTextImageLayoutSettings(selectedPage) : defaultTextImageLayoutSettings;
   const selectedPageFits = useMemo(() => {
@@ -942,24 +1097,28 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
   }, [ratioKey, selectedPage]);
 
   const updateSelectedPage = useCallback(
-    (patch: Partial<Pick<TextImagePage, "title" | "focus" | "body" | "density" | "layout">>) => {
+    (patch: Partial<Pick<TextImagePage, "title" | "focus" | "body" | "density" | "layout" | "stickers">>) => {
       if (!selectedPage) return;
-      const nextPages = pages.map((page, index) =>
-        index === safeSelectedPageIndex
-          ? {
-              ...page,
-              ...patch,
-              focus: patch.focus === "" ? undefined : patch.focus ?? page.focus,
-            }
-          : page,
-      );
-      setEditedPagesState({
-        generationKey,
-        pages: nextPages,
-        changedPageIndexes: Array.from(new Set([...changedPageIndexes, safeSelectedPageIndex])),
+      setEditedPagesState((current) => {
+        const currentPages = current.generationKey === generationKey ? current.pages : generatedPages;
+        const currentChangedIndexes = current.generationKey === generationKey ? current.changedPageIndexes : [];
+        const nextPages = currentPages.map((page, index) =>
+          index === safeSelectedPageIndex
+            ? {
+                ...page,
+                ...patch,
+                focus: patch.focus === "" ? undefined : patch.focus ?? page.focus,
+              }
+            : page,
+        );
+        return {
+          generationKey,
+          pages: nextPages,
+          changedPageIndexes: Array.from(new Set([...currentChangedIndexes, safeSelectedPageIndex])),
+        };
       });
     },
-    [changedPageIndexes, generationKey, pages, safeSelectedPageIndex, selectedPage],
+    [generatedPages, generationKey, safeSelectedPageIndex, selectedPage],
   );
 
   const updateSelectedPageSpacing = useCallback(
@@ -970,6 +1129,140 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
     [selectedPage, updateSelectedPage],
   );
 
+  const updateSelectedSticker = useCallback(
+    (stickerId: string, patch: Partial<TextImageSticker>) => {
+      setEditedPagesState((current) => {
+        const currentPages = current.generationKey === generationKey ? current.pages : generatedPages;
+        const currentChangedIndexes = current.generationKey === generationKey ? current.changedPageIndexes : [];
+        return {
+          generationKey,
+          pages: currentPages.map((page, index) =>
+            index === safeSelectedPageIndex
+              ? {
+                  ...page,
+                  stickers: (page.stickers ?? []).map((sticker) =>
+                    sticker.id === stickerId ? { ...sticker, ...patch } : sticker,
+                  ),
+                }
+              : page,
+          ),
+          changedPageIndexes: Array.from(new Set([...currentChangedIndexes, safeSelectedPageIndex])),
+        };
+      });
+    },
+    [generatedPages, generationKey, safeSelectedPageIndex],
+  );
+
+  const handleStickerUpload = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (!file || !selectedPage) return;
+
+      try {
+        setImageError("");
+        const src = await readImageFile(file);
+        const image = await loadLocalImage(src);
+        const ratio = textImageRatios[ratioKey];
+        const sourceRatio = image.naturalWidth / Math.max(image.naturalHeight, 1);
+        let width = clamp(image.naturalWidth, 160, 360);
+        let height = width / sourceRatio;
+        if (height > ratio.height * 0.45) {
+          height = ratio.height * 0.45;
+          width = height * sourceRatio;
+        }
+        const sticker: TextImageSticker = {
+          id: createLocalImageId("sticker"),
+          name: file.name,
+          src,
+          x: (ratio.width - width) / 2,
+          y: (ratio.height - height) / 2,
+          width,
+          height,
+          rotation: 0,
+          opacity: 100,
+        };
+        updateSelectedPage({ stickers: [...(selectedPage.stickers ?? []), sticker] });
+        setSelectedStickerId(sticker.id);
+      } catch (error) {
+        setImageError(error instanceof Error ? error.message : "图片添加失败");
+      }
+    },
+    [ratioKey, selectedPage, updateSelectedPage],
+  );
+
+  const removeSelectedSticker = useCallback(() => {
+    if (!selectedStickerId || !selectedPage) return;
+    updateSelectedPage({ stickers: (selectedPage.stickers ?? []).filter((sticker) => sticker.id !== selectedStickerId) });
+    setSelectedStickerId(undefined);
+  }, [selectedPage, selectedStickerId, updateSelectedPage]);
+
+  const moveSelectedStickerLayer = useCallback(
+    (direction: "front" | "back") => {
+      if (!selectedStickerId || !selectedPage) return;
+      const stickers = [...(selectedPage.stickers ?? [])];
+      const index = stickers.findIndex((sticker) => sticker.id === selectedStickerId);
+      if (index < 0) return;
+      const [sticker] = stickers.splice(index, 1);
+      if (direction === "front") stickers.push(sticker);
+      else stickers.unshift(sticker);
+      updateSelectedPage({ stickers });
+    },
+    [selectedPage, selectedStickerId, updateSelectedPage],
+  );
+
+  const getCanvasPoint = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: ((event.clientX - rect.left) / rect.width) * canvas.width,
+      y: ((event.clientY - rect.top) / rect.height) * canvas.height,
+    };
+  }, []);
+
+  const handleCanvasPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      const point = getCanvasPoint(event);
+      if (!point || !selectedPage) return;
+      const sticker = [...(selectedPage.stickers ?? [])].reverse().find((item) => isPointInsideSticker(point.x, point.y, item));
+      if (!sticker) {
+        setSelectedStickerId(undefined);
+        return;
+      }
+      setSelectedStickerId(sticker.id);
+      stickerDragRef.current = {
+        pointerId: event.pointerId,
+        stickerId: sticker.id,
+        offsetX: point.x - sticker.x,
+        offsetY: point.y - sticker.y,
+      };
+      event.currentTarget.setPointerCapture(event.pointerId);
+    },
+    [getCanvasPoint, selectedPage],
+  );
+
+  const handleCanvasPointerMove = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => {
+      const drag = stickerDragRef.current;
+      const point = getCanvasPoint(event);
+      const pageSticker = selectedPage?.stickers?.find((sticker) => sticker.id === drag?.stickerId);
+      if (!drag || drag.pointerId !== event.pointerId || !point || !pageSticker) return;
+      const ratio = textImageRatios[ratioKey];
+      updateSelectedSticker(drag.stickerId, {
+        x: clamp(point.x - drag.offsetX, -pageSticker.width * 0.8, ratio.width - pageSticker.width * 0.2),
+        y: clamp(point.y - drag.offsetY, -pageSticker.height * 0.8, ratio.height - pageSticker.height * 0.2),
+      });
+    },
+    [getCanvasPoint, ratioKey, selectedPage, updateSelectedSticker],
+  );
+
+  const handleCanvasPointerUp = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (stickerDragRef.current?.pointerId !== event.pointerId) return;
+    stickerDragRef.current = undefined;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  }, []);
+
   const restoreSelectedPage = useCallback(() => {
     const generatedPage = generatedPages[safeSelectedPageIndex];
     if (!generatedPage) return;
@@ -978,16 +1271,27 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
       pages: pages.map((page, index) => (index === safeSelectedPageIndex ? generatedPage : page)),
       changedPageIndexes: changedPageIndexes.filter((index) => index !== safeSelectedPageIndex),
     });
+    setSelectedStickerId(undefined);
   }, [changedPageIndexes, generatedPages, generationKey, pages, safeSelectedPageIndex]);
 
   const regeneratePages = useCallback(() => {
     setEditedPagesState({ generationKey, pages: generatedPages, changedPageIndexes: [] });
+    setSelectedStickerId(undefined);
   }, [generatedPages, generationKey]);
 
-  const renderImage = useCallback(() => {
+  const renderImage = useCallback(async () => {
     if (!canvasRef.current || !selectedPage) return;
-    drawTextImage(canvasRef.current, selectedPage, presetKey, ratioKey);
-  }, [presetKey, ratioKey, selectedPage]);
+    const renderId = previewRenderIdRef.current + 1;
+    previewRenderIdRef.current = renderId;
+    await drawTextImage(
+      canvasRef.current,
+      selectedPage,
+      presetKey,
+      ratioKey,
+      selectedStickerId,
+      () => previewRenderIdRef.current === renderId,
+    );
+  }, [presetKey, ratioKey, selectedPage, selectedStickerId]);
 
   useEffect(() => {
     renderImage();
@@ -996,7 +1300,7 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
   const createPageBlob = useCallback(
     async (page: TextImagePage) => {
       const canvas = document.createElement("canvas");
-      drawTextImage(canvas, page, presetKey, ratioKey);
+      await drawTextImage(canvas, page, presetKey, ratioKey);
       return canvasToBlob(canvas);
     },
     [presetKey, ratioKey]
@@ -1005,7 +1309,7 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
   const handleDownloadImage = useCallback(async () => {
     if (!selectedPage) return;
 
-    renderImage();
+    await renderImage();
     const blob = await createPageBlob(selectedPage);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1031,7 +1335,7 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
   const handleCopyImage = useCallback(async () => {
     if (!selectedPage) return;
 
-    renderImage();
+    await renderImage();
     const blob = await createPageBlob(selectedPage);
     if ("ClipboardItem" in window && navigator.clipboard?.write) {
       await navigator.clipboard.write([
@@ -1056,6 +1360,8 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
     setRatioKey(nextRatioKey);
     setSelectedPageIndex(0);
     setFileName("文字卡片");
+    setSelectedStickerId(undefined);
+    setImageError("");
     setEditedPagesState({ generationKey: nextGenerationKey, pages: nextPages, changedPageIndexes: [] });
   };
 
@@ -1133,7 +1439,10 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
                 {pages.map((page, index) => (
                   <button
                     key={`${page.pageNumber}-${index}`}
-                    onClick={() => setSelectedPageIndex(index)}
+                    onClick={() => {
+                      setSelectedPageIndex(index);
+                      setSelectedStickerId(undefined);
+                    }}
                     className={`min-h-20 rounded-xl border p-3 text-left text-xs leading-5 transition ${
                       safeSelectedPageIndex === index ? "border-slate-900 bg-white shadow-sm" : "border-slate-200 bg-slate-50 hover:bg-white"
                     }`}
@@ -1247,6 +1556,132 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
                   </div>
                 </div>
 
+                <div className="space-y-3 border-t border-slate-200 pt-4">
+                  <input
+                    id="carousel-sticker-upload"
+                    ref={stickerInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    className="hidden"
+                    onChange={handleStickerUpload}
+                  />
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <Label className="flex items-center gap-2">
+                      <Layers className="h-4 w-4" />
+                      贴图图层
+                    </Label>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 rounded-lg px-3 text-xs"
+                      onClick={() => stickerInputRef.current?.click()}
+                    >
+                      <ImagePlus className="mr-1.5 h-4 w-4" />
+                      添加贴图
+                    </Button>
+                  </div>
+
+                  {imageError && <div className="text-xs text-red-600">{imageError}</div>}
+
+                  {(selectedPage.stickers?.length ?? 0) > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {selectedPage.stickers?.map((sticker, index) => (
+                        <button
+                          type="button"
+                          key={sticker.id}
+                          onClick={() => setSelectedStickerId(sticker.id)}
+                          className={`flex h-10 max-w-48 items-center gap-2 rounded-lg border px-2 text-xs ${
+                            sticker.id === selectedStickerId
+                              ? "border-slate-900 bg-slate-900 text-white"
+                              : "border-slate-200 bg-white text-slate-700 hover:border-slate-400"
+                          }`}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={sticker.src} alt="" className="h-6 w-6 shrink-0 object-contain" />
+                          <span className="truncate">{index + 1}. {sticker.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {selectedSticker && selectedStickerId && (
+                    <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="truncate text-xs font-medium text-slate-700">{selectedSticker.name}</span>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 rounded-lg"
+                            title="置于顶层"
+                            aria-label="置于顶层"
+                            onClick={() => moveSelectedStickerLayer("front")}
+                          >
+                            <BringToFront className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 rounded-lg"
+                            title="置于底层"
+                            aria-label="置于底层"
+                            onClick={() => moveSelectedStickerLayer("back")}
+                          >
+                            <SendToBack className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 rounded-lg text-red-600 hover:text-red-700"
+                            title="删除贴图"
+                            aria-label="删除贴图"
+                            onClick={removeSelectedSticker}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-3">
+                        <TextImageSpacingControl
+                          label="大小"
+                          value={selectedStickerWidthPercent}
+                          min={10}
+                          max={80}
+                          step={1}
+                          onChange={(value) => {
+                            const width = (textImageRatios[ratioKey].width * value) / 100;
+                            updateSelectedSticker(selectedStickerId, {
+                              width,
+                              height: width * (selectedSticker.height / selectedSticker.width),
+                            });
+                          }}
+                        />
+                        <TextImageSpacingControl
+                          label="旋转"
+                          value={selectedSticker.rotation}
+                          min={-180}
+                          max={180}
+                          step={1}
+                          suffix="°"
+                          onChange={(value) => updateSelectedSticker(selectedStickerId, { rotation: value })}
+                        />
+                        <TextImageSpacingControl
+                          label="透明度"
+                          value={selectedSticker.opacity}
+                          min={10}
+                          max={100}
+                          step={5}
+                          onChange={(value) => updateSelectedSticker(selectedStickerId, { opacity: value })}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <div className="space-y-2">
                   <Label htmlFor="carousel-page-focus">重点</Label>
                   <Textarea
@@ -1311,7 +1746,16 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
           </div>
 
           <div className="flex flex-col items-center gap-3 rounded-2xl border bg-slate-100 p-4 lg:sticky lg:top-4 lg:self-start">
-            <canvas ref={canvasRef} className="h-auto w-full max-w-[360px] rounded-2xl bg-white shadow-sm" />
+            <canvas
+              ref={canvasRef}
+              onPointerDown={handleCanvasPointerDown}
+              onPointerMove={handleCanvasPointerMove}
+              onPointerUp={handleCanvasPointerUp}
+              onPointerCancel={handleCanvasPointerUp}
+              className={`h-auto w-full max-w-[360px] touch-none rounded-2xl bg-white shadow-sm ${
+                (selectedPage?.stickers?.length ?? 0) > 0 ? "cursor-move" : "cursor-default"
+              }`}
+            />
             <div className="text-xs text-slate-500">
               {selectedPage ? `${selectedPage.pageNumber} / ${selectedPage.totalPages}` : "0 / 0"} · {textImageRatios[ratioKey].width}×{textImageRatios[ratioKey].height}
             </div>
@@ -1337,21 +1781,133 @@ const editorCommands = [
   { command: "redo", label: "重做", icon: Redo2 },
 ] as const;
 
+type ArticleImageAlign = "left" | "center" | "right";
+
+function serializeEditablePreview(element: HTMLDivElement) {
+  const clone = element.cloneNode(true) as HTMLDivElement;
+  clone.querySelectorAll("[data-editor-selected], [data-editor-dragging], [data-editor-drop-position]").forEach((node) => {
+    node.removeAttribute("data-editor-selected");
+    node.removeAttribute("data-editor-dragging");
+    node.removeAttribute("data-editor-drop-position");
+  });
+  clone.removeAttribute("data-image-dragging");
+  clone.querySelectorAll<HTMLElement>("[data-local-image-block]").forEach((block) => {
+    block.removeAttribute("contenteditable");
+    block.removeAttribute("draggable");
+  });
+  clone.querySelectorAll<HTMLImageElement>("img[data-local-image-id]").forEach((image) => {
+    image.removeAttribute("draggable");
+    image.style.removeProperty("cursor");
+  });
+  return clone.innerHTML;
+}
+
+function enableEditablePreviewImages(element: HTMLDivElement) {
+  element.querySelectorAll<HTMLElement>("[data-local-image-block]").forEach((block) => {
+    block.contentEditable = "false";
+    block.draggable = true;
+    const image = block.querySelector<HTMLImageElement>("img[data-local-image-id]");
+    if (image) {
+      image.draggable = true;
+      image.style.cursor = "grab";
+    }
+  });
+}
+
+function getArticleContentRoot(editor: HTMLDivElement) {
+  const firstChild = editor.firstElementChild;
+  if (firstChild instanceof HTMLElement && firstChild.tagName === "SECTION" && !firstChild.hasAttribute("data-local-image-block")) {
+    return firstChild;
+  }
+  return editor;
+}
+
+function createArticleImageBlock(src: string, name: string) {
+  const block = document.createElement("section");
+  block.setAttribute("data-local-image-block", "true");
+  block.contentEditable = "false";
+  block.draggable = true;
+  block.style.margin = "20px 0";
+  block.style.textAlign = "center";
+
+  const image = document.createElement("img");
+  image.src = src;
+  image.alt = name.replace(/\.[^.]+$/, "");
+  image.setAttribute("data-local-image-id", createLocalImageId("article-image"));
+  image.draggable = true;
+  image.style.display = "inline-block";
+  image.style.width = "100%";
+  image.style.maxWidth = "100%";
+  image.style.height = "auto";
+  image.style.verticalAlign = "top";
+  image.style.cursor = "grab";
+  block.appendChild(image);
+  return { block, image };
+}
+
 function EditablePreview({ html, hasChanges, onHtmlChange, onReset }: EditablePreviewProps) {
   const editableRef = useRef<HTMLDivElement | null>(null);
+  const articleImageInputRef = useRef<HTMLInputElement | null>(null);
+  const savedRangeRef = useRef<Range | undefined>(undefined);
+  const imageUploadModeRef = useRef<"insert" | "replace">("insert");
+  const lastSyncedHtmlRef = useRef<string | undefined>(undefined);
+  const draggedArticleImageIdRef = useRef<string | undefined>(undefined);
+  const imageDropTargetRef = useRef<
+    { element: HTMLElement; position: "before" | "after" } | { append: true } | undefined
+  >(undefined);
   const [isEditing, setIsEditing] = useState(true);
+  const [selectedImageId, setSelectedImageId] = useState<string>();
+  const [selectedImageWidth, setSelectedImageWidth] = useState(100);
+  const [selectedImageAlign, setSelectedImageAlign] = useState<ArticleImageAlign>("center");
+  const [imageError, setImageError] = useState("");
 
   useEffect(() => {
     const element = editableRef.current;
     if (!element) return;
-    if (element.innerHTML !== html) {
-      element.innerHTML = html;
+    if (lastSyncedHtmlRef.current === html) {
+      enableEditablePreviewImages(element);
+      return;
     }
+    if (serializeEditablePreview(element) !== html) {
+      element.innerHTML = html;
+      setSelectedImageId(undefined);
+    }
+    enableEditablePreviewImages(element);
+    lastSyncedHtmlRef.current = html;
   }, [html]);
 
   const syncHtml = useCallback(() => {
-    onHtmlChange(editableRef.current?.innerHTML ?? html);
+    const editor = editableRef.current;
+    const nextHtml = editor ? serializeEditablePreview(editor) : html;
+    lastSyncedHtmlRef.current = nextHtml;
+    onHtmlChange(nextHtml);
   }, [html, onHtmlChange]);
+
+  const captureSelection = useCallback(() => {
+    const editor = editableRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection?.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    if (editor.contains(range.commonAncestorContainer)) savedRangeRef.current = range.cloneRange();
+  }, []);
+
+  const getSelectedImage = useCallback(() => {
+    if (!selectedImageId) return;
+    return editableRef.current?.querySelector<HTMLImageElement>(`img[data-local-image-id="${selectedImageId}"]`) ?? undefined;
+  }, [selectedImageId]);
+
+  const selectArticleImage = useCallback((image: HTMLImageElement) => {
+    const editor = editableRef.current;
+    if (!editor) return;
+    editor.querySelectorAll("img[data-editor-selected]").forEach((node) => node.removeAttribute("data-editor-selected"));
+    const id = image.dataset.localImageId ?? createLocalImageId("article-image");
+    image.dataset.localImageId = id;
+    image.dataset.editorSelected = "true";
+    setSelectedImageId(id);
+    setSelectedImageWidth(Number.parseInt(image.style.width, 10) || 100);
+    const block = image.closest<HTMLElement>("[data-local-image-block]");
+    setSelectedImageAlign((block?.style.textAlign as ArticleImageAlign) || "center");
+  }, []);
 
   const runCommand = useCallback(
     (command: (typeof editorCommands)[number]["command"]) => {
@@ -1364,17 +1920,234 @@ function EditablePreview({ html, hasChanges, onHtmlChange, onReset }: EditablePr
     [syncHtml],
   );
 
+  const insertArticleImage = useCallback(
+    (src: string, name: string) => {
+      const editor = editableRef.current;
+      if (!editor) return;
+      const contentRoot = getArticleContentRoot(editor);
+      const { block, image } = createArticleImageBlock(src, name);
+      const range = savedRangeRef.current;
+
+      if (range && contentRoot.contains(range.commonAncestorContainer)) {
+        let insertionPoint: Node = range.startContainer;
+        if (insertionPoint.nodeType === Node.TEXT_NODE && insertionPoint.parentNode) insertionPoint = insertionPoint.parentNode;
+        while (insertionPoint.parentNode && insertionPoint.parentNode !== contentRoot) insertionPoint = insertionPoint.parentNode;
+        if (insertionPoint.parentNode === contentRoot) contentRoot.insertBefore(block, insertionPoint.nextSibling);
+        else contentRoot.appendChild(block);
+      } else {
+        contentRoot.appendChild(block);
+      }
+
+      let trailingParagraph = block.nextElementSibling as HTMLElement | null;
+      if (!trailingParagraph) {
+        trailingParagraph = document.createElement("p");
+        trailingParagraph.innerHTML = "<br>";
+        block.after(trailingParagraph);
+      }
+      const nextRange = document.createRange();
+      nextRange.selectNodeContents(trailingParagraph);
+      nextRange.collapse(true);
+      savedRangeRef.current = nextRange;
+      selectArticleImage(image);
+      syncHtml();
+    },
+    [selectArticleImage, syncHtml],
+  );
+
+  const handleArticleImageUpload = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (!file) return;
+
+      try {
+        setImageError("");
+        const src = await readImageFile(file);
+        if (imageUploadModeRef.current === "replace") {
+          const image = getSelectedImage();
+          if (!image) return;
+          image.src = src;
+          image.alt = file.name.replace(/\.[^.]+$/, "");
+          selectArticleImage(image);
+          syncHtml();
+          return;
+        }
+        insertArticleImage(src, file.name);
+      } catch (error) {
+        setImageError(error instanceof Error ? error.message : "图片添加失败");
+      }
+    },
+    [getSelectedImage, insertArticleImage, selectArticleImage, syncHtml],
+  );
+
+  const setArticleImageWidth = useCallback(
+    (width: number) => {
+      const image = getSelectedImage();
+      if (!image) return;
+      image.style.width = `${width}%`;
+      setSelectedImageWidth(width);
+      selectArticleImage(image);
+      syncHtml();
+    },
+    [getSelectedImage, selectArticleImage, syncHtml],
+  );
+
+  const setArticleImageAlign = useCallback(
+    (align: ArticleImageAlign) => {
+      const image = getSelectedImage();
+      const block = image?.closest<HTMLElement>("[data-local-image-block]");
+      if (!image || !block) return;
+      block.style.textAlign = align;
+      setSelectedImageAlign(align);
+      selectArticleImage(image);
+      syncHtml();
+    },
+    [getSelectedImage, selectArticleImage, syncHtml],
+  );
+
+  const moveArticleImage = useCallback(
+    (direction: "up" | "down") => {
+      const image = getSelectedImage();
+      const block = image?.closest<HTMLElement>("[data-local-image-block]");
+      if (!image || !block) return;
+      const sibling = direction === "up" ? block.previousElementSibling : block.nextElementSibling;
+      if (!sibling) return;
+      if (direction === "up") sibling.before(block);
+      else sibling.after(block);
+      selectArticleImage(image);
+      syncHtml();
+    },
+    [getSelectedImage, selectArticleImage, syncHtml],
+  );
+
+  const removeArticleImage = useCallback(() => {
+    const image = getSelectedImage();
+    const block = image?.closest<HTMLElement>("[data-local-image-block]");
+    if (!block) return;
+    block.remove();
+    setSelectedImageId(undefined);
+    syncHtml();
+  }, [getSelectedImage, syncHtml]);
+
+  const clearArticleImageDragState = useCallback(() => {
+    const editor = editableRef.current;
+    editor?.removeAttribute("data-image-dragging");
+    editor?.querySelectorAll("[data-editor-dragging], [data-editor-drop-position]").forEach((node) => {
+      node.removeAttribute("data-editor-dragging");
+      node.removeAttribute("data-editor-drop-position");
+    });
+    draggedArticleImageIdRef.current = undefined;
+    imageDropTargetRef.current = undefined;
+  }, []);
+
+  const handleArticleImageDragStart = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      const target = event.target instanceof HTMLElement ? event.target : undefined;
+      const block = target?.closest<HTMLElement>("[data-local-image-block]");
+      const image = block?.querySelector<HTMLImageElement>("img[data-local-image-id]");
+      if (!block || !image) return;
+      const id = image.dataset.localImageId;
+      if (!id) return;
+      draggedArticleImageIdRef.current = id;
+      block.dataset.editorDragging = "true";
+      editableRef.current?.setAttribute("data-image-dragging", "true");
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", id);
+      selectArticleImage(image);
+    },
+    [selectArticleImage],
+  );
+
+  const handleArticleImageDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    const editor = editableRef.current;
+    const draggedId = draggedArticleImageIdRef.current;
+    if (!editor || !draggedId) return;
+    const contentRoot = getArticleContentRoot(editor);
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    editor.querySelectorAll("[data-editor-drop-position]").forEach((node) => node.removeAttribute("data-editor-drop-position"));
+
+    let target = event.target instanceof HTMLElement ? event.target : undefined;
+    if (!target || target === editor || target === contentRoot) {
+      imageDropTargetRef.current = { append: true };
+      return;
+    }
+    while (target.parentElement && target.parentElement !== contentRoot) target = target.parentElement;
+    if (target.parentElement !== contentRoot) {
+      imageDropTargetRef.current = { append: true };
+      return;
+    }
+    if (target.querySelector(`img[data-local-image-id="${draggedId}"]`)) {
+      imageDropTargetRef.current = undefined;
+      return;
+    }
+
+    const rect = target.getBoundingClientRect();
+    const position = event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+    target.dataset.editorDropPosition = position;
+    imageDropTargetRef.current = { element: target, position };
+  }, []);
+
+  const handleArticleImageDrop = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      const editor = editableRef.current;
+      const draggedId = draggedArticleImageIdRef.current;
+      const dropTarget = imageDropTargetRef.current;
+      if (!editor || !draggedId) return;
+      const contentRoot = getArticleContentRoot(editor);
+      event.preventDefault();
+      const image = editor.querySelector<HTMLImageElement>(`img[data-local-image-id="${draggedId}"]`);
+      const block = image?.closest<HTMLElement>("[data-local-image-block]");
+      if (!image || !block || !dropTarget) {
+        clearArticleImageDragState();
+        return;
+      }
+
+      if ("append" in dropTarget) contentRoot.appendChild(block);
+      else if (dropTarget.position === "before") dropTarget.element.before(block);
+      else dropTarget.element.after(block);
+
+      clearArticleImageDragState();
+      selectArticleImage(image);
+      syncHtml();
+    },
+    [clearArticleImageDragState, selectArticleImage, syncHtml],
+  );
+
   const handlePaste = useCallback(
     (event: React.ClipboardEvent<HTMLDivElement>) => {
+      const imageFiles = Array.from(event.clipboardData.files).filter((file) => supportedImageTypes.has(file.type));
+      if (imageFiles.length > 0) {
+        event.preventDefault();
+        captureSelection();
+        void (async () => {
+          for (const file of imageFiles) {
+            try {
+              insertArticleImage(await readImageFile(file), file.name || "粘贴图片");
+            } catch (error) {
+              setImageError(error instanceof Error ? error.message : "图片粘贴失败");
+            }
+          }
+        })();
+        return;
+      }
       event.preventDefault();
       document.execCommand("insertText", false, event.clipboardData.getData("text/plain"));
       syncHtml();
     },
-    [syncHtml],
+    [captureSelection, insertArticleImage, syncHtml],
   );
 
   return (
     <div className="min-h-[620px] rounded-2xl border border-slate-200 bg-white p-5 md:p-7">
+      <input
+        id="article-image-upload"
+        ref={articleImageInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        className="hidden"
+        onChange={handleArticleImageUpload}
+      />
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
         <div className="flex flex-wrap items-center gap-1">
           <Button
@@ -1409,6 +2182,24 @@ function EditablePreview({ html, hasChanges, onHtmlChange, onReset }: EditablePr
                   <Icon className="h-4 w-4" />
                 </Button>
               ))}
+              <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 rounded-lg px-3"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  captureSelection();
+                }}
+                onClick={() => {
+                  imageUploadModeRef.current = "insert";
+                  articleImageInputRef.current?.click();
+                }}
+              >
+                <ImagePlus className="mr-1.5 h-4 w-4" />
+                插入图片
+              </Button>
             </>
           )}
         </div>
@@ -1423,6 +2214,91 @@ function EditablePreview({ html, hasChanges, onHtmlChange, onReset }: EditablePr
           )}
         </div>
       </div>
+      {imageError && <div className="mb-3 text-xs text-red-600">{imageError}</div>}
+      {isEditing && selectedImageId && (
+        <div className="mb-3 flex flex-wrap items-center gap-1 rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
+          <div className="mr-2 flex items-center gap-1">
+            {[25, 50, 75, 100].map((width) => (
+              <Button
+                key={width}
+                type="button"
+                variant={selectedImageWidth === width ? "default" : "ghost"}
+                size="sm"
+                className="h-8 rounded-lg px-2 text-xs"
+                onClick={() => setArticleImageWidth(width)}
+              >
+                {width}%
+              </Button>
+            ))}
+          </div>
+          {([
+            ["left", "左对齐", AlignLeft],
+            ["center", "居中", AlignCenter],
+            ["right", "右对齐", AlignRight],
+          ] as const).map(([align, label, Icon]) => (
+            <Button
+              key={align}
+              type="button"
+              variant={selectedImageAlign === align ? "default" : "ghost"}
+              size="icon"
+              className="h-8 w-8 rounded-lg"
+              title={label}
+              aria-label={label}
+              onClick={() => setArticleImageAlign(align)}
+            >
+              <Icon className="h-4 w-4" />
+            </Button>
+          ))}
+          <span className="mx-1 h-5 w-px bg-slate-200" aria-hidden="true" />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-lg"
+            title="上移图片"
+            aria-label="上移图片"
+            onClick={() => moveArticleImage("up")}
+          >
+            <ArrowUp className="h-4 w-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-lg"
+            title="下移图片"
+            aria-label="下移图片"
+            onClick={() => moveArticleImage("down")}
+          >
+            <ArrowDown className="h-4 w-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-lg"
+            title="替换图片"
+            aria-label="替换图片"
+            onClick={() => {
+              imageUploadModeRef.current = "replace";
+              articleImageInputRef.current?.click();
+            }}
+          >
+            <Replace className="h-4 w-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-lg text-red-600 hover:text-red-700"
+            title="删除图片"
+            aria-label="删除图片"
+            onClick={removeArticleImage}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
       <div
         ref={editableRef}
         contentEditable={isEditing}
@@ -1432,13 +2308,29 @@ function EditablePreview({ html, hasChanges, onHtmlChange, onReset }: EditablePr
         aria-label="文章效果编辑区"
         tabIndex={0}
         spellCheck={false}
-        onInput={syncHtml}
+        onInput={() => {
+          captureSelection();
+          syncHtml();
+        }}
         onBlur={syncHtml}
         onPaste={handlePaste}
+        onDragStart={handleArticleImageDragStart}
+        onDragOver={handleArticleImageDragOver}
+        onDrop={handleArticleImageDrop}
+        onDragEnd={clearArticleImageDragState}
+        onKeyUp={captureSelection}
+        onMouseUp={captureSelection}
         onClick={(event) => {
           if (isEditing && event.target instanceof HTMLAnchorElement) event.preventDefault();
+          if (!isEditing) return;
+          if (event.target instanceof HTMLImageElement) {
+            selectArticleImage(event.target);
+            return;
+          }
+          editableRef.current?.querySelectorAll("img[data-editor-selected]").forEach((node) => node.removeAttribute("data-editor-selected"));
+          setSelectedImageId(undefined);
         }}
-        className={`min-h-[560px] rounded-xl outline-none transition ${
+        className={`preview-editor min-h-[560px] rounded-xl outline-none transition ${
           isEditing
             ? "cursor-text border border-dashed border-slate-300 bg-white p-3 focus:border-slate-500 focus:ring-2 focus:ring-slate-900/10"
             : "cursor-default border border-transparent p-3"
