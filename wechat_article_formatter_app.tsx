@@ -137,6 +137,15 @@ const textImagePresets = {
     highlight: "#ECEBE7",
     dots: "#D6D3D1",
   },
+  dark: {
+    name: "黑底白字卡",
+    background: "#0B0B0C",
+    title: "#FFFFFF",
+    body: "#E5E7EB",
+    rule: "#3F3F46",
+    highlight: "#242427",
+    dots: "#52525B",
+  },
   teal: {
     name: "青绿知识卡",
     background: "#F7FFFC",
