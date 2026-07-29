@@ -198,6 +198,7 @@ type TextImagePage = {
   focus?: string;
   body: string;
   density: TextImageDensity;
+  fontScale?: number;
   layout?: TextImageLayoutSettings;
   stickers?: TextImageSticker[];
   pageNumber: number;
@@ -349,17 +350,28 @@ function getTextImageLayoutSettings(page: TextImagePageDraft | TextImagePage) {
 function getTextImageProfile(page: TextImagePageDraft | TextImagePage) {
   const base = textImageDensityProfiles[page.density ?? "regular"];
   const layout = getTextImageLayoutSettings(page);
+  const fontScale = page.fontScale ?? 1;
+  const scaleFont = (value: number) => Math.max(1, Math.round(value * fontScale));
+  const scaleLine = (value: number) => scaleTextImageSpacing(scaleFont(value), layout.lineSpacing);
+  const scaleGap = (value: number, spacing: number) => scaleTextImageSpacing(scaleFont(value), spacing);
   return {
     ...base,
-    titleLine: scaleTextImageSpacing(base.titleLine, layout.lineSpacing),
-    focusLine: scaleTextImageSpacing(base.focusLine, layout.lineSpacing),
-    headingLine: scaleTextImageSpacing(base.headingLine, layout.lineSpacing),
-    bodyLine: scaleTextImageSpacing(base.bodyLine, layout.lineSpacing),
-    titleFocusGap: scaleTextImageSpacing(base.titleFocusGap, layout.titleSpacing),
-    titleBodyGap: scaleTextImageSpacing(base.titleBodyGap, layout.titleSpacing),
-    focusAfterGap: scaleTextImageSpacing(base.focusAfterGap, layout.paragraphSpacing),
-    headingAfterGap: scaleTextImageSpacing(base.headingAfterGap, layout.paragraphSpacing),
-    bodyAfterGap: scaleTextImageSpacing(base.bodyAfterGap, layout.paragraphSpacing),
+    titleSize: scaleFont(base.titleSize),
+    titleLine: scaleLine(base.titleLine),
+    titleHighlightY: scaleFont(base.titleHighlightY),
+    titleHighlightHeight: scaleFont(base.titleHighlightHeight),
+    titleFocusGap: scaleGap(base.titleFocusGap, layout.titleSpacing),
+    titleBodyGap: scaleGap(base.titleBodyGap, layout.titleSpacing),
+    focusSize: scaleFont(base.focusSize),
+    focusLine: scaleLine(base.focusLine),
+    focusPaddingY: scaleFont(base.focusPaddingY),
+    focusAfterGap: scaleGap(base.focusAfterGap, layout.paragraphSpacing),
+    headingSize: scaleFont(base.headingSize),
+    headingLine: scaleLine(base.headingLine),
+    headingAfterGap: scaleGap(base.headingAfterGap, layout.paragraphSpacing),
+    bodySize: scaleFont(base.bodySize),
+    bodyLine: scaleLine(base.bodyLine),
+    bodyAfterGap: scaleGap(base.bodyAfterGap, layout.paragraphSpacing),
   };
 }
 
@@ -592,13 +604,33 @@ function pageFitsCanvas(ctx: CanvasRenderingContext2D, page: TextImagePageDraft,
   return measureTextImagePage(ctx, page, ratioKey) <= ratio.height - bottomPadding;
 }
 
+function fitPageFontScale(ctx: CanvasRenderingContext2D, page: TextImagePageDraft, ratioKey: TextImageRatioKey) {
+  const basePage = { ...page, fontScale: 1 };
+  if (pageFitsCanvas(ctx, basePage, ratioKey)) return basePage;
+
+  const minimumScale = 0.62;
+  const smallestPage = { ...basePage, fontScale: minimumScale };
+  if (!pageFitsCanvas(ctx, smallestPage, ratioKey)) return smallestPage;
+
+  let low = minimumScale;
+  let high = 1;
+  for (let index = 0; index < 16; index += 1) {
+    const middle = (low + high) / 2;
+    if (pageFitsCanvas(ctx, { ...basePage, fontScale: middle }, ratioKey)) low = middle;
+    else high = middle;
+  }
+
+  return { ...basePage, fontScale: Math.round(low * 100) / 100 };
+}
+
 function fitPageDensity(ctx: CanvasRenderingContext2D, page: TextImagePageDraft, ratioKey: TextImageRatioKey) {
-  const densities: TextImageDensity[] = ["regular", "compact", "dense"];
+  const densities: TextImageDensity[] = page.density ? [page.density] : ["regular", "compact", "dense"];
   for (const density of densities) {
     const candidate = { ...page, density };
-    if (pageFitsCanvas(ctx, candidate, ratioKey)) return candidate;
+    const fitted = fitPageFontScale(ctx, candidate, ratioKey);
+    if (fitted.fontScale === 1 || density === densities[densities.length - 1]) return fitted;
   }
-  return { ...page, density: "dense" as const };
+  return fitPageFontScale(ctx, { ...page, density: "dense" }, ratioKey);
 }
 
 function splitParagraphForCanvas(paragraph: string, ratioKey: TextImageRatioKey) {
@@ -1112,14 +1144,13 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
         const currentPages = current.generationKey === generationKey ? current.pages : generatedPages;
         const currentChangedIndexes = current.generationKey === generationKey ? current.changedPageIndexes : [];
         const nextPages = currentPages.map((page, index) =>
-          index === safeSelectedPageIndex
-            ? {
-                ...page,
-                ...patch,
-                focus: patch.focus === "" ? undefined : patch.focus ?? page.focus,
-              }
-            : page,
+          index === safeSelectedPageIndex ? { ...page, ...patch, focus: patch.focus === "" ? undefined : patch.focus ?? page.focus } : page,
         );
+        const measureContext = createMeasureContext(ratioKey);
+        const fittedPage = measureContext
+          ? fitPageDensity(measureContext, nextPages[safeSelectedPageIndex], ratioKey)
+          : nextPages[safeSelectedPageIndex];
+        nextPages[safeSelectedPageIndex] = { ...nextPages[safeSelectedPageIndex], ...fittedPage };
         return {
           generationKey,
           pages: nextPages,
@@ -1127,7 +1158,7 @@ function TextImageGenerator({ articleText }: { articleText: string }) {
         };
       });
     },
-    [generatedPages, generationKey, safeSelectedPageIndex, selectedPage],
+    [generatedPages, generationKey, ratioKey, safeSelectedPageIndex, selectedPage],
   );
 
   const updateSelectedPageSpacing = useCallback(
@@ -2427,7 +2458,7 @@ export default function WechatArticleFormatterApp() {
       <div className="mx-auto max-w-7xl">
         <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight text-slate-900">微信公众号文章自动排版器</h1>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900">自媒体内容排版器</h1>
             <p className="mt-2 text-sm text-slate-600">纯前端排版工具：输入文章，选择风格，一键复制到公众号编辑器。</p>
           </div>
           <div className="flex flex-wrap gap-2">
