@@ -1,0 +1,24 @@
+{
+  "id": "T007",
+  "dependencies": ["T002", "T003", "T004", "T005"],
+  "wave": 3,
+  "executor": "cloud",
+  "recommended_model": "gpt-5.3-codex-spark",
+  "risk": "medium",
+  "status": "pending",
+  "verification_commands": [
+    "npx vitest run lib/export lib/copy-rich-text.test.ts",
+    "npx tsc --noEmit",
+    "npm run lint -- lib/export lib/copy-rich-text.ts"
+  ],
+  "allowed_paths": [
+    "lib/export/",
+    "lib/copy-rich-text.ts",
+    "lib/copy-rich-text.test.ts"
+  ],
+  "excluded_snapshot_paths": [
+    "node_modules/",
+    ".next/",
+    "coverage/"
+  ]
+}

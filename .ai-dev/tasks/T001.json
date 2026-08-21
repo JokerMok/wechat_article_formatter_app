@@ -1,0 +1,27 @@
+{
+  "id": "T001",
+  "dependencies": [],
+  "wave": 1,
+  "executor": "cloud",
+  "risk": "high",
+  "status": "pending",
+  "verification_commands": [
+    "npx vitest run lib/article-parser.test.ts lib/content",
+    "npx tsc --noEmit",
+    "npm run lint -- lib/article-types.ts lib/article-parser.ts lib/content lib/platforms/types.ts"
+  ],
+  "allowed_paths": [
+    "package.json",
+    "package-lock.json",
+    "lib/article-types.ts",
+    "lib/article-parser.ts",
+    "lib/article-parser.test.ts",
+    "lib/content/",
+    "lib/platforms/types.ts"
+  ],
+  "excluded_snapshot_paths": [
+    "node_modules/",
+    ".next/",
+    "coverage/"
+  ]
+}

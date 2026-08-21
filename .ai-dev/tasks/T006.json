@@ -1,0 +1,22 @@
+{
+  "id": "T006",
+  "dependencies": ["T001"],
+  "wave": 2,
+  "executor": "cloud",
+  "risk": "high",
+  "status": "pending",
+  "verification_commands": [
+    "npx vitest run lib/ai",
+    "npx tsc --noEmit",
+    "npm run lint -- lib/ai tests/fixtures/ai"
+  ],
+  "allowed_paths": [
+    "lib/ai/",
+    "tests/fixtures/ai/"
+  ],
+  "excluded_snapshot_paths": [
+    "node_modules/",
+    ".next/",
+    "coverage/"
+  ]
+}

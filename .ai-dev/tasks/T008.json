@@ -1,0 +1,30 @@
+{
+  "id": "T008",
+  "dependencies": ["T002", "T003", "T004", "T005", "T006"],
+  "wave": 3,
+  "executor": "cloud",
+  "recommended_model": "gpt-5.3-codex-spark",
+  "risk": "high",
+  "status": "pending",
+  "verification_commands": [
+    "npx vitest run components/workspace",
+    "npx tsc --noEmit",
+    "npm run lint -- app components/workspace components/ui/dialog.tsx components/ui/slider.tsx components/ui/toggle.tsx components/ui/tooltip.tsx",
+    "npm run build"
+  ],
+  "allowed_paths": [
+    "app/page.tsx",
+    "app/layout.tsx",
+    "app/globals.css",
+    "components/workspace/",
+    "components/ui/dialog.tsx",
+    "components/ui/slider.tsx",
+    "components/ui/toggle.tsx",
+    "components/ui/tooltip.tsx"
+  ],
+  "excluded_snapshot_paths": [
+    "node_modules/",
+    ".next/",
+    "coverage/"
+  ]
+}
