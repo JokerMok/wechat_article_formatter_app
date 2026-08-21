@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseArticle } from "./article-parser";
+import { articleContentToBlocks, parseArticle, parseArticleContent } from "./article-parser";
+import type { PlatformVersion } from "./platforms/types";
 
 describe("parseArticle", () => {
   it("parses markdown headings, paragraphs, lists, images, and CTA blocks", () => {
@@ -93,5 +94,80 @@ font-weight: 800;">你把逻辑解释清楚，不代表老板会觉得够。`);
       { type: "title", text: "文章主标题" },
       { type: "paragraph", text: "正文内容" },
     ]);
+  });
+
+  it("creates unified content with source positions and compatible ArticleBlock conversion", () => {
+    const raw = `# 主标题
+
+## 一、核心变化
+
+正文第一行
+正文第二行
+
+---
+
+<!-- pagebreak -->
+
+> 关键判断：排版应该服务阅读。`;
+
+    const content = parseArticleContent(raw);
+
+    expect(content.sourceFormat).toBe("markdown");
+    expect(content.blocks.map((block) => block.type)).toEqual(["title", "section", "paragraph", "divider", "pageBreak", "quote"]);
+    expect(content.blocks[2]).toMatchObject({
+      type: "paragraph",
+      text: "正文第一行正文第二行",
+      plainText: "正文第一行正文第二行",
+      markdown: "正文第一行\n正文第二行",
+      source: {
+        startLine: 5,
+        endLine: 6,
+      },
+    });
+    expect(articleContentToBlocks(content)).toEqual(parseArticle(raw));
+  });
+
+  it("normalizes damaged rich text without dropping valid body text", () => {
+    const content = parseArticleContent(
+      [
+        "文章主标题",
+        "",
+        "##   ",
+        ">",
+        '<span style="font-weight: 800;" onclick="evil()">有效文字</span>',
+        '<script>alert("x")</script>普通文字',
+      ].join("\n")
+    );
+
+    expect(content.blocks.map((block) => block.type)).toEqual(["title", "paragraph"]);
+    expect(content.blocks[1]).toMatchObject({
+      type: "paragraph",
+      text: "有效文字普通文字",
+    });
+    expect(content.sourceText).toContain("onclick");
+    expect(content.blocks[1]?.text).not.toMatch(/onclick|script|font-weight|evil|alert/);
+  });
+
+  it("keeps plain text source format and platform version type contract", () => {
+    const content = parseArticleContent(`普通文章标题
+
+第一段正文，不应该丢失。`);
+    const platformVersion: PlatformVersion = {
+      platform: "wechat",
+      status: "draft",
+      title: "普通文章标题",
+      content,
+      updatedAt: "2026-08-21T00:00:00.000Z",
+    };
+
+    expect(content.sourceFormat).toBe("plainText");
+    expect(content.blocks[1]).toMatchObject({
+      type: "paragraph",
+      source: {
+        startLine: 3,
+        endLine: 3,
+      },
+    });
+    expect(platformVersion.platform).toBe("wechat");
   });
 });

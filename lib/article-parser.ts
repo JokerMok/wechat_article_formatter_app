@@ -1,53 +1,128 @@
 import type { ArticleBlock, ArticleParseMode } from "./article-types";
+import type {
+  ArticleContentParseOptions,
+  ArticleSourceFormat,
+  SourcePosition,
+  UnifiedArticleBlock,
+  UnifiedArticleContent,
+} from "./content";
 
 type SourceLine = {
   text: string;
+  markdown: string;
+  sourceText: string;
+  lineNumber: number;
+  startOffset: number;
+  endOffset: number;
   headingLevel?: number;
   quoted?: boolean;
+  divider?: boolean;
+  pageBreak?: boolean;
+  sanitized?: boolean;
 };
 
-type ParseOptions = {
-  mode?: ArticleParseMode;
+type NormalizedText = {
+  text: string;
+  sanitized: boolean;
 };
 
-function stripInlineMarkdown(text: string) {
-  return text
+type ParseOptions = ArticleContentParseOptions;
+
+function normalizeInlineText(text: string): NormalizedText {
+  const original = text;
+  const normalized = text
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/\s(?:href|src)\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*'|javascript:[^\s>]+)/gi, "")
     .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, url) => `图片：${alt || url}`)
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
-    .replace(/font-weight:\s*800;?["”]?(?:&gt;|>)/g, "")
+    .replace(/<\/?[^>]+>/g, "")
+    .replace(/(?:^|\s)(?:style\s*=\s*)?["“”']?[^<>]*(?:font-weight|font-size|line-height|text-align|color|background|margin|padding)\s*:[^>]*>/gi, "")
+    .replace(/&gt;/g, ">")
     .trim();
+
+  return {
+    text: normalized,
+    sanitized: normalized !== original.trim(),
+  };
+}
+
+function detectSourceFormat(raw: string): ArticleSourceFormat {
+  return /(^|\n)\s{0,3}(#{1,6}\s+\S|(?:>|&gt;|＞)\s*\S|[-*+•]\s+\S|\d+[.)）]\s+\S|!\[[^\]]*]\([^)]+\)|\[.+]\(.+\)|-{3,}|<!--\s*pagebreak\s*-->)/i.test(raw)
+    ? "markdown"
+    : "plainText";
 }
 
 function normalizeInput(raw: string): SourceLine[] {
-  return raw
-    .replace(/\r\n/g, "\n")
-    .replace(/```[\s\S]*?```/g, "")
-    .split("\n")
-    .map((rawLine) => {
-      const trimmed = rawLine.trim();
-      if (!trimmed) return { text: "" };
-      if (/^(>|&gt;|＞)$/.test(trimmed)) return { text: "" };
+  const normalizedRaw = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const rawLines = normalizedRaw.split("\n");
+  let offset = 0;
+  let inFence = false;
 
-      const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
-      if (heading) {
-        return {
-          text: stripInlineMarkdown(heading[2]),
-          headingLevel: heading[1].length,
-        };
-      }
+  return rawLines.map((rawLine, index) => {
+    const lineNumber = index + 1;
+    const startOffset = offset;
+    const endOffset = startOffset + rawLine.length;
+    offset = endOffset + 1;
 
-      const quote = trimmed.match(/^>\s?(.+)$/);
-      if (quote) {
-        const quoteText = stripInlineMarkdown(quote[1]);
-        if (!quoteText) return { text: "" };
-        return {
-          text: quoteText,
-          quoted: true,
-        };
-      }
+    const trimmed = rawLine.trim();
+    const base = {
+      sourceText: rawLine,
+      lineNumber,
+      startOffset,
+      endOffset,
+    };
 
-      return { text: stripInlineMarkdown(trimmed) };
-    });
+    if (/^```/.test(trimmed)) {
+      inFence = !inFence;
+      return { ...base, text: "", markdown: rawLine };
+    }
+
+    if (inFence || !trimmed) return { ...base, text: "", markdown: rawLine };
+    if (/^(>|&gt;|＞)$/.test(trimmed)) return { ...base, text: "", markdown: rawLine };
+
+    if (/^<!--\s*(pagebreak|分页)\s*-->$/i.test(trimmed) || /^\[(pagebreak|分页)]$/i.test(trimmed)) {
+      return { ...base, text: "pageBreak", markdown: trimmed, pageBreak: true };
+    }
+
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      return { ...base, text: "divider", markdown: trimmed, divider: true };
+    }
+
+    const heading = trimmed.match(/^(#{1,6})\s*(.*)$/);
+    if (heading) {
+      const headingText = normalizeInlineText(heading[2]);
+      if (!headingText.text) return { ...base, text: "", markdown: rawLine, sanitized: headingText.sanitized };
+      return {
+        ...base,
+        text: headingText.text,
+        markdown: headingText.text,
+        headingLevel: heading[1].length,
+        sanitized: headingText.sanitized,
+      };
+    }
+
+    const quote = trimmed.match(/^(?:>|&gt;|＞)\s*(.*)$/);
+    if (quote) {
+      const quoteText = normalizeInlineText(quote[1]);
+      if (!quoteText.text) return { ...base, text: "", markdown: rawLine, sanitized: quoteText.sanitized };
+      return {
+        ...base,
+        text: quoteText.text,
+        markdown: `> ${quoteText.text}`,
+        quoted: true,
+        sanitized: quoteText.sanitized,
+      };
+    }
+
+    const normalizedText = normalizeInlineText(trimmed);
+    return {
+      ...base,
+      text: normalizedText.text,
+      markdown: normalizedText.text,
+      sanitized: normalizedText.sanitized,
+    };
+  });
 }
 
 function looksLikeLead(text: string) {
@@ -88,13 +163,13 @@ function normalizeBullet(line: SourceLine) {
 
 function isImagePlaceholder(line: SourceLine) {
   const t = line.text.trim();
-  return /^(图片|配图|图示|插图|此处插入|image)[:：\s]/i.test(t) || /^\[[^\]]*(图片|配图|image)[^\]]*\]$/i.test(t);
+  return /^(图片|配图|图示|插图|此处插入|image)[:：\s]/i.test(t) || /^\[[^\]]*(图片|配图|image)[^\]]*]$/i.test(t);
 }
 
 function normalizeImagePlaceholder(line: SourceLine) {
   const t = line.text.trim();
-  if (/^\[[^\]]+\]$/.test(t)) {
-    return t.replace(/^\[/, "").replace(/\]$/, "");
+  if (/^\[[^\]]+]$/.test(t)) {
+    return t.replace(/^\[/, "").replace(/]$/, "");
   }
   return t.replace(/^(图片|配图|图示|插图|此处插入|image)[:：\s]*/i, "此处插入：");
 }
@@ -145,10 +220,71 @@ function shouldPromoteGolden(text: string, mode: ArticleParseMode) {
   return isGoldenSentence(text);
 }
 
-export function parseArticle(raw: string, options: ParseOptions = {}): ArticleBlock[] {
+function makeSourcePosition(lines: SourceLine[]): SourcePosition {
+  const first = lines[0];
+  const last = lines[lines.length - 1];
+
+  return {
+    startLine: first.lineNumber,
+    endLine: last.lineNumber,
+    startOffset: first.startOffset,
+    endOffset: last.endOffset,
+    sourceText: lines.map((line) => line.sourceText).join("\n"),
+  };
+}
+
+function makeTextBlock(
+  id: string,
+  type: Exclude<ArticleBlock["type"], "list" | "card">,
+  text: string,
+  lines: SourceLine[],
+  markdown = lines.map((line) => line.markdown).join("\n")
+): UnifiedArticleBlock {
+  return {
+    id,
+    type,
+    text,
+    plainText: text,
+    markdown,
+    source: makeSourcePosition(lines),
+  };
+}
+
+function makeStructuralBlock(id: string, type: "divider" | "pageBreak", line: SourceLine): UnifiedArticleBlock {
+  return {
+    id,
+    type,
+    text: type,
+    plainText: type,
+    markdown: line.markdown,
+    source: makeSourcePosition([line]),
+  };
+}
+
+function hasSanitizedText(lines: SourceLine[]) {
+  return lines.some((line) => line.sanitized);
+}
+
+function isStructuralLine(line: SourceLine) {
+  return line.divider || line.pageBreak;
+}
+
+export function parseArticleContent(raw: string, options: ParseOptions = {}): UnifiedArticleContent {
   const mode = options.mode ?? "narrative";
   const lines = normalizeInput(raw);
-  const blocks: ArticleBlock[] = [];
+  const blocks: UnifiedArticleBlock[] = [];
+  const warnings: UnifiedArticleContent["warnings"] = [];
+
+  const pushBlock = (block: UnifiedArticleBlock, sourceLines: SourceLine[]) => {
+    blocks.push(block);
+    if (hasSanitizedText(sourceLines)) {
+      warnings.push({
+        code: "sanitized_rich_text",
+        message: "Removed pasted style or unsafe rich-text fragments.",
+        source: block.source,
+      });
+    }
+  };
 
   let i = 0;
   while (i < lines.length) {
@@ -158,64 +294,104 @@ export function parseArticle(raw: string, options: ParseOptions = {}): ArticleBl
       continue;
     }
 
+    const id = `block-${blocks.length + 1}`;
+
+    if (line.divider) {
+      pushBlock(makeStructuralBlock(id, "divider", line), [line]);
+      i += 1;
+      continue;
+    }
+
+    if (line.pageBreak) {
+      pushBlock(makeStructuralBlock(id, "pageBreak", line), [line]);
+      i += 1;
+      continue;
+    }
+
     if (isLikelyMainTitle(line, blocks.length)) {
-      blocks.push({ type: "title", text: line.text });
+      pushBlock(makeTextBlock(id, "title", line.text, [line]), [line]);
       i += 1;
       continue;
     }
 
     if (isImagePlaceholder(line)) {
-      blocks.push({ type: "image", text: normalizeImagePlaceholder(line) });
+      pushBlock(makeTextBlock(id, "image", normalizeImagePlaceholder(line), [line]), [line]);
       i += 1;
       continue;
     }
 
     if (isSectionTitle(line)) {
-      blocks.push({ type: "section", text: line.text });
+      pushBlock(makeTextBlock(id, "section", line.text, [line]), [line]);
       i += 1;
       continue;
     }
 
     if (isSubTitle(line)) {
-      blocks.push({ type: "subsection", text: line.text });
+      pushBlock(makeTextBlock(id, "subsection", line.text, [line]), [line]);
       i += 1;
       continue;
     }
 
     const lineCard = parseExplicitCard(line.text, mode);
     if (lineCard && !line.quoted) {
-      blocks.push({ type: "card", title: lineCard.title, body: lineCard.body });
+      pushBlock(
+        {
+          id,
+          type: "card",
+          title: lineCard.title,
+          body: lineCard.body,
+          text: `${lineCard.title}：${lineCard.body}`,
+          plainText: `${lineCard.title}：${lineCard.body}`,
+          markdown: line.markdown,
+          source: makeSourcePosition([line]),
+        },
+        [line]
+      );
       i += 1;
       continue;
     }
 
     if (shouldPromoteQuote(line, mode)) {
-      blocks.push({ type: "quote", text: line.text });
+      pushBlock(makeTextBlock(id, "quote", line.text, [line]), [line]);
       i += 1;
       continue;
     }
 
     if (isCTA(line.text)) {
-      blocks.push({ type: "cta", text: line.text });
+      pushBlock(makeTextBlock(id, "cta", line.text, [line]), [line]);
       i += 1;
       continue;
     }
 
     if (isBullet(line)) {
+      const itemLines: SourceLine[] = [];
       const items: string[] = [];
       while (i < lines.length && isBullet(lines[i])) {
+        itemLines.push(lines[i]);
         items.push(normalizeBullet(lines[i]));
         i += 1;
       }
-      blocks.push({ type: "list", items });
+      pushBlock(
+        {
+          id,
+          type: "list",
+          items,
+          text: items.join(""),
+          plainText: items.join("\n"),
+          markdown: itemLines.map((item) => item.markdown).join("\n"),
+          source: makeSourcePosition(itemLines),
+        },
+        itemLines
+      );
       continue;
     }
 
-    const paragraphLines = [line.text];
+    const paragraphLines = [line];
     let j = i + 1;
     while (
       j < lines.length &&
       lines[j].text &&
+      !isStructuralLine(lines[j]) &&
       !isSectionTitle(lines[j]) &&
       !isSubTitle(lines[j]) &&
       !isBullet(lines[j]) &&
@@ -224,28 +400,87 @@ export function parseArticle(raw: string, options: ParseOptions = {}): ArticleBl
       !shouldPromoteQuote(lines[j], mode) &&
       !parseExplicitCard(lines[j].text, mode)
     ) {
-      paragraphLines.push(lines[j].text);
+      paragraphLines.push(lines[j]);
       j += 1;
     }
 
-    const paragraph = paragraphLines.join("");
+    const paragraph = paragraphLines.map((paragraphLine) => paragraphLine.text).join("");
+    const markdown = paragraphLines.map((paragraphLine) => paragraphLine.markdown).join("\n");
     if (blocks.length === 1 && blocks[0].type === "title" && looksLikeLead(paragraph)) {
-      blocks.push({ type: "lead", text: paragraph });
+      pushBlock(makeTextBlock(id, "lead", paragraph, paragraphLines, markdown), paragraphLines);
     } else if (shouldPromoteGolden(paragraph, mode)) {
-      blocks.push({ type: "golden", text: paragraph });
+      pushBlock(makeTextBlock(id, "golden", paragraph, paragraphLines, markdown), paragraphLines);
     } else if (isSummaryIntro(paragraph)) {
-      blocks.push({ type: "summary", text: paragraph });
+      pushBlock(makeTextBlock(id, "summary", paragraph, paragraphLines, markdown), paragraphLines);
     } else {
       const explicitCard = parseExplicitCard(paragraph, mode);
       if (explicitCard) {
-        blocks.push({ type: "card", title: explicitCard.title, body: explicitCard.body });
+        pushBlock(
+          {
+            id,
+            type: "card",
+            title: explicitCard.title,
+            body: explicitCard.body,
+            text: `${explicitCard.title}：${explicitCard.body}`,
+            plainText: `${explicitCard.title}：${explicitCard.body}`,
+            markdown,
+            source: makeSourcePosition(paragraphLines),
+          },
+          paragraphLines
+        );
       } else {
-        blocks.push({ type: "paragraph", text: paragraph });
+        pushBlock(makeTextBlock(id, "paragraph", paragraph, paragraphLines, markdown), paragraphLines);
       }
     }
 
     i = j;
   }
 
-  return blocks;
+  if (!blocks.length && raw.trim()) {
+    warnings.push({
+      code: "empty_input",
+      message: "No supported article blocks were produced from non-empty input.",
+    });
+  }
+
+  const title = blocks.find((block) => block.type === "title" && "text" in block)?.text;
+
+  return {
+    schemaVersion: 1,
+    sourceText: raw,
+    sourceFormat: detectSourceFormat(raw),
+    parseMode: mode,
+    title,
+    blocks,
+    warnings,
+  };
+}
+
+export function articleContentToBlocks(content: UnifiedArticleContent): ArticleBlock[] {
+  return content.blocks.flatMap((block): ArticleBlock[] => {
+    switch (block.type) {
+      case "title":
+      case "lead":
+      case "section":
+      case "subsection":
+      case "paragraph":
+      case "quote":
+      case "golden":
+      case "summary":
+      case "cta":
+      case "image":
+        return [{ type: block.type, text: block.text }];
+      case "list":
+        return [{ type: "list", items: block.items }];
+      case "card":
+        return [{ type: "card", title: block.title, body: block.body }];
+      case "divider":
+      case "pageBreak":
+        return [];
+    }
+  });
+}
+
+export function parseArticle(raw: string, options: ParseOptions = {}): ArticleBlock[] {
+  return articleContentToBlocks(parseArticleContent(raw, options));
 }
