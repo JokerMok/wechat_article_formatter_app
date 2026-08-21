@@ -159,7 +159,52 @@ function parseMarkdownImage(block: RenderableBlock) {
 
 function findImageNode(block: RenderableBlock, index: number, imageNodes: WechatImageNode[] = [], imageOrdinal = index) {
   const blockId = getBlockId(block, index);
-  return imageNodes.find((node) => node.blockId === blockId || node.id === blockId) ?? imageNodes[imageOrdinal];
+  const positionalNodes = imageNodes.filter((node) => !node.blockId);
+  return imageNodes.find((node) => node.blockId === blockId || node.id === blockId) ?? positionalNodes[imageOrdinal];
+}
+
+function resolveWechatImageNodeBindings(blocks: RenderableBlock[], imageNodes: WechatImageNode[] = []) {
+  const imageBlocks = blocks.flatMap((block, index) => {
+    if (block.type !== "image") {
+      return [];
+    }
+    return [{ index, blockId: getBlockId(block, index) }];
+  });
+  const imageBlockIndexById = new Map(imageBlocks.map((block) => [block.blockId, block.index]));
+  const resolved = new Map<number, WechatImageNode>();
+  const explicitNodeIndexes = new Set<number>();
+
+  imageNodes.forEach((node, nodeIndex) => {
+    const explicitBlockId = node.blockId ?? (node.id && imageBlockIndexById.has(node.id) ? node.id : undefined);
+
+    if (!explicitBlockId) {
+      return;
+    }
+
+    explicitNodeIndexes.add(nodeIndex);
+
+    const blockIndex = imageBlockIndexById.get(explicitBlockId);
+    if (blockIndex !== undefined && !resolved.has(blockIndex)) {
+      resolved.set(blockIndex, node);
+    }
+  });
+
+  const positionalNodes = imageNodes.filter((_, nodeIndex) => !explicitNodeIndexes.has(nodeIndex));
+  let positionalIndex = 0;
+
+  imageBlocks.forEach((imageBlock) => {
+    if (resolved.has(imageBlock.index)) {
+      return;
+    }
+
+    const positionalNode = positionalNodes[positionalIndex];
+    if (positionalNode) {
+      resolved.set(imageBlock.index, positionalNode);
+      positionalIndex += 1;
+    }
+  });
+
+  return resolved;
 }
 
 function imageWidth(width?: number) {
@@ -182,9 +227,15 @@ function imageMargin(align?: WechatImageNode["align"]) {
   return "0 auto";
 }
 
-function renderImage(block: RenderableBlock, template: StyleTemplate, index: number, options: WechatRenderOptions, imageOrdinal: number) {
+function renderImage(
+  block: RenderableBlock,
+  template: StyleTemplate,
+  index: number,
+  options: WechatRenderOptions & { resolvedImageNodes?: Map<number, WechatImageNode> },
+  imageOrdinal: number
+) {
   const visual = template.visual;
-  const explicitNode = findImageNode(block, index, options.imageNodes, imageOrdinal);
+  const explicitNode = options.resolvedImageNodes ? options.resolvedImageNodes.get(index) : findImageNode(block, index, options.imageNodes, imageOrdinal);
   const parsedImage = parseMarkdownImage(block);
   const src = explicitNode?.src ?? parsedImage?.src;
   const alt = stripUnsafeRichText(explicitNode?.alt ?? parsedImage?.alt ?? getBlockText(block));
@@ -326,13 +377,15 @@ export function renderWechatBlockHtml(block: RenderableBlock, template: StyleTem
 
 export function renderWechatBlocksHtml(blocks: RenderableBlock[], options: WechatRenderOptions = {}) {
   const template = options.template ?? styleTemplates.zhenyiKnowledgeMinimal;
+  const resolvedImageNodes = resolveWechatImageNodeBindings(blocks, options.imageNodes);
+  const renderOptions = { ...options, resolvedImageNodes };
   let imageOrdinal = 0;
   const renderedBlocks = blocks.map((block, index) => {
     const currentImageOrdinal = imageOrdinal;
     if (block.type === "image") {
       imageOrdinal += 1;
     }
-    return renderWechatBlockHtml(block, template, index, options, currentImageOrdinal);
+    return renderWechatBlockHtml(block, template, index, renderOptions, currentImageOrdinal);
   });
 
   return `<section style="${toWechatStyle({ ...template.container, "font-family": template.fontFamily })}">\n${renderedBlocks.join("\n\n")}\n</section>`;
@@ -367,14 +420,14 @@ export function renderUnifiedWechatHtml(content: UnifiedArticleContent, template
 }
 
 export function collectWechatImageNodes(blocks: RenderableBlock[], imageNodes: WechatImageNode[] = []) {
-  let imageOrdinal = 0;
+  const resolvedImageNodes = resolveWechatImageNodeBindings(blocks, imageNodes);
+
   return blocks.flatMap((block, index): WechatImageNode[] => {
     if (block.type !== "image") {
       return [];
     }
 
-    const explicitNode = findImageNode(block, index, imageNodes, imageOrdinal);
-    imageOrdinal += 1;
+    const explicitNode = resolvedImageNodes.get(index);
     const parsedImage = parseMarkdownImage(block);
     const src = explicitNode?.src ?? parsedImage?.src;
 

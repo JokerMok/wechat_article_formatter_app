@@ -77,6 +77,79 @@ const n = 1 < 2 ? 3 : 4;
     expect(result.imageNodes.map((node) => node.src)).toEqual(imageNodes.map((node) => node.src));
   });
 
+  it("does not consume a second-block explicit image binding for the first image block", () => {
+    const content = parseArticleContent(`# 测试标题
+
+前置说明
+
+图片：原始图片一
+
+中间说明
+
+图片：原始图片二`);
+    const secondBlock = content.blocks.filter((block) => block.type === "image")[1];
+
+    if (!secondBlock) {
+      throw new Error("expected second image block");
+    }
+
+    const options = {
+      template: styleTemplates.zhenyiKnowledgeMinimal,
+      imageNodes: [{ blockId: secondBlock.id, src: "https://cdn.example/second-bound.png", alt: "第二张绑定图" }],
+    };
+    const html = renderWechatContentHtml(content, options);
+    const result = renderWechatContent(content, options);
+
+    expect(html).toContain("原始图片一");
+    expect(html).not.toContain('<img src="https://cdn.example/second-bound.png" alt="原始图片一"');
+    expect(html).toContain('<img src="https://cdn.example/second-bound.png" alt="第二张绑定图"');
+    expect(result.imageNodes.map((node) => node.src)).toEqual(["https://cdn.example/second-bound.png"]);
+    expect(result.imageNodes.map((node) => node.blockId)).toEqual([secondBlock.id]);
+  });
+
+  it("maps mixed bound and unbound image nodes to unbound image blocks in order", () => {
+    const content = parseArticleContent(`# 测试标题
+
+前置说明
+
+图片：原始图片一
+
+中间说明
+
+图片：原始图片二
+
+收尾说明
+
+图片：原始图片三`);
+    const imageBlocks = content.blocks.filter((block) => block.type === "image");
+    const secondBlock = imageBlocks[1];
+
+    if (!secondBlock) {
+      throw new Error("expected second image block");
+    }
+
+    const imageNodes = [
+      { blockId: secondBlock.id, src: "https://cdn.example/second-bound.png", alt: "第二张绑定图" },
+      { src: "https://cdn.example/first-positional.png", alt: "第一张位置图" },
+      { src: "https://cdn.example/third-positional.png", alt: "第三张位置图" },
+    ];
+    const options = {
+      template: styleTemplates.zhenyiKnowledgeMinimal,
+      imageNodes,
+    };
+    const html = renderWechatContentHtml(content, options);
+    const result = renderWechatContent(content, options);
+
+    expect(html.indexOf("https://cdn.example/first-positional.png")).toBeLessThan(html.indexOf("https://cdn.example/second-bound.png"));
+    expect(html.indexOf("https://cdn.example/second-bound.png")).toBeLessThan(html.indexOf("https://cdn.example/third-positional.png"));
+    expect(result.imageNodes.map((node) => node.src)).toEqual([
+      "https://cdn.example/first-positional.png",
+      "https://cdn.example/second-bound.png",
+      "https://cdn.example/third-positional.png",
+    ]);
+    expect(result.imageNodes.map((node) => node.blockId)).toEqual(imageBlocks.map((block) => block.id));
+  });
+
   it("deep-copies nested block fields in the render result", () => {
     const content = parseArticleContent(`- 第一项
 - 第二项`);
