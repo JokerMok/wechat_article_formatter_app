@@ -25,6 +25,13 @@ Playwright 默认使用固定端口 `3003` 自动启动当前应用：
 npx playwright test
 ```
 
+## 自动化验收范围
+
+- `TEST-025` 使用真实 Playwright 流程覆盖固定 12 篇文章的 48 个平台版本：每篇文章生成微信公众号、小红书图文、抖音图文、抖音长文，分别编辑平台标题、文案或正文，保存后刷新，并验证四端修改能恢复。
+- `TEST-025` 同时覆盖四类导出路径：微信公众号 HTML 与富文本复制入口、小红书图文 PNG、抖音图文 PNG、抖音长文文案复制并读取剪贴板内容。
+- 截图回归在常规 Playwright 测试中执行 `toHaveScreenshot`，包含桌面端 `desktop-xiaohongshu-3x4-card.png` 和窄屏 `narrow-douyin-3x4-card.png` 基线；测试同时断言没有水平溢出、图文预览保持真实比例且没有页面溢出提示。
+- 非法图片文件通过选择文件和拖入两条真实上传路径验证，必须出现可见的“图片上传失败”及原因，且非法文件不能进入素材列表。
+
 ## 验证命令
 
 ```bash
@@ -32,6 +39,7 @@ npm test
 npm run lint
 npm run build
 npx tsc --noEmit
+npx playwright test --list
 git diff --check
 npx playwright test
 ```
@@ -61,7 +69,7 @@ npx playwright install
 
 ## 微信粘贴人工验收
 
-浏览器自动化只能验证富文本复制调用、HTML 清理和图片节点存在。正式发布前仍需人工粘贴到微信编辑器，检查：
+浏览器自动化会验证富文本复制入口、HTML 清理和图片节点存在，但微信编辑器粘贴效果仍以人工验收为准。正式发布前需人工粘贴到微信编辑器，检查：
 
 - 标题、段落、引用和列表样式没有整体失效。
 - 图片节点存在，没有丢图。

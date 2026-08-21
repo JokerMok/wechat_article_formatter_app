@@ -103,9 +103,9 @@ ${longBody}
     id: "broken-markdown",
     title: "异常 Markdown：损坏结构",
     category: "brokenMarkdown",
-    source: `# 
+    source: `#
 
-###   
+###
 
 [坏掉的链接](https://example.com
 
@@ -120,7 +120,7 @@ ${longBody}
     source: `# 空引用过滤
 
 >
-> 
+>
 ＞
 &gt;
 
