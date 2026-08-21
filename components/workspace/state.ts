@@ -5,7 +5,7 @@ import { toDouyinImageText, toDouyinLongform } from "../../lib/platforms/douyin"
 import type { PlatformId, PlatformVersion, PlatformVersionMap } from "../../lib/platforms/types";
 import { createWechatPlatformVersion } from "../../lib/platforms/wechat";
 import { toXiaohongshuImageText } from "../../lib/platforms/xiaohongshu";
-import type { CardAspectRatio, CardLayoutPage } from "../../lib/renderers/cards";
+import type { CardAspectRatio, CardLayoutPage, CardLayoutResult } from "../../lib/renderers/cards";
 import { styleTemplates } from "../../lib/style-templates";
 import type {
   AiWorkspaceSettings,
@@ -62,7 +62,6 @@ export const DEFAULT_AI_SETTINGS: AiWorkspaceSettings = {
   mode: "deterministic",
   baseUrl: "https://api.openai.com/v1",
   model: "gpt-4.1-mini",
-  temperature: 0.2,
   lastFallbackReason: "当前演示使用本地确定性转换，未调用外部 AI。",
 };
 
@@ -186,6 +185,10 @@ export function platformVersionsFromDrafts(drafts: Record<PlatformId, PlatformDr
 
 export function updatePlatformBlock(draft: PlatformDraft, blockId: string, text: string): PlatformDraft {
   const content = cloneArticleContent(draft.content);
+  const previousMeta = createPlatformMeta(draft.platform, content, draft.ratio);
+  const previousTitle = metaTitle(draft.platform, content, previousMeta);
+  const titleWasEdited = draft.title !== previousTitle;
+  const captionWasEdited = draft.meta.caption !== undefined && draft.meta.caption !== previousMeta.caption;
   const blocks = content.blocks.map((block) => (block.id === blockId ? updateBlockText(block, text) : block));
   const nextContent = {
     ...content,
@@ -197,9 +200,9 @@ export function updatePlatformBlock(draft: PlatformDraft, blockId: string, text:
   return {
     ...draft,
     status: "edited",
-    title: metaTitle(draft.platform, nextContent, meta),
+    title: titleWasEdited ? draft.title : metaTitle(draft.platform, nextContent, meta),
     content: nextContent,
-    meta: { ...meta, tags: draft.meta.tags.length ? draft.meta.tags : meta.tags },
+    meta: { ...meta, caption: captionWasEdited ? draft.meta.caption : meta.caption, tags: draft.meta.tags.length ? draft.meta.tags : meta.tags },
     editedWechatHtml: undefined,
     updatedAt: new Date().toISOString(),
   };
@@ -314,6 +317,27 @@ export function clearManualCardPages(draft: PlatformDraft): PlatformDraft {
     lockedPageIds: [],
     status: "edited",
     updatedAt: new Date().toISOString(),
+  };
+}
+
+export function applyManualPageOrder(result: CardLayoutResult, manualPages: CardLayoutPage[]): CardLayoutResult {
+  if (manualPages.length < result.pages.length) return result;
+  const manualOrder = new Map(manualPages.map((page, index) => [page.id, index]));
+  if (!result.pages.every((page) => manualOrder.has(page.id))) return result;
+  const totalPages = result.pages.length;
+  const pages = [...result.pages]
+    .sort((left, right) => (manualOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (manualOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER))
+    .map((page, index) => ({ ...page, pageNumber: index + 1, totalPages }));
+  return { ...result, pages, overflow: pages.flatMap((page) => page.overflow) };
+}
+
+export function markAiGenerationFailure(state: WorkspacePersistedState, message: string): WorkspacePersistedState {
+  return {
+    ...state,
+    ai: {
+      ...state.ai,
+      lastFallbackReason: `${message} 已保留当前编辑稿，未自动套用本地回退版本。`,
+    },
   };
 }
 
@@ -480,7 +504,6 @@ function readAi(value: unknown, fallback: AiWorkspaceSettings): AiWorkspaceSetti
     mode: value.mode === "assistant" ? "assistant" : "deterministic",
     baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : fallback.baseUrl,
     model: typeof value.model === "string" ? value.model : fallback.model,
-    temperature: readNumber(value.temperature, fallback.temperature),
     lastFallbackReason: typeof value.lastFallbackReason === "string" ? value.lastFallbackReason : fallback.lastFallbackReason,
   };
 }

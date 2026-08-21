@@ -50,9 +50,11 @@ import {
   DEFAULT_SOURCE_MARKDOWN,
   WORKSPACE_PLATFORM_IDS,
   WORKSPACE_PLATFORM_LABELS,
+  applyManualPageOrder,
   clearManualCardPages,
   createWorkspaceState,
   isAiProviderConfigured,
+  markAiGenerationFailure,
   parseSourceMarkdown,
   platformDraftFromVersion,
   platformVersionsFromDrafts,
@@ -218,7 +220,7 @@ export default function UnifiedWorkspace() {
         layout: page,
       })),
     });
-    return result;
+    return applyManualPageOrder(result, activeDraft.manualPages);
   }, [activeDraft, activePlatform, workspace.layout]);
 
   const wechatHtml = React.useMemo(() => {
@@ -498,16 +500,9 @@ export default function UnifiedWorkspace() {
       return;
     }
 
-    setWorkspace((current) => ({
-      ...current,
-      ai: {
-        ...current.ai,
-        lastFallbackReason: `${result.error.message} 已回退本地确定性生成。`,
-      },
-      platforms: mergeGeneratedVersions(current.platforms, result.fallbackVersions, platforms),
-    }));
+    setWorkspace((current) => markAiGenerationFailure(current, result.error.message));
     setAiRunState("error");
-    setStatusMessage(`${result.error.message} 已回退本地确定性生成`);
+    setStatusMessage(`${result.error.message} 已保留当前编辑稿`);
   }
 
   function applyDeterministicRegeneration(platforms: PlatformId[]) {
@@ -817,8 +812,6 @@ export default function UnifiedWorkspace() {
             onAiModelChange={(model) => updateWorkspace({ ai: { ...workspace.ai, model } })}
             onSessionApiKeyChange={setSessionApiKey}
             onCancelAi={cancelAiGeneration}
-            temperature={workspace.ai.temperature}
-            onTemperatureChange={(temperature) => updateWorkspace({ ai: { ...workspace.ai, temperature } })}
           />
         </aside>
       </div>
@@ -1031,8 +1024,6 @@ function PreviewPanel(props: {
   onAiModelChange: (value: string) => void;
   onSessionApiKeyChange: (value: string) => void;
   onCancelAi: () => void;
-  temperature: number;
-  onTemperatureChange: (value: number) => void;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -1106,7 +1097,6 @@ function PreviewPanel(props: {
               </div>
             </div>
           )}
-          <Range label="温度" value={props.temperature} min={0} max={1} step={0.1} onChange={props.onTemperatureChange} />
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto bg-[#efeee8] p-4">

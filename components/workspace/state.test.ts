@@ -2,21 +2,25 @@ import { describe, expect, it } from "vitest";
 import {
   WORKSPACE_PLATFORM_IDS,
   WORKSPACE_VERSION_KEY,
+  applyManualPageOrder,
   clearManualCardPages,
   createWorkspaceState,
   isAiProviderConfigured,
+  markAiGenerationFailure,
   platformVersionsFromDrafts,
   readPersistedWorkspace,
   sanitizeWechatHtml,
   serializeWorkspace,
   toggleLockedPage,
   updatePlatformBlock,
+  updatePlatformCaption,
   updatePlatformRatio,
+  updatePlatformTitle,
   withLockedCardPage,
   withManualCardPages,
   withWechatHtmlOverride,
 } from "./state";
-import type { CardLayoutPage } from "@/lib/renderers/cards";
+import type { CardLayoutPage, CardLayoutResult } from "@/lib/renderers/cards";
 
 function cardPage(id: string, text: string): CardLayoutPage {
   return {
@@ -72,6 +76,23 @@ describe("workspace state", () => {
     expect(state.platforms.xiaohongshu.content.blocks.find((block) => block.id === paragraph!.id && "text" in block)?.text).toBe("正文第一段。");
   });
 
+  it("preserves manually edited title and caption when block text changes", () => {
+    const state = createWorkspaceState(`# 原始标题
+
+正文第一段。
+`);
+    const titled = updatePlatformTitle(state.platforms.xiaohongshu, "人工标题");
+    const captioned = updatePlatformCaption(titled, "人工发布文案");
+    const paragraph = captioned.content.blocks.find((block) => block.type === "paragraph");
+    expect(paragraph).toBeDefined();
+
+    const edited = updatePlatformBlock(captioned, paragraph!.id, "正文改动。");
+
+    expect(edited.title).toBe("人工标题");
+    expect(edited.meta.caption).toBe("人工发布文案");
+    expect(edited.content.blocks.find((block) => block.id === paragraph!.id && "text" in block)?.text).toBe("正文改动。");
+  });
+
   it("restores persisted workspace state with social reflow settings", () => {
     const state = createWorkspaceState();
     const next = {
@@ -108,6 +129,27 @@ describe("workspace state", () => {
       ["locked-1", true],
     ]);
     expect(restored?.platforms.xiaohongshu.lockedPageIds).toEqual(["locked-1"]);
+  });
+
+  it("applies full manual page order to layout previews", () => {
+    const state = createWorkspaceState();
+    const first = cardPage("page-1", "第一页");
+    const second = cardPage("page-2", "第二页");
+    const third = cardPage("page-3", "第三页");
+    const layout: CardLayoutResult = {
+      source: state.platforms.xiaohongshu.content,
+      pages: [first, second, third].map((page, index) => ({ ...page, manual: true, pageNumber: index + 1, totalPages: 3 })),
+      overflow: [],
+    };
+    const draft = withManualCardPages(state.platforms.xiaohongshu, [third, first, second]);
+
+    const ordered = applyManualPageOrder(layout, draft.manualPages);
+
+    expect(ordered.pages.map((page) => [page.id, page.pageNumber])).toEqual([
+      ["page-3", 1],
+      ["page-1", 2],
+      ["page-2", 3],
+    ]);
   });
 
   it("can lock, unlock, and clear card page state without id-only placeholders", () => {
@@ -151,5 +193,25 @@ describe("workspace state", () => {
     expect(isAiProviderConfigured(next.ai, "")).toBe(false);
     expect(JSON.stringify(serializeWorkspace(next))).not.toContain("session-token");
     expect(platformVersionsFromDrafts(next.platforms).wechat?.title).toBe(next.platforms.wechat.title);
+  });
+
+  it("marks AI generation failures without replacing edited drafts with fallback content", () => {
+    const state = createWorkspaceState(`# 标题
+
+正文。
+`);
+    const paragraph = state.platforms.wechat.content.blocks.find((block) => block.type === "paragraph");
+    expect(paragraph).toBeDefined();
+    const editedWechat = updatePlatformBlock(state.platforms.wechat, paragraph!.id, "人工修改稿。");
+    const next = markAiGenerationFailure(
+      {
+        ...state,
+        platforms: { ...state.platforms, wechat: editedWechat },
+      },
+      "AI 限流",
+    );
+
+    expect(next.platforms.wechat.content.blocks.find((block) => block.id === paragraph!.id && "text" in block)?.text).toBe("人工修改稿。");
+    expect(next.ai.lastFallbackReason).toContain("未自动套用本地回退版本");
   });
 });
