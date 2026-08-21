@@ -5,6 +5,7 @@ import {
   collectWechatImageNodes,
   renderWechatBlockHtml,
   renderWechatContentHtml,
+  resolveWechatImageNodeBindings,
   type WechatImageNode,
   type WechatRenderOptions,
 } from "../../renderers/wechat";
@@ -67,7 +68,8 @@ function createHighlights(blocks: UnifiedArticleBlock[]) {
 
 export function createWechatPlatformContent(content: UnifiedArticleContent, options: CreateWechatPlatformVersionOptions = {}): WechatPlatformContent {
   const template = options.template ?? styleTemplates.zhenyiKnowledgeMinimal;
-  const renderOptions = { template, imageNodes: options.imageNodes };
+  const resolvedImageNodes = resolveWechatImageNodeBindings(content.blocks, options.imageNodes);
+  const renderOptions = { template, imageNodes: options.imageNodes, resolvedImageNodes };
   let imageOrdinal = 0;
 
   return {

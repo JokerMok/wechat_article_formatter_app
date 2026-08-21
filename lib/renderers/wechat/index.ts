@@ -17,6 +17,10 @@ export type WechatRenderOptions = {
   imageNodes?: WechatImageNode[];
 };
 
+type WechatResolvedRenderOptions = WechatRenderOptions & {
+  resolvedImageNodes?: Map<number, WechatImageNode>;
+};
+
 export type WechatRenderResult = {
   platform: "wechat";
   rendererVersion: 1;
@@ -163,7 +167,7 @@ function findImageNode(block: RenderableBlock, index: number, imageNodes: Wechat
   return imageNodes.find((node) => node.blockId === blockId || node.id === blockId) ?? positionalNodes[imageOrdinal];
 }
 
-function resolveWechatImageNodeBindings(blocks: RenderableBlock[], imageNodes: WechatImageNode[] = []) {
+export function resolveWechatImageNodeBindings(blocks: RenderableBlock[], imageNodes: WechatImageNode[] = []) {
   const imageBlocks = blocks.flatMap((block, index) => {
     if (block.type !== "image") {
       return [];
@@ -231,7 +235,7 @@ function renderImage(
   block: RenderableBlock,
   template: StyleTemplate,
   index: number,
-  options: WechatRenderOptions & { resolvedImageNodes?: Map<number, WechatImageNode> },
+  options: WechatResolvedRenderOptions,
   imageOrdinal: number
 ) {
   const visual = template.visual;
@@ -377,7 +381,8 @@ export function renderWechatBlockHtml(block: RenderableBlock, template: StyleTem
 
 export function renderWechatBlocksHtml(blocks: RenderableBlock[], options: WechatRenderOptions = {}) {
   const template = options.template ?? styleTemplates.zhenyiKnowledgeMinimal;
-  const resolvedImageNodes = resolveWechatImageNodeBindings(blocks, options.imageNodes);
+  const providedResolvedImageNodes = (options as WechatResolvedRenderOptions).resolvedImageNodes;
+  const resolvedImageNodes = providedResolvedImageNodes ?? resolveWechatImageNodeBindings(blocks, options.imageNodes);
   const renderOptions = { ...options, resolvedImageNodes };
   let imageOrdinal = 0;
   const renderedBlocks = blocks.map((block, index) => {

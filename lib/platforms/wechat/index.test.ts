@@ -66,4 +66,38 @@ describe("createWechatPlatformVersion", () => {
     expect(content.html).toContain('<img src="https://cdn.example/first.png" alt="第一张"');
     expect(content.html).toContain('<img src="https://cdn.example/second.png" alt="第二张"');
   });
+
+  it("keeps id-bound and positional image nodes consistent across platform outputs", () => {
+    const unified = parseArticleContent(`# 发布标题
+
+开场正文
+
+![原始图片一](https://source.example/one.png)
+
+后续正文
+
+![原始图片二](https://source.example/two.png)`, { mode: "knowledge" });
+    const unifiedImageBlocks = unified.blocks.filter((block) => block.type === "image");
+    const secondBlock = unifiedImageBlocks[1];
+
+    if (!secondBlock) {
+      throw new Error("expected second image block");
+    }
+
+    const content = createWechatPlatformContent(unified, {
+      template: styleTemplates.zhenyiKnowledgeMinimal,
+      imageNodes: [
+        { id: secondBlock.id, src: "https://cdn.example/second-bound.png", alt: "第二张绑定图" },
+        { src: "https://cdn.example/first-positional.png", alt: "第一张位置图" },
+      ],
+    });
+    const imageBlocks = content.blocks.filter((block) => block.sourceType === "image");
+
+    expect(imageBlocks).toHaveLength(2);
+    expect(imageBlocks[0].html).toContain('<img src="https://cdn.example/first-positional.png" alt="第一张位置图"');
+    expect(imageBlocks[1].html).toContain('<img src="https://cdn.example/second-bound.png" alt="第二张绑定图"');
+    expect(content.html.indexOf("https://cdn.example/first-positional.png")).toBeLessThan(content.html.indexOf("https://cdn.example/second-bound.png"));
+    expect(content.images.map((node) => node.src)).toEqual(["https://cdn.example/first-positional.png", "https://cdn.example/second-bound.png"]);
+    expect(content.images.map((node) => node.blockId)).toEqual(unifiedImageBlocks.map((block) => block.id));
+  });
 });
