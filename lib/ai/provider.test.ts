@@ -35,6 +35,18 @@ function jsonResponse(body: unknown, init?: ResponseInit) {
   });
 }
 
+function delayedRejectingJsonResponse(init?: ResponseInit) {
+  const response = new Response("", {
+    headers: { "content-type": "application/json", ...init?.headers },
+    status: init?.status ?? 200,
+    statusText: init?.statusText,
+  });
+  response.json = () => new Promise((_, reject) => {
+    setTimeout(() => reject(new Error("body read aborted")), 50);
+  });
+  return response;
+}
+
 function expectOk(result: GeneratePlatformVersionsResult): asserts result is Extract<GeneratePlatformVersionsResult, { ok: true }> {
   expect(result.ok).toBe(true);
 }
@@ -209,6 +221,57 @@ describe("OpenAICompatibleProvider", () => {
     await expect(cancelPromise).resolves.toMatchObject({ ok: false, error: { code: "cancelled" } });
   });
 
+  it("TEST-008 keeps caller cancellation during response body parsing from being reclassified as transport", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn(async () => delayedRejectingJsonResponse()));
+
+    const controller = new AbortController();
+    const cancelPromise = generatePlatformVersions({
+      provider: new OpenAICompatibleProvider({ ...baseProviderConfig, timeoutMs: 25 }),
+      source,
+      sourceVersionId: "source-v1",
+      platforms: ["wechat"],
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 10);
+
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(cancelPromise).resolves.toMatchObject({ ok: false, error: { code: "cancelled" } });
+  });
+
+  it("TEST-008 keeps timeout during response body parsing from being reclassified as transport", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn(async () => delayedRejectingJsonResponse()));
+
+    const timeoutPromise = generatePlatformVersions({
+      provider: new OpenAICompatibleProvider({ ...baseProviderConfig, timeoutMs: 25 }),
+      source,
+      sourceVersionId: "source-v1",
+      platforms: ["wechat"],
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(timeoutPromise).resolves.toMatchObject({ ok: false, error: { code: "timeout" } });
+  });
+
+  it("TEST-008 keeps caller cancellation during 429 body parsing from being reclassified as rate_limit", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn(async () => delayedRejectingJsonResponse({ status: 429, statusText: "Too Many Requests" })));
+
+    const controller = new AbortController();
+    const cancelPromise = generatePlatformVersions({
+      provider: new OpenAICompatibleProvider({ ...baseProviderConfig, timeoutMs: 25 }),
+      source,
+      sourceVersionId: "source-v1",
+      platforms: ["wechat"],
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 10);
+
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(cancelPromise).resolves.toMatchObject({ ok: false, error: { code: "cancelled" } });
+  });
+
   it("TEST-007 exposes compact added, removed, and rewritten field changes", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(diffFixture)));
     const existing = buildFallbackPlatformVersions(source, ["wechat", "xiaohongshu"], "2026-08-20T00:00:00.000Z");
@@ -266,6 +329,46 @@ describe("OpenAICompatibleProvider", () => {
 
     expect(validateGeneratedFacts("效率提升 300%。", source).unsupportedNumbers).toEqual(["300"]);
     expect(result).toMatchObject({ ok: false, error: { code: "schema" } });
+  });
+
+  it("TEST-021 keeps unsupported quoted claims out of diagnostics", async () => {
+    const unsupportedQuote = "内部客户密钥需要保密不能出现在诊断里";
+    const assistantContent = JSON.parse(String(validFixture.choices[0].message.content)) as {
+      drafts: Array<{ summary: string }>;
+    };
+    assistantContent.drafts[0]!.summary = `把散落资料整理成可复用知识库，"${unsupportedQuote}"。`;
+
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      jsonResponse({
+        ...validFixture,
+        choices: [
+          {
+            ...validFixture.choices[0],
+            message: {
+              role: "assistant",
+              content: JSON.stringify(assistantContent),
+            },
+          },
+        ],
+      })
+    ));
+
+    const result = await generatePlatformVersions({
+      provider: new OpenAICompatibleProvider(baseProviderConfig),
+      source,
+      sourceVersionId: "source-v1",
+      platforms: ["wechat"],
+    });
+
+    expectFailure(result);
+    const diagnostics = JSON.stringify(result.error.diagnostics);
+    expect(diagnostics).toContain("schema");
+    expect(diagnostics).toContain("unsupported_quote_count");
+    expect(diagnostics).not.toContain(unsupportedQuote);
+    expect(diagnostics).not.toContain(unsupportedQuote.slice(0, 20));
+    expect(diagnostics).not.toContain("资料散落在不同地方");
+    expect(diagnostics).not.toContain(String(validFixture.choices[0].message.content));
+    expect(diagnostics).not.toContain(baseProviderConfig.apiKey);
   });
 
   it("TEST-021 keeps diagnostics compact and excludes body, key, and full model response", async () => {

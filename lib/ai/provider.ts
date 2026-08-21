@@ -165,11 +165,10 @@ export class OpenAICompatibleProvider {
     let abortKind: "timeout" | "cancelled" | undefined;
 
     const cancelFromCaller = () => {
-      if (abortKind) {
-        return;
-      }
       abortKind = "cancelled";
-      abortController.abort(new Error("AI request cancelled"));
+      if (!abortController.signal.aborted) {
+        abortController.abort(new Error("AI request cancelled"));
+      }
     };
 
     if (options.signal?.aborted) {
@@ -186,6 +185,15 @@ export class OpenAICompatibleProvider {
     }, this.timeoutMs);
 
     try {
+      const throwIfAborted = () => {
+        if (abortKind === "cancelled" || options.signal?.aborted) {
+          throw this.error("cancelled", "AI request was cancelled.", false, diagnostics);
+        }
+        if (abortKind === "timeout") {
+          throw this.error("timeout", "AI provider request timed out.", true, diagnostics);
+        }
+      };
+
       const response = await this.fetchImpl(this.endpoint, {
         method: "POST",
         headers: {
@@ -195,11 +203,13 @@ export class OpenAICompatibleProvider {
         body: JSON.stringify(this.buildRequestBody(options.source, options.platforms)),
         signal: abortController.signal,
       });
+      throwIfAborted();
 
       const requestId = response.headers.get("x-request-id") ?? response.headers.get("x-openai-request-id") ?? undefined;
       const responseDiagnostics = { ...diagnostics, status: response.status, requestId };
       if (response.status === 429) {
         const rateLimitBody = await readCompactErrorBody(response);
+        throwIfAborted();
         throw this.error("rate_limit", "AI provider rate limit exceeded.", true, {
           ...responseDiagnostics,
           errorType: rateLimitBody.errorType,
@@ -210,6 +220,7 @@ export class OpenAICompatibleProvider {
       }
 
       const completion = await parseJsonResponse(response, responseDiagnostics, (info) => this.error("transport", info, true, responseDiagnostics));
+      throwIfAborted();
       const envelope = openAIChatCompletionSchema.safeParse(completion);
       if (!envelope.success) {
         throw this.schemaError(["OpenAI-compatible response envelope is invalid."], responseDiagnostics);
@@ -232,14 +243,14 @@ export class OpenAICompatibleProvider {
         diagnostics: responseDiagnostics,
       };
     } catch (error) {
-      if (error instanceof AIProviderError) {
-        throw error;
+      if (abortKind === "cancelled" || options.signal?.aborted) {
+        throw this.error("cancelled", "AI request was cancelled.", false, diagnostics);
       }
       if (abortKind === "timeout") {
         throw this.error("timeout", "AI provider request timed out.", true, diagnostics);
       }
-      if (abortKind === "cancelled") {
-        throw this.error("cancelled", "AI request was cancelled.", false, diagnostics);
+      if (error instanceof AIProviderError) {
+        throw error;
       }
       throw this.error("transport", "AI provider request failed.", true, diagnostics);
     } finally {
@@ -448,6 +459,11 @@ function buildGeneratedPlatformVersions(
 
     const factCheck = validateGeneratedFacts(generatedFactText(draft), source);
     if (!factCheck.ok) {
+      const details = [
+        factCheck.unsupportedNumbers.length > 0 ? `unsupported_number_count:${factCheck.unsupportedNumbers.length}` : undefined,
+        factCheck.unsupportedQuotes.length > 0 ? `unsupported_quote_count:${factCheck.unsupportedQuotes.length}` : undefined,
+      ].filter((detail): detail is string => Boolean(detail));
+
       throw new AIProviderError({
         code: "schema",
         message: "AI provider response contains unsupported factual details.",
@@ -456,10 +472,7 @@ function buildGeneratedPlatformVersions(
           provider: "openai-compatible",
           model: "unknown",
           errorCode: "schema",
-          details: [
-            ...factCheck.unsupportedNumbers.map((number) => `unsupported number: ${number}`),
-            ...factCheck.unsupportedQuotes.map((quote) => `unsupported quote: ${quote.slice(0, 20)}`),
-          ],
+          details,
         },
       });
     }
@@ -575,7 +588,7 @@ async function readCompactErrorBody(response: Response) {
     if (typeof body === "object" && body && "error" in body) {
       const error = (body as { error?: { type?: unknown; code?: unknown } }).error;
       return {
-        errorType: typeof error?.type === "string" ? error.type : typeof error?.code === "string" ? error.code : undefined,
+        errorType: safeDiagnosticToken(error?.type) ?? safeDiagnosticToken(error?.code),
       };
     }
   } catch {
@@ -757,5 +770,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function compactZodIssues(error: z.ZodError) {
-  return error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "response"}: ${issue.message}`);
+  return error.issues.slice(0, 5).map((issue) => {
+    const path = issue.path.map(safePathSegment).join(".") || "response";
+    return `schema_issue path=${path} code=${issue.code}`;
+  });
+}
+
+function safePathSegment(segment: PropertyKey) {
+  const value = String(segment);
+  return /^[A-Za-z0-9_-]{1,32}$/.test(value) ? value : "field";
+}
+
+function safeDiagnosticToken(value: unknown) {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return /^[A-Za-z0-9_.:-]{1,64}$/.test(value) ? value : "redacted";
 }
