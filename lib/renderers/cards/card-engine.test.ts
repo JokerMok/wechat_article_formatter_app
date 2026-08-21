@@ -202,6 +202,66 @@ describe("card image layout engine", () => {
     expect(reflowed.pages.slice(1).some((page) => page.nodes.some((node) => node.entryId === "long"))).toBe(true);
   });
 
+  it("preserves text once when a locked page reserves a middle fragment of a split paragraph", () => {
+    const lead = "前段内容必须保留在锁定片段之前。".repeat(36);
+    const middle = "【锁定中段唯一片段】中间这一页来自长段落，重排后不能复制，也不能丢失。".repeat(28);
+    const tail = "后段内容必须继续流入锁定片段之后。".repeat(36);
+    const text = `${lead}${middle}${tail}`;
+    const content = article([textBlock("long-middle", "paragraph", text)]);
+    const initial = layoutCardPages(content, createApproximateTextMeasurer(), {
+      aspectRatio: "3:4",
+      typography: { bodyFontSize: 34, lineSpacing: 1.25, paragraphSpacing: 28 },
+    });
+    const lockedMiddlePage = initial.pages.find((page) =>
+      page.nodes.some((node) => node.entryId === "long-middle" && node.text.includes("【锁定中段唯一片段】")),
+    ) as CardLayoutPage;
+    const lockedFragment = lockedMiddlePage.nodes.find((node) => node.entryId === "long-middle")?.text ?? "";
+
+    expect(initial.pages.length).toBeGreaterThan(2);
+    expect(lockedMiddlePage.pageNumber).toBeGreaterThan(1);
+    expect(lockedFragment).toContain("【锁定中段唯一片段】");
+
+    const reflowed = layoutCardPages(content, createApproximateTextMeasurer(), {
+      aspectRatio: "3:4",
+      typography: { bodyFontSize: 42, lineSpacing: 1.45, paragraphSpacing: 44 },
+      lockedPages: [lockedMiddlePage],
+    });
+
+    expect(collectLayoutText(reflowed)).toBe(text);
+    expect(
+      reflowed.pages
+        .flatMap((page) => page.nodes)
+        .filter((node) => node.entryId === "long-middle" && node.text === lockedFragment),
+    ).toHaveLength(1);
+  });
+
+  it("uses updated locked image geometry for overflow detection after image placement changes", () => {
+    const content = article([
+      textBlock("body", "paragraph", "移动图片后，溢出检测必须使用新的图片坐标。"),
+      textBlock("img-moved", "image", "移动后的图片"),
+    ]);
+    const initial = layoutCardPages(content, createApproximateTextMeasurer(), {
+      aspectRatio: "3:4",
+      manualPages: [{ id: "image-page", blockIds: ["img-moved"], locked: true }],
+      imagePlacements: { "img-moved": { x: 180, y: 560, width: 320, height: 180 } },
+    });
+    const relocked = lockCardImagePage(initial, "image-page", {
+      images: [{ imageId: "img-moved", x: 760, y: 1190, width: 360, height: 220 }],
+    });
+    const imagePage = relocked.pages.find((page) => page.id === "image-page") as CardLayoutPage;
+    const movedImage = imagePage.nodes.find((node) => node.kind === "image") as CardLayoutPage["nodes"][number];
+    const overflow = detectPageOverflow(imagePage);
+
+    expect(movedImage).toMatchObject({ x: 760, y: 1190, width: 360, height: 220 });
+    expect(relocked.overflow).toEqual(expect.arrayContaining(overflow));
+    expect(overflow).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ nodeId: movedImage.id, type: "horizontal", edge: "right" }),
+        expect.objectContaining({ nodeId: movedImage.id, type: "vertical", edge: "bottom" }),
+      ]),
+    );
+  });
+
   it("reports top and left clipping for both image placements and layout entries", () => {
     const result = layoutCardPages(
       article([

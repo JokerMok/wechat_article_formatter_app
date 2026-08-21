@@ -1,5 +1,5 @@
 import type { CardImagePlacement, CardLayoutPage, CardLayoutResult } from "./types";
-import { ensureUniqueCardPageIds } from "./layout";
+import { detectPageOverflow, ensureUniqueCardPageIds } from "./layout";
 
 type ImageMetadata = {
   images?: Array<CardImagePlacement & { imageId: string }>;
@@ -61,12 +61,17 @@ export function lockCardImagePage(result: CardLayoutResult, pageId: string, meta
       nodes: page.nodes.map((node) => {
         const image = imagesById.get(node.blockId) ?? imagesById.get(node.entryId);
         if (!image || node.kind !== "image") return node;
+        const placement = {
+          ...image,
+          alt: node.image?.alt ?? node.text,
+        };
         return {
           ...node,
-          image: {
-            ...image,
-            alt: node.image?.alt ?? node.text,
-          },
+          x: placement.x,
+          y: placement.y,
+          width: placement.width,
+          height: placement.height,
+          image: placement,
         };
       }),
     });
@@ -77,8 +82,21 @@ export function lockCardImagePage(result: CardLayoutResult, pageId: string, meta
 function renumber(result: CardLayoutResult): CardLayoutResult {
   const pagesWithUniqueIds = ensureUniqueCardPageIds(result.pages);
   const totalPages = pagesWithUniqueIds.length;
-  const pages = pagesWithUniqueIds.map((page, index) => ({ ...page, pageNumber: index + 1, totalPages }));
+  const pages = pagesWithUniqueIds.map((page, index) => {
+    const numbered = { ...page, pageNumber: index + 1, totalPages };
+    return { ...numbered, overflow: mergeOverflow([...numbered.overflow, ...detectPageOverflow(numbered)]) };
+  });
   return { ...result, pages, overflow: pages.flatMap((page) => page.overflow) };
+}
+
+function mergeOverflow(issues: CardLayoutPage["overflow"]) {
+  const seen = new Set<string>();
+  return issues.filter((issue) => {
+    const key = `${issue.pageId}:${issue.nodeId}:${issue.type}:${issue.edge ?? "unknown"}:${Math.round(issue.amount * 1000)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function nextPageId(base: string, existingIds: string[]) {

@@ -134,14 +134,15 @@ export function detectPageOverflow(page: CardLayoutPage): CardOverflowIssue[] {
   const safeBottom = page.safeArea.y + page.safeArea.height;
   return page.nodes.flatMap((node) => {
     const issues: CardOverflowIssue[] = [];
-    if (node.x < safeLeft) {
-      issues.push({ pageId: page.id, nodeId: node.id, type: "horizontal", edge: "left", amount: safeLeft - node.x });
+    const bounds = nodeBounds(node);
+    if (bounds.x < safeLeft) {
+      issues.push({ pageId: page.id, nodeId: node.id, type: "horizontal", edge: "left", amount: safeLeft - bounds.x });
     }
-    const right = node.x + node.width;
-    if (node.y < safeTop) {
-      issues.push({ pageId: page.id, nodeId: node.id, type: "vertical", edge: "top", amount: safeTop - node.y });
+    const right = bounds.x + bounds.width;
+    if (bounds.y < safeTop) {
+      issues.push({ pageId: page.id, nodeId: node.id, type: "vertical", edge: "top", amount: safeTop - bounds.y });
     }
-    const bottom = node.y + node.height;
+    const bottom = bounds.y + bounds.height;
     if (right > safeRight) {
       issues.push({ pageId: page.id, nodeId: node.id, type: "horizontal", edge: "right", amount: right - safeRight });
     }
@@ -150,6 +151,13 @@ export function detectPageOverflow(page: CardLayoutPage): CardOverflowIssue[] {
     }
     return issues;
   });
+}
+
+function nodeBounds(node: CardLayoutNode) {
+  if (node.kind === "image" && node.image) {
+    return { x: node.image.x, y: node.image.y, width: node.image.width, height: node.image.height };
+  }
+  return { x: node.x, y: node.y, width: node.width, height: node.height };
 }
 
 function mergeOverflow(issues: CardOverflowIssue[]) {
@@ -285,8 +293,15 @@ function createManualPages(
 }
 
 type PageReservation = {
-  text: string;
-  lastSourceIndex: number;
+  fragments: Array<{
+    text: string;
+    sourceIndex: number;
+  }>;
+};
+
+type ReservedTextRange = {
+  start: number;
+  end: number;
 };
 
 function collectPageReservations(pages: Array<Pick<CardLayoutPage, "nodes">>): Map<string, PageReservation> {
@@ -294,10 +309,10 @@ function collectPageReservations(pages: Array<Pick<CardLayoutPage, "nodes">>): M
   for (const page of pages) {
     const nodes = [...page.nodes].sort((left, right) => left.sourceIndex - right.sourceIndex || left.id.localeCompare(right.id));
     for (const node of nodes) {
+      if (!node.text) continue;
       const current = reservations.get(node.entryId);
       reservations.set(node.entryId, {
-        text: `${current?.text ?? ""}${node.text}`,
-        lastSourceIndex: Math.max(current?.lastSourceIndex ?? Number.NEGATIVE_INFINITY, node.sourceIndex),
+        fragments: [...(current?.fragments ?? []), { text: node.text, sourceIndex: node.sourceIndex }],
       });
     }
   }
@@ -308,17 +323,72 @@ function applyPageReservations(entries: FlowEntry[], reservations: Map<string, P
   return entries.flatMap((entry) => {
     const reservation = reservations.get(entry.id);
     if (!reservation || entry.kind === "pageBreak") return [entry];
-    if (!entry.text.startsWith(reservation.text)) return [entry];
+    const ranges = findReservedTextRanges(entry, reservation);
+    if (ranges.length === 0) return [entry];
 
-    const remainingText = entry.text.slice(reservation.text.length);
-    if (!remainingText) return [];
-    return [{
-      ...entry,
-      text: remainingText,
-      sourceIndex: Math.max(entry.sourceIndex, reservation.lastSourceIndex + 1 / 1_000_000),
-      fragmentIndex: undefined,
-    }];
+    const sourceLength = entry.sourceLength ?? entry.text.length;
+    const remaining: FlowEntry[] = [];
+    let cursor = 0;
+    for (const range of ranges) {
+      if (range.start > cursor) {
+        remaining.push(createRemainingFlowEntry(entry, cursor, range.start, sourceLength));
+      }
+      cursor = Math.max(cursor, range.end);
+    }
+    if (cursor < entry.text.length) {
+      remaining.push(createRemainingFlowEntry(entry, cursor, entry.text.length, sourceLength));
+    }
+    return remaining;
   });
+}
+
+function findReservedTextRanges(entry: FlowEntry, reservation: PageReservation): ReservedTextRange[] {
+  const ranges: ReservedTextRange[] = [];
+  let cursor = 0;
+  const sourceLength = entry.sourceLength ?? entry.text.length;
+  const entrySourceOffset = entry.sourceOffset ?? 0;
+  const baseSourceIndex = Math.floor(entry.sourceIndex);
+  for (const fragment of [...reservation.fragments].sort((left, right) => left.sourceIndex - right.sourceIndex)) {
+    const estimatedStart =
+      Math.round((fragment.sourceIndex - baseSourceIndex) * (sourceLength + 1)) - entrySourceOffset;
+    const start = findReservedFragmentStart(entry.text, fragment.text, cursor, estimatedStart);
+    if (start < 0) continue;
+    const end = start + fragment.text.length;
+    ranges.push({ start, end });
+    cursor = end;
+  }
+  return ranges;
+}
+
+function findReservedFragmentStart(text: string, fragment: string, cursor: number, estimatedStart: number) {
+  let bestStart = -1;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  let searchFrom = Math.max(0, cursor);
+  while (searchFrom <= text.length) {
+    const candidate = text.indexOf(fragment, searchFrom);
+    if (candidate < 0) break;
+    if (candidate >= cursor) {
+      const distance = Math.abs(candidate - estimatedStart);
+      if (distance < bestDistance) {
+        bestStart = candidate;
+        bestDistance = distance;
+      }
+    }
+    searchFrom = candidate + 1;
+  }
+  return bestStart;
+}
+
+function createRemainingFlowEntry(entry: FlowEntry, start: number, end: number, sourceLength: number): FlowEntry {
+  const sourceOffset = (entry.sourceOffset ?? 0) + start;
+  return {
+    ...entry,
+    text: entry.text.slice(start, end),
+    sourceOffset,
+    sourceLength,
+    sourceIndex: sourceIndexForTextOffset(entry.sourceIndex, sourceOffset, sourceLength),
+    fragmentIndex: undefined,
+  };
 }
 
 function paginateEntries(
@@ -387,7 +457,13 @@ function paginateEntries(
     page.nodes.push(consumed.node);
     y = consumed.nextY;
     if (consumed.remainingText) {
-      entries[entryIndex] = { ...entry, text: consumed.remainingText, fragmentIndex: (entry.fragmentIndex ?? 0) + 1 };
+      entries[entryIndex] = {
+        ...entry,
+        text: consumed.remainingText,
+        sourceOffset: (entry.sourceOffset ?? 0) + consumed.node.text.length,
+        sourceLength: entry.sourceLength ?? entry.text.length,
+        fragmentIndex: (entry.fragmentIndex ?? 0) + 1,
+      };
       continue;
     }
     entryIndex += 1;
@@ -415,8 +491,19 @@ function layoutEntriesOnPage(
     y = consumed.nextY;
     let remainingText = consumed.remainingText;
     let fragmentIndex = (entry.fragmentIndex ?? 0) + 1;
+    let sourceOffset = (entry.sourceOffset ?? 0) + consumed.node.text.length;
+    const sourceLength = entry.sourceLength ?? entry.text.length;
     while (remainingText) {
-      const next = placeEntry(page, { ...entry, text: remainingText, fragmentIndex }, y, measurer, typography, page.safeArea.width, options, true);
+      const next = placeEntry(
+        page,
+        { ...entry, text: remainingText, sourceOffset, sourceLength, fragmentIndex },
+        y,
+        measurer,
+        typography,
+        page.safeArea.width,
+        options,
+        true,
+      );
       if (!next.node) {
         page.overflow.push({ pageId: page.id, nodeId: entry.id, type: "vertical", amount: next.remainingHeight });
         break;
@@ -424,6 +511,7 @@ function layoutEntriesOnPage(
       page.nodes.push(next.node);
       y = next.nextY;
       remainingText = next.remainingText;
+      sourceOffset += next.node.text.length;
       fragmentIndex += 1;
     }
   }
@@ -457,12 +545,14 @@ function placeEntry(
   const remainingText = entry.text.slice(visibleText.length);
   const nodeHeight = visibleLines.length * lineHeight + paragraphGap;
   const x = page.safeArea.x + Math.floor((safeWidth - textWidth) / 2);
+  const sourceOffset = entry.sourceOffset ?? 0;
+  const sourceLength = entry.sourceLength ?? entry.text.length;
   const node: CardLayoutNode = {
     id: `${entry.id}:${continued ? "cont" : "node"}:${page.nodes.length}`,
     entryId: entry.id,
     blockId: entry.blockId,
     kind: entry.kind as CardLayoutNodeKind,
-    sourceIndex: entry.sourceIndex + (entry.fragmentIndex ?? 0) / 1_000_000,
+    sourceIndex: sourceIndexForTextOffset(entry.sourceIndex, sourceOffset, sourceLength),
     text: visibleText,
     lines: visibleLines.map((line, index) => ({
       text: line,
@@ -480,6 +570,11 @@ function placeEntry(
     continuesOnNextPage: remainingText.length > 0,
   };
   return { node, nextY: y + nodeHeight, remainingText, remainingHeight };
+}
+
+function sourceIndexForTextOffset(baseSourceIndex: number, sourceOffset: number, sourceLength: number) {
+  if (sourceLength <= 0) return baseSourceIndex;
+  return Math.floor(baseSourceIndex) + sourceOffset / (sourceLength + 1);
 }
 
 function placeImageEntry(

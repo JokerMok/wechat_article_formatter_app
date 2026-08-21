@@ -142,6 +142,8 @@ export type FlowEntry = {
   kind: FlowEntryKind;
   text: string;
   sourceIndex: number;
+  sourceOffset?: number;
+  sourceLength?: number;
   fragmentIndex?: number;
   keepWithNext?: boolean;
 };
