@@ -680,17 +680,60 @@ function readPlatformDraft(value: unknown, platform: PlatformId, fallback: Platf
   return {
     ...fallback,
     platform,
-    status: typeof value.status === "string" ? (value.status as PlatformDraft["status"]) : fallback.status,
+    status: readPlatformDraftStatus(value.status, fallback.status),
     title: typeof value.title === "string" ? value.title : fallback.title,
     content,
     templateKey: typeof value.templateKey === "string" && value.templateKey in styleTemplates ? (value.templateKey as TemplateKey) : fallback.templateKey,
     ratio,
-    meta: isRecord(value.meta) ? ({ ...fallback.meta, ...value.meta } as PlatformMeta) : fallback.meta,
+    meta: readPlatformMeta(value.meta, fallback.meta),
     lockedPageIds: Array.isArray(value.lockedPageIds) ? value.lockedPageIds.filter((id): id is string => typeof id === "string") : [],
     manualPages: Array.isArray(value.manualPages) ? value.manualPages.flatMap(readCardLayoutPage) : [],
     editedWechatHtml: typeof value.editedWechatHtml === "string" ? sanitizeWechatHtml(value.editedWechatHtml) : undefined,
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : fallback.updatedAt,
   };
+}
+
+function readPlatformDraftStatus(value: unknown, fallback: PlatformDraft["status"]): PlatformDraft["status"] {
+  return value === "draft" || value === "generated" || value === "edited" || value === "locked" || value === "error" ? value : fallback;
+}
+
+function readPlatformMeta(value: unknown, fallback: PlatformMeta): PlatformMeta {
+  if (!isRecord(value)) return clonePlatformMeta(fallback);
+  return {
+    body: readOptionalString(value.body, fallback.body),
+    caption: readOptionalString(value.caption, fallback.caption),
+    intro: readOptionalString(value.intro, fallback.intro),
+    ending: readOptionalString(value.ending, fallback.ending),
+    highlights: readOptionalStringArray(value.highlights, fallback.highlights),
+    tags: readStringArray(value.tags, fallback.tags),
+  };
+}
+
+function clonePlatformMeta(meta: PlatformMeta): PlatformMeta {
+  return {
+    body: meta.body,
+    caption: meta.caption,
+    intro: meta.intro,
+    ending: meta.ending,
+    highlights: meta.highlights ? [...meta.highlights] : undefined,
+    tags: [...meta.tags],
+  };
+}
+
+function readOptionalString(value: unknown, fallback: string | undefined) {
+  return typeof value === "string" ? value : fallback;
+}
+
+function readStringArray(value: unknown, fallback: string[]) {
+  return Array.isArray(value) && value.every((item): item is string => typeof item === "string") ? [...value] : [...fallback];
+}
+
+function readOptionalStringArray(value: unknown, fallback: string[] | undefined) {
+  return Array.isArray(value) && value.every((item): item is string => typeof item === "string")
+    ? [...value]
+    : fallback
+      ? [...fallback]
+      : undefined;
 }
 
 function readNumber(value: unknown, fallback: number) {
@@ -717,7 +760,17 @@ function cloneCardLayoutPage(page: CardLayoutPage): CardLayoutPage {
 }
 
 function readCardLayoutPage(value: unknown): CardLayoutPage[] {
-  if (!isRecord(value) || typeof value.id !== "string" || !Array.isArray(value.nodes)) return [];
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    !isRecord(value.canvas) ||
+    !isRecord(value.safeArea) ||
+    !Array.isArray(value.nodes) ||
+    !Array.isArray(value.overflow) ||
+    !value.nodes.every((node) => isRecord(node) && Array.isArray(node.lines))
+  ) {
+    return [];
+  }
   return [cloneCardLayoutPage(value as CardLayoutPage)];
 }
 

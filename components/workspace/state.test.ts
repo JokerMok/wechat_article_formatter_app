@@ -511,6 +511,76 @@ AI 正文。
     expect(selectRestorableBackupProject({ schemaVersion: 1, exportedAt: "", projects: [], unknownProjects: [], assets: [] })).toBeUndefined();
   });
 
+  it("restores corrupted project backup meta without leaking invalid arrays or unknown fields", () => {
+    const state = createWorkspaceState(`# 合法标题
+
+正文。
+`);
+    const xiaohongshuTags = [...state.platforms.xiaohongshu.meta.tags];
+    const xiaohongshuHighlights = [...(state.platforms.xiaohongshu.meta.highlights ?? [])];
+    const douyinLongformTags = [...state.platforms.douyinLongform.meta.tags];
+    const douyinLongformHighlights = [...(state.platforms.douyinLongform.meta.highlights ?? [])];
+    const corrupted = serializeWorkspace(state);
+    const raw = corrupted[WORKSPACE_VERSION_KEY] as typeof state;
+    raw.platforms.xiaohongshu = {
+      ...raw.platforms.xiaohongshu,
+      status: "unknown" as never,
+      meta: {
+        ...raw.platforms.xiaohongshu.meta,
+        body: { text: "非法正文" } as never,
+        caption: ["非法文案"] as never,
+        tags: {} as never,
+        highlights: "非法重点" as never,
+        polluted: true,
+      } as never,
+    };
+    raw.platforms.douyinLongform = {
+      ...raw.platforms.douyinLongform,
+      meta: {
+        ...raw.platforms.douyinLongform.meta,
+        intro: 123 as never,
+        ending: { text: "非法结尾" } as never,
+        tags: "非法标签" as never,
+        highlights: {} as never,
+      } as never,
+    };
+
+    expect(() => readPersistedWorkspace(corrupted)).not.toThrow();
+    const restored = readPersistedWorkspace(corrupted);
+    const selected = selectRestorableBackupProject({
+      schemaVersion: 1,
+      exportedAt: "2026-08-21T00:00:00.000Z",
+      projects: [
+        {
+          schemaVersion: 2,
+          id: "corrupted-meta",
+          title: "损坏 meta",
+          article: state.platforms.wechat.content,
+          assets: [],
+          platformVersions: corrupted,
+          createdAt: "2026-08-21T00:00:00.000Z",
+          updatedAt: "2026-08-21T00:00:00.000Z",
+        },
+      ],
+      unknownProjects: [],
+      assets: [],
+    });
+    const restoredFromProject = readPersistedWorkspace(selected?.platformVersions);
+
+    expect(restored?.platforms.xiaohongshu.status).toBe("generated");
+    expect(Array.isArray(restored?.platforms.xiaohongshu.meta.tags)).toBe(true);
+    expect(Array.isArray(restored?.platforms.xiaohongshu.meta.highlights)).toBe(true);
+    expect(Array.isArray(restored?.platforms.douyinLongform.meta.tags)).toBe(true);
+    expect(Array.isArray(restored?.platforms.douyinLongform.meta.highlights)).toBe(true);
+    expect(restored?.platforms.xiaohongshu.meta.tags.join(" ")).toBe(xiaohongshuTags.join(" "));
+    expect(restored?.platforms.xiaohongshu.meta.highlights?.join(" ")).toBe(xiaohongshuHighlights.join(" "));
+    expect(restored?.platforms.douyinLongform.meta.tags.join(" ")).toBe(douyinLongformTags.join(" "));
+    expect(restored?.platforms.douyinLongform.meta.highlights?.join(" ")).toBe(douyinLongformHighlights.join(" "));
+    expect("polluted" in (restored?.platforms.xiaohongshu.meta ?? {})).toBe(false);
+    expect(Array.isArray(restoredFromProject?.platforms.xiaohongshu.meta.tags)).toBe(true);
+    expect(restoredFromProject?.platforms.xiaohongshu.meta.tags.join(" ")).toBe(xiaohongshuTags.join(" "));
+  });
+
   it("rejects persisted workspace backups with invalid platform draft content", () => {
     const state = createWorkspaceState(`# 合法标题
 
