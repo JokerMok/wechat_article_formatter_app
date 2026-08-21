@@ -92,6 +92,6 @@ describe("workspace card image actions", () => {
     expect(images["image-block"]).toBe(image);
     expect(images["asset-entry"]).toBe(image);
     expect(createCardPngFilename("", "douyinImage", 2)).toBe("douyinImage-2.png");
-    expect(createCardPngFilename("人工标题", "xiaohongshu", 1)).toBe("人工标题-1.png");
+    expect(createCardPngFilename("人工标题", "xiaohongshu", 1)).toBe("人工标题-xiaohongshu-1.png");
   });
 });

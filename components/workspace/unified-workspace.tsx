@@ -92,6 +92,7 @@ import {
   withWechatHtmlOverride,
 } from "./state";
 import { createCardPngFilename, renderCardPagePngBlob } from "./card-image-actions";
+import { createInitialProjectId, describeAssetUploadStatus, type AssetUploadFailure } from "./client-state";
 import type { AssetPlaceholder, DraftHistory, LayoutSettings, PlatformDraft, RatioMode, WorkspaceMode, WorkspacePersistedState } from "./types";
 
 type ProjectListItem = {
@@ -196,7 +197,7 @@ function createImageUrlByBlock(article: UnifiedArticleContent, assets: AssetPlac
 export default function UnifiedWorkspace() {
   const [workspace, setWorkspace] = React.useState<WorkspacePersistedState>(() => createWorkspaceState());
   const workspaceRef = React.useRef<WorkspacePersistedState>(workspace);
-  const [projectId, setProjectId] = React.useState(() => createEmptyProject().id);
+  const [projectId, setProjectId] = React.useState(() => createInitialProjectId());
   const [projectTitle, setProjectTitle] = React.useState("统一自媒体工作区");
   const [projects, setProjects] = React.useState<ProjectListItem[]>([]);
   const [assets, setAssets] = React.useState<AssetPlaceholder[]>([]);
@@ -336,6 +337,9 @@ export default function UnifiedWorkspace() {
         setStatusMessage("已恢复本地项目");
       } else if (result.state === "unknownVersion") {
         const fresh = createWorkspaceState();
+        const project = createEmptyProject({ title: "统一自媒体工作区", article: parseSourceMarkdown(fresh.sourceMarkdown) });
+        setProjectId(project.id);
+        setProjectTitle(project.title);
         replaceWorkspace(fresh);
         setStatusMessage("发现更高版本项目，已保留数据并载入本地演示");
       } else {
@@ -350,6 +354,13 @@ export default function UnifiedWorkspace() {
       hydratedRef.current = true;
       setSaveState("saved");
     } catch (error) {
+      const fresh = createWorkspaceState();
+      const project = createEmptyProject({ title: "统一自媒体工作区", article: parseSourceMarkdown(fresh.sourceMarkdown) });
+      setProjectId(project.id);
+      setProjectTitle(project.title);
+      replaceWorkspace(fresh);
+      replaceAssets([]);
+      resetPlatformHistories();
       hydratedRef.current = true;
       setSaveState("error");
       setStatusMessage(error instanceof Error ? error.message : "项目恢复失败，当前使用本地演示");
@@ -748,18 +759,20 @@ export default function UnifiedWorkspace() {
     const assetRepo = assetRepoRef.current;
     if (!assetRepo) return;
     const uploaded: AssetPlaceholder[] = [];
+    const failures: AssetUploadFailure[] = [];
     for (const file of Array.from(files)) {
       try {
         const saved = await assetRepo.saveImageBlob({ projectId, blob: file, fileName: file.name });
         uploaded.push({ ...saved, objectUrl: URL.createObjectURL(file) });
       } catch (error) {
-        setStatusMessage(error instanceof Error ? error.message : `${file.name} 上传失败`);
+        failures.push({ fileName: file.name, message: error instanceof Error ? error.message : "" });
       }
     }
     if (uploaded.length) {
       setAssets((current) => [...current, ...uploaded]);
-      setStatusMessage(`已上传 ${uploaded.length} 张图片`);
     }
+    const status = describeAssetUploadStatus(uploaded.length, failures);
+    if (status) setStatusMessage(status);
   }
 
   function insertAsset(asset: AssetPlaceholder) {
