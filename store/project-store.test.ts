@@ -162,7 +162,129 @@ describe("project store autosave", () => {
     });
   });
 
-  it("settles load failure during an in-flight autosave and preserves the write error classification", async () => {
+  it("returns unsaved_changes and preserves autosave when load starts while dirty", async () => {
+    const storedProject = createEmptyProject({ title: "磁盘旧项目", article });
+    const saveProject = vi.fn<ProjectRepository["saveProject"]>().mockResolvedValue(undefined);
+    const getLatestProject = vi
+      .fn<ProjectRepository["getLatestProject"]>()
+      .mockResolvedValue({ state: "ready", project: storedProject });
+    const store = createProjectStore({
+      repository: {
+        getLatestProject,
+        getProject: vi.fn<ProjectRepository["getProject"]>(),
+        listProjects: vi.fn<ProjectRepository["listProjects"]>(),
+        saveProject,
+        deleteProject: vi.fn<ProjectRepository["deleteProject"]>(),
+        close: vi.fn<ProjectRepository["close"]>(),
+      },
+    });
+
+    await store.getState().load();
+    store.getState().updateProject({ title: "本地未保存" });
+
+    await expect(store.getState().load()).resolves.toEqual({ type: "unsaved_changes", reason: "dirty" });
+    expect(getLatestProject).toHaveBeenCalledTimes(1);
+    expect(store.getState()).toMatchObject({
+      loadState: "ready",
+      saveStatus: "dirty",
+      project: { title: "本地未保存" },
+      lastLoadOutcome: { type: "unsaved_changes", reason: "dirty" },
+    });
+
+    await vi.advanceTimersByTimeAsync(800);
+    expect(saveProject).toHaveBeenCalledTimes(1);
+    expect(saveProject.mock.calls[0][0].title).toBe("本地未保存");
+    expect(store.getState()).toMatchObject({ saveStatus: "saved", project: { title: "本地未保存" } });
+  });
+
+  it("returns unsaved_changes and does not load stale data while autosave is in flight", async () => {
+    const storedProject = createEmptyProject({ title: "磁盘旧项目", article });
+    let resolveSave: () => void = () => {};
+    const saveProject = vi.fn<ProjectRepository["saveProject"]>(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSave = resolve;
+        })
+    );
+    const getLatestProject = vi
+      .fn<ProjectRepository["getLatestProject"]>()
+      .mockResolvedValue({ state: "ready", project: storedProject });
+    const store = createProjectStore({
+      repository: {
+        getLatestProject,
+        getProject: vi.fn<ProjectRepository["getProject"]>(),
+        listProjects: vi.fn<ProjectRepository["listProjects"]>(),
+        saveProject,
+        deleteProject: vi.fn<ProjectRepository["deleteProject"]>(),
+        close: vi.fn<ProjectRepository["close"]>(),
+      },
+    });
+
+    await store.getState().load();
+    store.getState().updateProject({ title: "写入中的本地版本" });
+    await vi.advanceTimersByTimeAsync(800);
+    expect(store.getState().saveStatus).toBe("saving");
+
+    await expect(store.getState().load()).resolves.toEqual({ type: "unsaved_changes", reason: "saving" });
+    expect(getLatestProject).toHaveBeenCalledTimes(1);
+    expect(saveProject).toHaveBeenCalledTimes(1);
+    expect(saveProject.mock.calls[0][0].title).toBe("写入中的本地版本");
+    expect(store.getState()).toMatchObject({
+      loadState: "ready",
+      saveStatus: "saving",
+      project: { title: "写入中的本地版本" },
+      lastLoadOutcome: { type: "unsaved_changes", reason: "saving" },
+    });
+
+    resolveSave();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.getState()).toMatchObject({ saveStatus: "saved", project: { title: "写入中的本地版本" } });
+  });
+
+  it("settles a stale load result after an edit without writing the loaded project", async () => {
+    const initialProject = createEmptyProject({ title: "初始项目", article });
+    const loadedProject = createEmptyProject({ title: "异步返回的磁盘项目", article });
+    let resolveLoad: (value: Awaited<ReturnType<ProjectRepository["getLatestProject"]>>) => void = () => {};
+    const getLatestProject = vi
+      .fn<ProjectRepository["getLatestProject"]>()
+      .mockResolvedValueOnce({ state: "ready", project: initialProject })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveLoad = resolve;
+          })
+      );
+    const saveProject = vi.fn<ProjectRepository["saveProject"]>().mockResolvedValue(undefined);
+    const store = createProjectStore({
+      repository: {
+        getLatestProject,
+        getProject: vi.fn<ProjectRepository["getProject"]>(),
+        listProjects: vi.fn<ProjectRepository["listProjects"]>(),
+        saveProject,
+        deleteProject: vi.fn<ProjectRepository["deleteProject"]>(),
+        close: vi.fn<ProjectRepository["close"]>(),
+      },
+    });
+
+    await store.getState().load();
+    const load = store.getState().load();
+    store.getState().updateProject({ title: "异步期间本地编辑" });
+    resolveLoad({ state: "ready", project: loadedProject });
+
+    await expect(load).resolves.toEqual({ type: "stale_ignored" });
+    expect(store.getState()).toMatchObject({
+      loadState: "ready",
+      saveStatus: "dirty",
+      project: { title: "异步期间本地编辑" },
+      lastLoadOutcome: { type: "stale_ignored" },
+    });
+
+    await vi.advanceTimersByTimeAsync(800);
+    expect(saveProject).toHaveBeenCalledTimes(1);
+    expect(saveProject.mock.calls[0][0].title).toBe("异步期间本地编辑");
+  });
+
+  it("settles a load conflict during an in-flight autosave and preserves the write error classification", async () => {
     const project = createEmptyProject({ title: "初稿", article });
     let rejectSave: (reason: unknown) => void = () => {};
     const saveProject = vi.fn<ProjectRepository["saveProject"]>(
@@ -173,8 +295,7 @@ describe("project store autosave", () => {
     );
     const getLatestProject = vi
       .fn<ProjectRepository["getLatestProject"]>()
-      .mockResolvedValueOnce({ state: "ready", project })
-      .mockRejectedValueOnce(new StorageWriteError("storage_unavailable", "当前环境无法使用本地存储。"));
+      .mockResolvedValue({ state: "ready", project });
     const store = createProjectStore({
       repository: {
         getLatestProject,
@@ -191,12 +312,13 @@ describe("project store autosave", () => {
     await vi.advanceTimersByTimeAsync(800);
     expect(store.getState().saveStatus).toBe("saving");
 
-    await store.getState().load();
+    await expect(store.getState().load()).resolves.toEqual({ type: "unsaved_changes", reason: "saving" });
     expect(store.getState()).toMatchObject({
-      loadState: "error",
-      saveStatus: "unsaved",
-      lastError: { code: "storage_unavailable" },
+      loadState: "ready",
+      saveStatus: "saving",
+      lastLoadOutcome: { type: "unsaved_changes", reason: "saving" },
     });
+    expect(getLatestProject).toHaveBeenCalledTimes(1);
 
     rejectSave(new StorageWriteError("write_failed", "写入失败。"));
     await vi.advanceTimersByTimeAsync(0);

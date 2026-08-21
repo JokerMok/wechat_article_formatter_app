@@ -5,6 +5,12 @@ import type { ProjectDocument, ProjectRepository } from "../lib/storage/types";
 
 export type ProjectLoadState = "idle" | "loading" | "ready" | "empty" | "error" | "unknownVersion";
 export type ProjectSaveStatus = "idle" | "dirty" | "saving" | "saved" | "unsaved";
+export type ProjectUnsavedChangesReason = Extract<ProjectSaveStatus, "dirty" | "saving" | "unsaved">;
+export type ProjectLoadOutcome =
+  | { type: "loaded"; state: Exclude<ProjectLoadState, "idle" | "loading" | "error"> }
+  | { type: "unsaved_changes"; reason: ProjectUnsavedChangesReason }
+  | { type: "stale_ignored" }
+  | { type: "error"; error: { code: string; message: string } };
 
 export type ProjectStoreState = {
   loadState: ProjectLoadState;
@@ -12,7 +18,8 @@ export type ProjectStoreState = {
   project?: ProjectDocument;
   unknownRawProject?: unknown;
   lastError?: { code: string; message: string };
-  load(): Promise<void>;
+  lastLoadOutcome?: ProjectLoadOutcome;
+  load(): Promise<ProjectLoadOutcome>;
   createProject(input?: { title?: string; article?: ProjectDocument["article"] }): ProjectDocument;
   updateProject(patch: Partial<Pick<ProjectDocument, "title" | "article" | "assets" | "platformVersions">>): void;
   deleteProject(id: string): Promise<void>;
@@ -32,6 +39,20 @@ function nowIso() {
 function publicError(error: unknown) {
   const storageError = error instanceof StorageWriteError ? error : categorizeStorageWriteError(error);
   return { code: storageError.code, message: storageError.message };
+}
+
+function unsavedChangesReason(saveStatus: ProjectSaveStatus): ProjectUnsavedChangesReason | undefined {
+  return saveStatus === "dirty" || saveStatus === "saving" || saveStatus === "unsaved" ? saveStatus : undefined;
+}
+
+function settledLoadState(state: ProjectStoreState, fallback: ProjectLoadState): ProjectLoadState {
+  if (state.loadState !== "loading") {
+    return state.loadState;
+  }
+  if (state.project) {
+    return "ready";
+  }
+  return fallback === "loading" ? "idle" : fallback;
 }
 
 export function createProjectStore(options: ProjectStoreOptions): StoreApi<ProjectStoreState> {
@@ -84,38 +105,80 @@ export function createProjectStore(options: ProjectStoreOptions): StoreApi<Proje
       saveStatus: "idle",
 
       async load() {
+        const startingState = get();
+        const blockedReason = startingState.project ? unsavedChangesReason(startingState.saveStatus) : undefined;
+        if (blockedReason) {
+          const outcome: ProjectLoadOutcome = { type: "unsaved_changes", reason: blockedReason };
+          set({
+            loadState: settledLoadState(startingState, startingState.loadState),
+            lastLoadOutcome: outcome,
+          });
+          return outcome;
+        }
+
         const loadToken = loadRevision + 1;
         const startingProjectRevision = projectRevision;
+        const startingSaveStatus = startingState.saveStatus;
+        const startingLoadState = startingState.loadState;
         loadRevision = loadToken;
-        set({ loadState: "loading", lastError: undefined });
+        if (timer) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+        set({ loadState: "loading", lastError: undefined, lastLoadOutcome: undefined });
         try {
           const result = await options.repository.getLatestProject();
-          if (loadToken !== loadRevision || startingProjectRevision !== projectRevision) {
-            return;
+          const currentState = get();
+          if (
+            loadToken !== loadRevision ||
+            startingProjectRevision !== projectRevision ||
+            startingSaveStatus !== currentState.saveStatus ||
+            unsavedChangesReason(currentState.saveStatus)
+          ) {
+            const outcome: ProjectLoadOutcome = { type: "stale_ignored" };
+            set({
+              loadState: settledLoadState(currentState, startingLoadState),
+              lastLoadOutcome: outcome,
+            });
+            return outcome;
           }
           if (result.state === "empty") {
+            const outcome: ProjectLoadOutcome = { type: "loaded", state: "empty" };
             projectRevision += 1;
-            set({ loadState: "empty", project: undefined, unknownRawProject: undefined, saveStatus: "idle" });
-            return;
+            set({ loadState: "empty", project: undefined, unknownRawProject: undefined, saveStatus: "idle", lastLoadOutcome: outcome });
+            return outcome;
           }
           if (result.state === "unknownVersion") {
+            const outcome: ProjectLoadOutcome = { type: "loaded", state: "unknownVersion" };
             projectRevision += 1;
             set({
               loadState: "unknownVersion",
               project: undefined,
               unknownRawProject: result.rawData,
               saveStatus: "idle",
+              lastLoadOutcome: outcome,
             });
-            return;
+            return outcome;
           }
+          const outcome: ProjectLoadOutcome = { type: "loaded", state: "ready" };
           projectRevision += 1;
-          set({ loadState: "ready", project: result.project, unknownRawProject: undefined, saveStatus: "saved" });
+          set({ loadState: "ready", project: result.project, unknownRawProject: undefined, saveStatus: "saved", lastLoadOutcome: outcome });
+          return outcome;
         } catch (error) {
+          const currentState = get();
           if (loadToken !== loadRevision || startingProjectRevision !== projectRevision) {
-            return;
+            const outcome: ProjectLoadOutcome = { type: "stale_ignored" };
+            set({
+              loadState: settledLoadState(currentState, startingLoadState),
+              lastLoadOutcome: outcome,
+            });
+            return outcome;
           }
-          const saveStatus = get().project ? (get().saveStatus === "saving" ? "unsaved" : get().saveStatus) : "idle";
-          set({ loadState: "error", lastError: publicError(error), saveStatus });
+          const lastError = publicError(error);
+          const saveStatus = currentState.project ? (currentState.saveStatus === "saving" ? "unsaved" : currentState.saveStatus) : "idle";
+          const outcome: ProjectLoadOutcome = { type: "error", error: lastError };
+          set({ loadState: "error", lastError, saveStatus, lastLoadOutcome: outcome });
+          return outcome;
         }
       },
 
