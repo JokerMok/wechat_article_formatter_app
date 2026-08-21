@@ -1,0 +1,16 @@
+{
+  "id": "chatcmpl-injection",
+  "object": "chat.completion",
+  "created": 1787270400,
+  "model": "fixture-model",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{\"schemaVersion\":1,\"drafts\":[{\"platform\":\"wechat\",\"title\":\"<script>alert(1)</script>知识库重构\",\"summary\":\"<span onclick=\\\"evil()\\\">普通文字</span>\",\"highlights\":[\"javascript:alert(1)\",\"有效重点\"],\"tags\":[\"知识库<script>bad()</script>\"],\"cover\":{\"title\":\"<img src=x onerror=evil()>封面\",\"subtitle\":\"普通副标题\"},\"content\":{\"schemaVersion\":1,\"sourceText\":\"知识库重构\",\"sourceFormat\":\"plainText\",\"parseMode\":\"business\",\"title\":\"<script>alert(1)</script>知识库重构\",\"blocks\":[{\"id\":\"unsafe\",\"type\":\"paragraph\",\"text\":\"<span onclick=\\\"evil()\\\">普通文字</span><script>alert(1)</script>\",\"plainText\":\"<span onclick=\\\"evil()\\\">普通文字</span><script>alert(1)</script>\",\"markdown\":\"<span onclick=\\\"evil()\\\">普通文字</span><script>alert(1)</script>\",\"source\":{\"startLine\":1,\"endLine\":1,\"startOffset\":0,\"endOffset\":5,\"sourceText\":\"知识库重构\"}}],\"warnings\":[]}}]}"
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}

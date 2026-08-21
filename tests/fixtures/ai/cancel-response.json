@@ -1,0 +1,4 @@
+{
+  "scenario": "cancel",
+  "description": "The caller aborts the request before the provider settles."
+}
