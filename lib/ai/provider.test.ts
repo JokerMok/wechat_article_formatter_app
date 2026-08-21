@@ -122,11 +122,21 @@ describe("OpenAICompatibleProvider", () => {
   });
 
   it("keeps fallback platform content isolated from source and sibling versions", () => {
-    const fallback = buildFallbackPlatformVersions(source, ["wechat", "xiaohongshu"], "2026-08-21T00:00:00.000Z");
+    const fallback = buildFallbackPlatformVersions(source, ["wechat", "xiaohongshu", "douyinImage"], "2026-08-21T00:00:00.000Z");
+    const wechat = fallback.wechat!;
+    const xiaohongshu = fallback.xiaohongshu!;
+    const douyinImage = fallback.douyinImage!;
     const wechatContent = fallback.wechat!.content;
     const xiaohongshuContent = fallback.xiaohongshu!.content;
+    const douyinImageContent = fallback.douyinImage!.content;
     const originalBlockCount = source.blocks.length;
+    const originalWechatHighlights = [...wechat.highlights!];
+    const originalXiaohongshuTags = [...xiaohongshu.tags!];
+    const originalDouyinImageCover = { ...douyinImage.cover };
 
+    wechat.highlights!.push("mutated highlight");
+    wechat.tags!.push("mutated tag");
+    douyinImage.cover!.title = "mutated cover title";
     wechatContent.blocks[0]!.plainText = "mutated fallback title";
     wechatContent.blocks[0]!.source.sourceText = "mutated source text";
     wechatContent.blocks.push({
@@ -155,6 +165,11 @@ describe("OpenAICompatibleProvider", () => {
       },
     });
 
+    expect(wechat.highlights).toEqual([...originalWechatHighlights, "mutated highlight"]);
+    expect(xiaohongshu.highlights).toEqual(originalWechatHighlights);
+    expect(douyinImage.highlights).toEqual(originalWechatHighlights);
+    expect(xiaohongshu.tags).toEqual(originalXiaohongshuTags);
+    expect(douyinImage.cover).toEqual({ ...originalDouyinImageCover, title: "mutated cover title" });
     expect(source.blocks[0]!.plainText).toBe("知识库重构");
     expect(source.blocks[0]!.source.sourceText).toBe("知识库重构");
     expect(source.blocks).toHaveLength(originalBlockCount);
@@ -164,6 +179,8 @@ describe("OpenAICompatibleProvider", () => {
     expect(xiaohongshuContent.blocks).toHaveLength(originalBlockCount);
     expect(xiaohongshuContent.warnings).toEqual([]);
     expect(xiaohongshuContent.blocks[0]!.source).toEqual(source.blocks[0]!.source);
+    expect(douyinImageContent.blocks[0]!.plainText).toBe("知识库重构");
+    expect(douyinImageContent.warnings).toEqual([]);
   });
 
   it("TEST-008 classifies invalid assistant JSON as a schema error", async () => {
@@ -296,6 +313,24 @@ describe("OpenAICompatibleProvider", () => {
       sourceVersionId: "source-v1",
       platforms: ["wechat"],
     });
+
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(timeoutPromise).resolves.toMatchObject({ ok: false, error: { code: "timeout" } });
+  });
+
+  it("TEST-008 preserves timeout when caller aborts after timeout but before body rejection settles", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn(async () => delayedRejectingJsonResponse()));
+
+    const controller = new AbortController();
+    const timeoutPromise = generatePlatformVersions({
+      provider: new OpenAICompatibleProvider({ ...baseProviderConfig, timeoutMs: 25 }),
+      source,
+      sourceVersionId: "source-v1",
+      platforms: ["wechat"],
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 30);
 
     await vi.advanceTimersByTimeAsync(100);
     await expect(timeoutPromise).resolves.toMatchObject({ ok: false, error: { code: "timeout" } });

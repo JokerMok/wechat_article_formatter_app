@@ -165,6 +165,9 @@ export class OpenAICompatibleProvider {
     let abortKind: "timeout" | "cancelled" | undefined;
 
     const cancelFromCaller = () => {
+      if (abortKind) {
+        return;
+      }
       abortKind = "cancelled";
       if (!abortController.signal.aborted) {
         abortController.abort(new Error("AI request cancelled"));
@@ -186,11 +189,11 @@ export class OpenAICompatibleProvider {
 
     try {
       const throwIfAborted = () => {
-        if (abortKind === "cancelled" || options.signal?.aborted) {
-          throw this.error("cancelled", "AI request was cancelled.", false, diagnostics);
-        }
         if (abortKind === "timeout") {
           throw this.error("timeout", "AI provider request timed out.", true, diagnostics);
+        }
+        if (abortKind === "cancelled" || options.signal?.aborted) {
+          throw this.error("cancelled", "AI request was cancelled.", false, diagnostics);
         }
       };
 
@@ -243,11 +246,11 @@ export class OpenAICompatibleProvider {
         diagnostics: responseDiagnostics,
       };
     } catch (error) {
-      if (abortKind === "cancelled" || options.signal?.aborted) {
-        throw this.error("cancelled", "AI request was cancelled.", false, diagnostics);
-      }
       if (abortKind === "timeout") {
         throw this.error("timeout", "AI provider request timed out.", true, diagnostics);
+      }
+      if (abortKind === "cancelled" || options.signal?.aborted) {
+        throw this.error("cancelled", "AI request was cancelled.", false, diagnostics);
       }
       if (error instanceof AIProviderError) {
         throw error;
@@ -373,7 +376,8 @@ export function buildFallbackPlatformVersions(source: UnifiedArticleContent, pla
 
   return platforms.reduce<PlatformVersionMap>((versions, platform) => {
     const summary = truncateText(summarySource, platformSummaryLength(platform));
-    const safeHighlights = highlights.length > 0 ? highlights : [summary];
+    const safeHighlights = highlights.length > 0 ? [...highlights] : [summary];
+    const cover = platform === "douyinImage" ? { title: platformTitle(platform, title), subtitle: summary } : undefined;
     versions[platform] = {
       platform,
       status: "draft",
@@ -381,8 +385,8 @@ export function buildFallbackPlatformVersions(source: UnifiedArticleContent, pla
       content: cloneUnifiedArticleContent(source),
       summary,
       highlights: safeHighlights,
-      tags: fallbackTags(platform),
-      cover: platform === "douyinImage" ? { title: platformTitle(platform, title), subtitle: summary } : undefined,
+      tags: [...fallbackTags(platform)],
+      cover: cover ? { ...cover } : undefined,
       updatedAt,
     };
     return versions;
