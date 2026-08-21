@@ -82,7 +82,6 @@ export type AssetBlobRepository = {
     fileName: string;
     crop?: CropParamsInput;
   }): Promise<StoredAssetMetadata>;
-  putImageBlob?(record: StoredAssetRecord): Promise<StoredAssetMetadata>;
   getAssetBlob(id: string): Promise<AssetLoadResult>;
   listProjectAssets(projectId: string): Promise<StoredAssetMetadata[]>;
   deleteAsset(id: string): Promise<void>;

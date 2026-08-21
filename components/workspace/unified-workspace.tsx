@@ -109,6 +109,24 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function remapAssetTokens(value: unknown, replacements: Map<string, string>): unknown {
+  if (typeof value === "string") {
+    return [...replacements.entries()].reduce((result, [from, to]) => result.split(`asset:${from}`).join(`asset:${to}`), value);
+  }
+  if (Array.isArray(value)) return value.map((item) => remapAssetTokens(item, replacements));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, remapAssetTokens(item, replacements)]));
+}
+
+function remapProjectAssetReferences(project: ProjectDocument, replacements: Map<string, string>): ProjectDocument {
+  return {
+    ...project,
+    assets: project.assets.map((asset) => ({ ...asset, id: replacements.get(asset.id) ?? asset.id })),
+    article: remapAssetTokens(project.article, replacements) as ProjectDocument["article"],
+    platformVersions: remapAssetTokens(project.platformVersions, replacements) as ProjectDocument["platformVersions"],
+  };
+}
+
 type ProjectBackupFile = {
   payload: ReturnType<typeof readProjectBackupPayload>;
   assets: StoredAssetRecord[];
@@ -473,20 +491,23 @@ export default function UnifiedWorkspace() {
   async function importProjectBackup(file: File) {
     try {
       const backup = await readProjectBackupFile(file);
-      const project = selectRestorableBackupProject(backup.payload);
-      if (!project) {
+      const selectedProject = selectRestorableBackupProject(backup.payload);
+      if (!selectedProject) {
         setStatusMessage("备份文件无可恢复项目");
         return;
       }
       const canReplace = await confirmAndSaveBeforeReplacing("当前项目有未保存内容。先保存再导入项目？");
       if (!canReplace) return;
 
-      const importedProject = createEmptyProject({ title: project.title, article: project.article });
       const assetRepo = assetRepoRef.current;
-      if (backup.assets.length && !assetRepo?.putImageBlob) throw new Error("当前浏览器不支持恢复项目图片");
+      const importedProject = createEmptyProject({ title: selectedProject.title, article: selectedProject.article });
+      const assetIdMap = new Map<string, string>();
       for (const asset of backup.assets) {
-        await assetRepo?.putImageBlob?.({ ...asset, projectId: importedProject.id });
+        const restored = await assetRepo?.saveImageBlob({ projectId: importedProject.id, blob: asset.blob, fileName: asset.fileName, crop: asset.crop });
+        if (!restored) throw new Error("当前浏览器不支持恢复项目图片");
+        assetIdMap.set(asset.id, restored.id);
       }
+      const project = remapProjectAssetReferences(selectedProject, assetIdMap);
       const importedWorkspace = workspaceFromDocument(project);
       const importedAssets = await loadAssetPlaceholders(project.assets);
       hydratedRef.current = false;

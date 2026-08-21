@@ -65,15 +65,6 @@ export function createAssetBlobRepository(options: BrowserDatabaseOptions = {}):
       return metadataFromRecord(record);
     },
 
-    async putImageBlob(record) {
-      try {
-        await getDb().assets.put(record);
-      } catch (error) {
-        throw categorizeStorageWriteError(error);
-      }
-      return metadataFromRecord(record);
-    },
-
     async getAssetBlob(id: string): Promise<AssetLoadResult> {
       const record = await getDb().assets.get(id);
       if (!record) {
