@@ -58,6 +58,8 @@ export type PlatformDraft = {
 
 export type AiWorkspaceSettings = {
   mode: "deterministic" | "assistant";
+  baseUrl: string;
+  model: string;
   temperature: number;
   lastFallbackReason?: string;
 };

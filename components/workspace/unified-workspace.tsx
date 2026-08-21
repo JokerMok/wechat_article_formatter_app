@@ -7,6 +7,10 @@ import {
   ImagePlus,
   Lock,
   LockOpen,
+  MoveDown,
+  MoveUp,
+  Merge,
+  Scissors,
   Redo2,
   RefreshCw,
   Save,
@@ -29,9 +33,14 @@ import {
   createApproximateTextMeasurer,
   drawCardImagePage,
   layoutCardPages,
+  lockCardImagePage,
+  mergeAdjacentCardPages,
+  moveCardImagePage,
+  splitCardImagePageAfterElement,
   type CardLayoutPage,
   type CardLayoutResult,
 } from "@/lib/renderers/cards";
+import { OpenAICompatibleProvider, generatePlatformVersions } from "@/lib/ai";
 import type { WechatImageNode } from "@/lib/renderers/wechat";
 import { renderWechatContentHtml } from "@/lib/renderers/wechat";
 import { createAssetBlobRepository, createEmptyProject, createProjectRepository, type ProjectAssetReference, type ProjectDocument } from "@/lib/storage";
@@ -41,17 +50,23 @@ import {
   DEFAULT_SOURCE_MARKDOWN,
   WORKSPACE_PLATFORM_IDS,
   WORKSPACE_PLATFORM_LABELS,
+  clearManualCardPages,
   createWorkspaceState,
+  isAiProviderConfigured,
   parseSourceMarkdown,
+  platformDraftFromVersion,
+  platformVersionsFromDrafts,
   readPersistedWorkspace,
   regeneratePlatformDraft,
+  sanitizeWechatHtml,
   serializeWorkspace,
-  toggleLockedPage,
   updatePlatformBlock,
   updatePlatformCaption,
   updatePlatformRatio,
   updatePlatformTags,
   updatePlatformTitle,
+  withLockedCardPage,
+  withManualCardPages,
   withWechatHtmlOverride,
 } from "./state";
 import type { AssetPlaceholder, DraftHistory, LayoutSettings, PlatformDraft, RatioMode, WorkspaceMode, WorkspacePersistedState } from "./types";
@@ -166,9 +181,13 @@ export default function UnifiedWorkspace() {
   const [saveState, setSaveState] = React.useState<"loading" | "dirty" | "saving" | "saved" | "error">("loading");
   const [statusMessage, setStatusMessage] = React.useState("正在恢复本地项目");
   const [history, setHistory] = React.useState<Record<PlatformId, DraftHistory>>(() => createEmptyHistories());
+  const [sessionApiKey, setSessionApiKey] = React.useState("");
+  const [aiRunState, setAiRunState] = React.useState<"idle" | "generating" | "error">("idle");
   const repoRef = React.useRef<ReturnType<typeof createProjectRepository> | undefined>(undefined);
   const assetRepoRef = React.useRef<ReturnType<typeof createAssetBlobRepository> | undefined>(undefined);
   const hydratedRef = React.useRef(false);
+  const revisionRef = React.useRef(0);
+  const aiAbortRef = React.useRef<AbortController | undefined>(undefined);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const activeDraft = workspace.platforms[activePlatform];
   const sourceArticle = React.useMemo(() => parseSourceMarkdown(workspace.sourceMarkdown), [workspace.sourceMarkdown]);
@@ -193,11 +212,13 @@ export default function UnifiedWorkspace() {
         paragraphSpacing: workspace.layout.paragraphSpacing,
         titleSpacing: workspace.layout.titleSpacing,
       },
+      manualPages: activeDraft.manualPages.map((page) => ({
+        id: page.id,
+        locked: page.locked,
+        layout: page,
+      })),
     });
-    return {
-      ...result,
-      pages: result.pages.map((page) => ({ ...page, locked: activeDraft.lockedPageIds.includes(page.id) || page.locked })),
-    };
+    return result;
   }, [activeDraft, activePlatform, workspace.layout]);
 
   const wechatHtml = React.useMemo(() => {
@@ -222,6 +243,7 @@ export default function UnifiedWorkspace() {
 
   React.useEffect(() => {
     if (!hydratedRef.current) return;
+    revisionRef.current += 1;
     setSaveState("dirty");
     const timer = window.setTimeout(() => {
       void saveProject();
@@ -254,12 +276,7 @@ export default function UnifiedWorkspace() {
         objectUrl: loaded?.state === "ready" ? URL.createObjectURL(loaded.blob) : undefined,
       });
     }
-    setAssets((previous) => {
-      previous.forEach((asset) => {
-        if (asset.objectUrl) URL.revokeObjectURL(asset.objectUrl);
-      });
-      return nextAssets;
-    });
+    replaceAssets(nextAssets);
   }
 
   async function loadLatestProject() {
@@ -299,7 +316,8 @@ export default function UnifiedWorkspace() {
 
   async function saveProject() {
     const repo = repoRef.current;
-    if (!repo) return;
+    if (!repo) return false;
+    const saveRevision = revisionRef.current;
     setSaveState("saving");
     try {
       const projectAssets = assets.map((asset) => ({
@@ -310,38 +328,61 @@ export default function UnifiedWorkspace() {
       }));
       await repo.saveProject(makeProjectFromWorkspace(projectId, projectTitle, sourceArticle, projectAssets, workspace));
       await refreshProjects();
-      setSaveState("saved");
-      setStatusMessage("已保存到浏览器本地");
+      if (saveRevision === revisionRef.current) {
+        setSaveState("saved");
+        setStatusMessage("已保存到浏览器本地");
+      } else {
+        setSaveState("dirty");
+      }
+      return true;
     } catch (error) {
       setSaveState("error");
       setStatusMessage(error instanceof Error ? error.message : "保存失败，已有内容未清空");
+      return false;
     }
   }
 
   async function openProject(id: string) {
     const repo = repoRef.current;
     if (!repo) return;
-    await saveProject();
+    if (id === projectId) return;
+    const canReplace = await confirmAndSaveBeforeReplacing("当前项目有未保存内容。先保存再打开其他项目？");
+    if (!canReplace) return;
     const result = await repo.getProject(id);
     if (result.state !== "ready") {
       setStatusMessage(result.state === "unknownVersion" ? "项目版本过高，无法在当前版本打开" : "项目不存在");
       return;
     }
+    hydratedRef.current = false;
     setProjectId(result.project.id);
     setProjectTitle(result.project.title);
     setWorkspace(workspaceFromDocument(result.project));
     await hydrateAssets(result.project.assets);
+    setHistory(createEmptyHistories());
+    revisionRef.current = 0;
+    hydratedRef.current = true;
+    setSaveState("saved");
     setStatusMessage("项目已打开");
   }
 
-  function createNewProject() {
+  async function createNewProject() {
+    const canReplace = await confirmAndSaveBeforeReplacing("当前项目有未保存内容。先保存再新建项目？");
+    if (!canReplace) return;
+    replaceWithNewProject();
+  }
+
+  function replaceWithNewProject() {
     const fresh = createWorkspaceState();
     const project = createEmptyProject({ title: "未命名项目", article: parseSourceMarkdown(fresh.sourceMarkdown) });
+    hydratedRef.current = false;
     setProjectId(project.id);
     setProjectTitle(project.title);
     setWorkspace(fresh);
-    setAssets([]);
+    replaceAssets([]);
     setHistory(createEmptyHistories());
+    revisionRef.current += 1;
+    hydratedRef.current = true;
+    setSaveState("dirty");
     setStatusMessage("已新建项目");
   }
 
@@ -349,14 +390,35 @@ export default function UnifiedWorkspace() {
     const repo = repoRef.current;
     const assetRepo = assetRepoRef.current;
     if (!repo) return;
+    if (!window.confirm("确定删除当前项目？项目记录和未保存修改会被移除。")) return;
     try {
       await repo.deleteProject(projectId, { assetRepository: assetRepo });
-      createNewProject();
+      replaceWithNewProject();
       await refreshProjects();
       setStatusMessage("项目已删除");
     } catch (error) {
+      setSaveState("error");
       setStatusMessage(error instanceof Error ? error.message : "删除失败");
     }
+  }
+
+  async function confirmAndSaveBeforeReplacing(message: string) {
+    if (saveState !== "dirty" && saveState !== "saving" && saveState !== "error") return true;
+    if (!window.confirm(message)) return false;
+    const saved = await saveProject();
+    if (!saved) {
+      setStatusMessage("保存失败，已保留当前项目");
+    }
+    return saved;
+  }
+
+  function replaceAssets(nextAssets: AssetPlaceholder[]) {
+    setAssets((previous) => {
+      previous.forEach((asset) => {
+        if (asset.objectUrl) URL.revokeObjectURL(asset.objectUrl);
+      });
+      return nextAssets;
+    });
   }
 
   function updateWorkspace(patch: Partial<WorkspacePersistedState>) {
@@ -380,19 +442,97 @@ export default function UnifiedWorkspace() {
     });
   }
 
-  function regenerateCurrentPlatform() {
-    commitPlatform(regeneratePlatformDraft(activeDraft, sourceArticle, workspace.ai));
-    setStatusMessage(workspace.ai.mode === "assistant" ? "AI 未配置，已使用本地确定性生成" : "已使用本地确定性生成");
+  async function regenerateCurrentPlatform() {
+    await regeneratePlatforms([activePlatform]);
   }
 
-  function regenerateAllPlatforms() {
+  async function regenerateAllPlatforms() {
+    await regeneratePlatforms([...WORKSPACE_PLATFORM_IDS]);
+  }
+
+  async function regeneratePlatforms(platforms: PlatformId[]) {
+    if (workspace.ai.mode !== "assistant" || !isAiProviderConfigured(workspace.ai, sessionApiKey)) {
+      applyDeterministicRegeneration(platforms);
+      setStatusMessage(workspace.ai.mode === "assistant" ? "AI 配置不完整，已使用本地确定性生成" : "已使用本地确定性生成");
+      return;
+    }
+
+    aiAbortRef.current?.abort();
+    const controller = new AbortController();
+    aiAbortRef.current = controller;
+    setAiRunState("generating");
+    setStatusMessage("正在生成平台版本");
+
+    const provider = new OpenAICompatibleProvider({
+      baseUrl: workspace.ai.baseUrl.trim(),
+      model: workspace.ai.model.trim(),
+      apiKey: sessionApiKey.trim(),
+      timeoutMs: 30000,
+    });
+
+    const result = await generatePlatformVersions({
+      provider,
+      source: sourceArticle,
+      sourceVersionId: String(sourceArticle.sourceText.length),
+      platforms,
+      existingVersions: platformVersionsFromDrafts(workspace.platforms),
+      signal: controller.signal,
+    });
+
+    if (aiAbortRef.current === controller) aiAbortRef.current = undefined;
+
+    if (result.ok) {
+      setWorkspace((current) => ({
+        ...current,
+        ai: { ...current.ai, lastFallbackReason: undefined },
+        platforms: mergeGeneratedVersions(current.platforms, result.versions, platforms),
+      }));
+      setAiRunState("idle");
+      setStatusMessage(`AI 已生成 ${platforms.length} 个平台版本`);
+      return;
+    }
+
+    if (result.error.code === "cancelled") {
+      setAiRunState("idle");
+      setStatusMessage("AI 生成已取消");
+      return;
+    }
+
+    setWorkspace((current) => ({
+      ...current,
+      ai: {
+        ...current.ai,
+        lastFallbackReason: `${result.error.message} 已回退本地确定性生成。`,
+      },
+      platforms: mergeGeneratedVersions(current.platforms, result.fallbackVersions, platforms),
+    }));
+    setAiRunState("error");
+    setStatusMessage(`${result.error.message} 已回退本地确定性生成`);
+  }
+
+  function applyDeterministicRegeneration(platforms: PlatformId[]) {
     setWorkspace((current) => ({
       ...current,
       platforms: Object.fromEntries(
-        WORKSPACE_PLATFORM_IDS.map((platform) => [platform, regeneratePlatformDraft(current.platforms[platform], sourceArticle, current.ai)]),
+        WORKSPACE_PLATFORM_IDS.map((platform) => [
+          platform,
+          platforms.includes(platform) ? regeneratePlatformDraft(current.platforms[platform], sourceArticle, current.ai) : current.platforms[platform],
+        ]),
       ) as Record<PlatformId, PlatformDraft>,
     }));
-    setStatusMessage("四个平台已重新生成");
+  }
+
+  function mergeGeneratedVersions(currentDrafts: Record<PlatformId, PlatformDraft>, versions: ReturnType<typeof platformVersionsFromDrafts>, platforms: PlatformId[]) {
+    return Object.fromEntries(
+      WORKSPACE_PLATFORM_IDS.map((platform) => {
+        const version = versions[platform];
+        return [platform, platforms.includes(platform) && version ? platformDraftFromVersion(currentDrafts[platform], version) : currentDrafts[platform]];
+      }),
+    ) as Record<PlatformId, PlatformDraft>;
+  }
+
+  function cancelAiGeneration() {
+    aiAbortRef.current?.abort();
   }
 
   function undoPlatform() {
@@ -451,7 +591,7 @@ export default function UnifiedWorkspace() {
 
   async function copyWechat() {
     try {
-      await copyRichText(wechatHtml);
+      await copyRichText(sanitizeWechatHtml(wechatHtml));
       setStatusMessage("公众号富文本已复制");
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : "复制失败，请改用导出 HTML");
@@ -468,7 +608,7 @@ export default function UnifiedWorkspace() {
   }
 
   function downloadWechatHtml() {
-    const blob = new Blob([wechatHtml], { type: "text/html;charset=utf-8" });
+    const blob = new Blob([sanitizeWechatHtml(wechatHtml)], { type: "text/html;charset=utf-8" });
     downloadBlob(blob, `${activeDraft.title || "wechat"}.html`);
   }
 
@@ -478,7 +618,8 @@ export default function UnifiedWorkspace() {
     canvas.height = page.canvas.height;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    drawCardImagePage(ctx, page);
+    const images = await loadCardCanvasImages(page, createImageUrlByBlock(activeDraft.content, assets));
+    drawCardImagePage(ctx, page, { images });
     canvas.toBlob((blob) => {
       if (blob) downloadBlob(blob, `${activeDraft.title || activePlatform}-${page.pageNumber}.png`);
     }, "image/png");
@@ -490,7 +631,8 @@ export default function UnifiedWorkspace() {
     canvas.height = page.canvas.height;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    drawCardImagePage(ctx, page);
+    const images = await loadCardCanvasImages(page, createImageUrlByBlock(activeDraft.content, assets));
+    drawCardImagePage(ctx, page, { images });
     canvas.toBlob(async (blob) => {
       if (!blob) return;
       try {
@@ -504,6 +646,42 @@ export default function UnifiedWorkspace() {
 
   function updateLayout(patch: Partial<LayoutSettings>) {
     updateWorkspace({ layout: { ...workspace.layout, ...patch } });
+  }
+
+  function applyManualLayout(nextLayout: CardLayoutResult) {
+    commitPlatform(withManualCardPages(activeDraft, nextLayout.pages));
+  }
+
+  function lockPage(page: CardLayoutPage) {
+    if (!cardLayout) return;
+    if (page.locked) {
+      commitPlatform(withLockedCardPage(activeDraft, page, false));
+      return;
+    }
+    const lockedLayout = lockCardImagePage(cardLayout, page.id, { images: imagePlacementsFromPage(page) });
+    const lockedPage = lockedLayout.pages.find((candidate) => candidate.id === page.id) ?? page;
+    commitPlatform(withLockedCardPage(activeDraft, lockedPage, true));
+  }
+
+  function splitPage(page: CardLayoutPage, elementId: string) {
+    if (!cardLayout) return;
+    applyManualLayout(splitCardImagePageAfterElement(cardLayout, page.id, elementId));
+  }
+
+  function mergePage(page: CardLayoutPage) {
+    if (!cardLayout) return;
+    applyManualLayout(mergeAdjacentCardPages(cardLayout, page.id));
+  }
+
+  function movePage(page: CardLayoutPage, direction: -1 | 1) {
+    if (!cardLayout) return;
+    const nextIndex = page.pageNumber - 1 + direction;
+    const moved = moveCardImagePage(cardLayout, page.id, nextIndex);
+    commitPlatform(withManualCardPages(activeDraft, moved.pages.map((candidate) => ({ ...candidate, manual: true }))));
+  }
+
+  function clearManualPages() {
+    commitPlatform(clearManualCardPages(activeDraft));
   }
 
   return (
@@ -523,7 +701,7 @@ export default function UnifiedWorkspace() {
               ))}
             </SelectContent>
           </Select>
-          <Button type="button" size="sm" variant="outline" onClick={createNewProject}>
+          <Button type="button" size="sm" variant="outline" onClick={() => void createNewProject()}>
             <FilePlus2 className="h-4 w-4" />
             新建
           </Button>
@@ -613,10 +791,19 @@ export default function UnifiedWorkspace() {
             onWechatPreviewBlur={(html) => commitPlatform(withWechatHtmlOverride(activeDraft, html))}
             onCopyWechat={copyWechat}
             onExportWechat={downloadWechatHtml}
-            onTogglePageLock={(pageId) => commitPlatform(toggleLockedPage(activeDraft, pageId))}
+            onTogglePageLock={lockPage}
+            onSplitPage={splitPage}
+            onMergePage={mergePage}
+            onMovePage={movePage}
+            onClearManualPages={clearManualPages}
             onExportCard={(page) => void exportCardPng(page)}
             onCopyCard={(page) => void copyCardPng(page)}
             aiMode={workspace.ai.mode}
+            aiBaseUrl={workspace.ai.baseUrl}
+            aiModel={workspace.ai.model}
+            aiRunState={aiRunState}
+            aiFallbackReason={workspace.ai.lastFallbackReason}
+            sessionApiKey={sessionApiKey}
             onAiModeChange={(modeValue) =>
               updateWorkspace({
                 ai: {
@@ -626,6 +813,10 @@ export default function UnifiedWorkspace() {
                 },
               })
             }
+            onAiBaseUrlChange={(baseUrl) => updateWorkspace({ ai: { ...workspace.ai, baseUrl } })}
+            onAiModelChange={(model) => updateWorkspace({ ai: { ...workspace.ai, model } })}
+            onSessionApiKeyChange={setSessionApiKey}
+            onCancelAi={cancelAiGeneration}
             temperature={workspace.ai.temperature}
             onTemperatureChange={(temperature) => updateWorkspace({ ai: { ...workspace.ai, temperature } })}
           />
@@ -653,7 +844,7 @@ function SourcePanel(props: {
   assets: AssetPlaceholder[];
   onSourceChange: (value: string) => void;
   onReparse: () => void;
-  onRegenerateAll: () => void;
+  onRegenerateAll: () => Promise<void>;
   onPickImages: () => void;
   onUpload: (files: FileList | File[]) => Promise<void>;
   onInsertAsset: (asset: AssetPlaceholder) => void;
@@ -690,7 +881,7 @@ function SourcePanel(props: {
           aria-label="源文 Markdown"
         />
         <div className="mt-3 flex gap-2">
-          <Button type="button" size="sm" onClick={props.onRegenerateAll}>
+          <Button type="button" size="sm" onClick={() => void props.onRegenerateAll()}>
             <RefreshCw className="h-4 w-4" />
             生成四端
           </Button>
@@ -730,7 +921,7 @@ function PlatformEditor(props: {
   draft: PlatformDraft;
   history: DraftHistory;
   onDraftChange: (draft: PlatformDraft) => void;
-  onRegenerate: () => void;
+  onRegenerate: () => Promise<void>;
   onUndo: () => void;
   onRedo: () => void;
   onCopyText: (text: string, success: string) => Promise<void>;
@@ -752,7 +943,7 @@ function PlatformEditor(props: {
             <Button type="button" size="sm" variant="outline" onClick={props.onRedo} disabled={!props.history.future.length} aria-label="重做">
               <Redo2 className="h-4 w-4" />
             </Button>
-            <Button type="button" size="sm" onClick={props.onRegenerate}>
+            <Button type="button" size="sm" onClick={() => void props.onRegenerate()}>
               <RefreshCw className="h-4 w-4" />
               生成
             </Button>
@@ -822,11 +1013,24 @@ function PreviewPanel(props: {
   onWechatPreviewBlur: (html: string) => void;
   onCopyWechat: () => Promise<void>;
   onExportWechat: () => void;
-  onTogglePageLock: (pageId: string) => void;
+  onTogglePageLock: (page: CardLayoutPage) => void;
+  onSplitPage: (page: CardLayoutPage, elementId: string) => void;
+  onMergePage: (page: CardLayoutPage) => void;
+  onMovePage: (page: CardLayoutPage, direction: -1 | 1) => void;
+  onClearManualPages: () => void;
   onExportCard: (page: CardLayoutPage) => void;
   onCopyCard: (page: CardLayoutPage) => void;
   aiMode: "deterministic" | "assistant";
+  aiBaseUrl: string;
+  aiModel: string;
+  aiRunState: "idle" | "generating" | "error";
+  aiFallbackReason?: string;
+  sessionApiKey: string;
   onAiModeChange: (mode: "deterministic" | "assistant") => void;
+  onAiBaseUrlChange: (value: string) => void;
+  onAiModelChange: (value: string) => void;
+  onSessionApiKeyChange: (value: string) => void;
+  onCancelAi: () => void;
   temperature: number;
   onTemperatureChange: (value: number) => void;
 }) {
@@ -881,6 +1085,27 @@ function PreviewPanel(props: {
               <Toggle pressed={props.aiMode === "assistant"} onPressedChange={() => props.onAiModeChange("assistant")}>AI</Toggle>
             </div>
           </SettingRow>
+          {props.aiMode === "assistant" && (
+            <div className="space-y-2 rounded-md border bg-white p-3">
+              <Input value={props.aiBaseUrl} onChange={(event) => props.onAiBaseUrlChange(event.target.value)} className="h-9 rounded-md" aria-label="AI Base URL" placeholder="Base URL" />
+              <Input value={props.aiModel} onChange={(event) => props.onAiModelChange(event.target.value)} className="h-9 rounded-md" aria-label="AI 模型" placeholder="模型" />
+              <Input
+                value={props.sessionApiKey}
+                onChange={(event) => props.onSessionApiKeyChange(event.target.value)}
+                className="h-9 rounded-md"
+                aria-label="AI 会话 API Key"
+                placeholder="Session API Key"
+                type="password"
+                autoComplete="off"
+              />
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>{props.aiRunState === "generating" ? "生成中" : props.aiFallbackReason ?? "密钥只保存在当前会话"}</span>
+                <Button type="button" size="sm" variant="outline" onClick={props.onCancelAi} disabled={props.aiRunState !== "generating"}>
+                  取消
+                </Button>
+              </div>
+            </div>
+          )}
           <Range label="温度" value={props.temperature} min={0} max={1} step={0.1} onChange={props.onTemperatureChange} />
         </div>
       </div>
@@ -894,6 +1119,10 @@ function PreviewPanel(props: {
             layout={props.cardLayout}
             imageUrlByBlock={props.imageUrlByBlock}
             onTogglePageLock={props.onTogglePageLock}
+            onSplitPage={props.onSplitPage}
+            onMergePage={props.onMergePage}
+            onMovePage={props.onMovePage}
+            onClearManualPages={props.onClearManualPages}
             onExportCard={props.onExportCard}
             onCopyCard={props.onCopyCard}
           />
@@ -949,22 +1178,56 @@ function LongformPreview({ draft }: { draft: PlatformDraft }) {
 function CardPreview(props: {
   layout?: CardLayoutResult;
   imageUrlByBlock: Record<string, string>;
-  onTogglePageLock: (pageId: string) => void;
+  onTogglePageLock: (page: CardLayoutPage) => void;
+  onSplitPage: (page: CardLayoutPage, elementId: string) => void;
+  onMergePage: (page: CardLayoutPage) => void;
+  onMovePage: (page: CardLayoutPage, direction: -1 | 1) => void;
+  onClearManualPages: () => void;
   onExportCard: (page: CardLayoutPage) => void;
   onCopyCard: (page: CardLayoutPage) => void;
 }) {
   if (!props.layout) return null;
+  const hasManualPages = props.layout.pages.some((page) => page.manual || page.locked);
   return (
     <div className="space-y-5">
+      {hasManualPages && (
+        <div className="mx-auto flex w-[270px] items-center justify-between rounded-md border bg-white p-2 text-xs text-muted-foreground">
+          <span>已启用手动页</span>
+          <Button type="button" size="sm" variant="outline" onClick={props.onClearManualPages}>
+            清除
+          </Button>
+        </div>
+      )}
       {props.layout.pages.map((page) => (
         <div key={page.id} className="mx-auto w-[270px]">
-          <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
+          <div className="mb-2 space-y-2 text-xs text-muted-foreground">
             <span>
               {page.canvas.width}x{page.canvas.height} · {page.pageNumber}/{page.totalPages}
+              {page.manual ? " · 手动" : ""}
+              {page.locked ? " · 锁定" : ""}
             </span>
-            <div className="flex gap-1">
-              <Button type="button" size="sm" variant="outline" onClick={() => props.onTogglePageLock(page.id)} aria-label="锁定页面">
+            <div className="flex flex-wrap gap-1">
+              <Button type="button" size="sm" variant="outline" onClick={() => props.onTogglePageLock(page)} aria-label={page.locked ? "解锁页面" : "锁定页面"}>
                 {page.locked ? <Lock className="h-4 w-4" /> : <LockOpen className="h-4 w-4" />}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => props.onSplitPage(page, page.nodes[Math.max(0, Math.floor(page.nodes.length / 2) - 1)]?.id ?? "")}
+                disabled={page.nodes.length < 2}
+                aria-label="拆分页面"
+              >
+                <Scissors className="h-4 w-4" />
+              </Button>
+              <Button type="button" size="sm" variant="outline" onClick={() => props.onMergePage(page)} disabled={page.pageNumber >= page.totalPages || page.locked} aria-label="合并下一页">
+                <Merge className="h-4 w-4" />
+              </Button>
+              <Button type="button" size="sm" variant="outline" onClick={() => props.onMovePage(page, -1)} disabled={page.pageNumber <= 1} aria-label="上移页面">
+                <MoveUp className="h-4 w-4" />
+              </Button>
+              <Button type="button" size="sm" variant="outline" onClick={() => props.onMovePage(page, 1)} disabled={page.pageNumber >= page.totalPages} aria-label="下移页面">
+                <MoveDown className="h-4 w-4" />
               </Button>
               <Button type="button" size="sm" variant="outline" onClick={() => props.onCopyCard(page)}>
                 复制
@@ -1074,4 +1337,56 @@ function downloadBlob(blob: Blob, filename: string) {
   anchor.download = filename;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function imagePlacementsFromPage(page: CardLayoutPage) {
+  return page.nodes.flatMap((node) => {
+    if (node.kind !== "image" || !node.image) return [];
+    return [
+      {
+        imageId: node.blockId,
+        x: node.image.x,
+        y: node.image.y,
+        width: node.image.width,
+        height: node.image.height,
+        rotation: node.image.rotation,
+        opacity: node.image.opacity,
+        mode: node.image.mode,
+      },
+    ];
+  });
+}
+
+async function loadCardCanvasImages(page: CardLayoutPage, imageUrlByBlock: Record<string, string>) {
+  const entries = await Promise.all(
+    page.nodes.flatMap((node) => {
+      if (node.kind !== "image") return [];
+      const url = imageUrlByBlock[node.blockId] ?? imageUrlByBlock[node.entryId];
+      if (!url) return [];
+      return [
+        loadImage(url)
+          .then((image) => [
+            [node.blockId, image],
+            [node.entryId, image],
+          ])
+          .catch(() => []),
+      ];
+    }),
+  );
+  return Object.fromEntries(entries.flat()) as Record<string, CanvasImageSource>;
+}
+
+async function loadImage(src: string): Promise<HTMLImageElement> {
+  const image = new Image();
+  image.decoding = "async";
+  image.src = src;
+  if (image.decode) {
+    await image.decode();
+  } else {
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("image load failed"));
+    });
+  }
+  return image;
 }

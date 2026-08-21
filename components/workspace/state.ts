@@ -2,10 +2,10 @@ import type { TemplateKey } from "../../lib/article-types";
 import { parseArticleContent } from "../../lib/article-parser";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../../lib/content";
 import { toDouyinImageText, toDouyinLongform } from "../../lib/platforms/douyin";
-import type { PlatformId } from "../../lib/platforms/types";
+import type { PlatformId, PlatformVersion, PlatformVersionMap } from "../../lib/platforms/types";
 import { createWechatPlatformVersion } from "../../lib/platforms/wechat";
 import { toXiaohongshuImageText } from "../../lib/platforms/xiaohongshu";
-import type { CardAspectRatio } from "../../lib/renderers/cards";
+import type { CardAspectRatio, CardLayoutPage } from "../../lib/renderers/cards";
 import { styleTemplates } from "../../lib/style-templates";
 import type {
   AiWorkspaceSettings,
@@ -60,6 +60,8 @@ export const DEFAULT_LAYOUT_SETTINGS: LayoutSettings = {
 
 export const DEFAULT_AI_SETTINGS: AiWorkspaceSettings = {
   mode: "deterministic",
+  baseUrl: "https://api.openai.com/v1",
+  model: "gpt-4.1-mini",
   temperature: 0.2,
   lastFallbackReason: "当前演示使用本地确定性转换，未调用外部 AI。",
 };
@@ -134,6 +136,52 @@ export function regeneratePlatformDraft(
       tags: regenerated.meta.tags,
     },
   };
+}
+
+export function platformDraftFromVersion(current: PlatformDraft, version: PlatformVersion): PlatformDraft {
+  const fallback = createPlatformDraft(current.platform, version.content, {
+    templateKey: current.templateKey,
+    ratio: current.ratio,
+    lockedPageIds: current.lockedPageIds,
+    manualPages: current.manualPages,
+  });
+
+  return {
+    ...fallback,
+    status: version.status,
+    title: version.title,
+    content: cloneArticleContent(version.content),
+    meta: {
+      ...fallback.meta,
+      body: version.summary ?? fallback.meta.body,
+      caption: version.summary ?? fallback.meta.caption,
+      highlights: version.highlights ? [...version.highlights] : fallback.meta.highlights,
+      tags: version.tags ? [...version.tags] : fallback.meta.tags,
+    },
+    editedWechatHtml: undefined,
+    updatedAt: version.updatedAt,
+  };
+}
+
+export function platformVersionsFromDrafts(drafts: Record<PlatformId, PlatformDraft>): PlatformVersionMap {
+  return Object.fromEntries(
+    WORKSPACE_PLATFORM_IDS.map((platform) => {
+      const draft = drafts[platform];
+      return [
+        platform,
+        {
+          platform,
+          status: draft.status,
+          title: draft.title,
+          content: cloneArticleContent(draft.content),
+          summary: draft.meta.body ?? draft.meta.caption,
+          highlights: draft.meta.highlights ? [...draft.meta.highlights] : undefined,
+          tags: [...draft.meta.tags],
+          updatedAt: draft.updatedAt,
+        } satisfies PlatformVersion,
+      ];
+    }),
+  ) as PlatformVersionMap;
 }
 
 export function updatePlatformBlock(draft: PlatformDraft, blockId: string, text: string): PlatformDraft {
@@ -211,10 +259,75 @@ export function toggleLockedPage(draft: PlatformDraft, pageId: string): Platform
 export function withWechatHtmlOverride(draft: PlatformDraft, html: string): PlatformDraft {
   return {
     ...draft,
-    editedWechatHtml: html,
+    editedWechatHtml: sanitizeWechatHtml(html),
     status: "edited",
     updatedAt: new Date().toISOString(),
   };
+}
+
+export function withManualCardPages(draft: PlatformDraft, pages: CardLayoutPage[]): PlatformDraft {
+  const manualPages = pages.filter((page) => page.manual || page.locked).map(cloneCardLayoutPage);
+  return {
+    ...draft,
+    manualPages,
+    lockedPageIds: manualPages.filter((page) => page.locked).map((page) => page.id),
+    status: "edited",
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function withLockedCardPage(draft: PlatformDraft, page: CardLayoutPage, locked: boolean): PlatformDraft {
+  const pagesById = new Map(draft.manualPages.map((manualPage) => [manualPage.id, cloneCardLayoutPage(manualPage)]));
+  const lockedIds = new Set(draft.lockedPageIds);
+
+  if (locked) {
+    pagesById.set(page.id, cloneCardLayoutPage({ ...page, manual: true, locked: true }));
+    lockedIds.add(page.id);
+  } else {
+    const existing = pagesById.get(page.id);
+    if (existing?.manual && !existing.locked) {
+      pagesById.set(page.id, { ...existing, locked: false });
+    } else {
+      pagesById.delete(page.id);
+    }
+    lockedIds.delete(page.id);
+  }
+
+  const manualPages = [...pagesById.values()].map((manualPage) => ({
+    ...manualPage,
+    locked: lockedIds.has(manualPage.id) || Boolean(manualPage.locked),
+  }));
+
+  return {
+    ...draft,
+    manualPages,
+    lockedPageIds: [...lockedIds],
+    status: "edited",
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function clearManualCardPages(draft: PlatformDraft): PlatformDraft {
+  return {
+    ...draft,
+    manualPages: [],
+    lockedPageIds: [],
+    status: "edited",
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function isAiProviderConfigured(ai: AiWorkspaceSettings, sessionApiKey: string) {
+  return ai.mode === "assistant" && ai.baseUrl.trim().length > 0 && ai.model.trim().length > 0 && sessionApiKey.trim().length > 0;
+}
+
+export function sanitizeWechatHtml(html: string): string {
+  if (typeof document === "undefined") return sanitizeWechatHtmlFallback(html);
+
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  sanitizeNode(template.content);
+  return template.innerHTML;
 }
 
 export function readPersistedWorkspace(value: unknown): WorkspacePersistedState | undefined {
@@ -365,6 +478,8 @@ function readAi(value: unknown, fallback: AiWorkspaceSettings): AiWorkspaceSetti
   if (!isRecord(value)) return fallback;
   return {
     mode: value.mode === "assistant" ? "assistant" : "deterministic",
+    baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : fallback.baseUrl,
+    model: typeof value.model === "string" ? value.model : fallback.model,
     temperature: readNumber(value.temperature, fallback.temperature),
     lastFallbackReason: typeof value.lastFallbackReason === "string" ? value.lastFallbackReason : fallback.lastFallbackReason,
   };
@@ -384,8 +499,8 @@ function readPlatformDraft(value: unknown, platform: PlatformId, fallback: Platf
     ratio,
     meta: isRecord(value.meta) ? ({ ...fallback.meta, ...value.meta } as PlatformMeta) : fallback.meta,
     lockedPageIds: Array.isArray(value.lockedPageIds) ? value.lockedPageIds.filter((id): id is string => typeof id === "string") : [],
-    manualPages: [],
-    editedWechatHtml: typeof value.editedWechatHtml === "string" ? value.editedWechatHtml : undefined,
+    manualPages: Array.isArray(value.manualPages) ? value.manualPages.flatMap(readCardLayoutPage) : [],
+    editedWechatHtml: typeof value.editedWechatHtml === "string" ? sanitizeWechatHtml(value.editedWechatHtml) : undefined,
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : fallback.updatedAt,
   };
 }
@@ -396,4 +511,98 @@ function readNumber(value: unknown, fallback: number) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function cloneCardLayoutPage(page: CardLayoutPage): CardLayoutPage {
+  return {
+    ...page,
+    canvas: { ...page.canvas },
+    safeArea: { ...page.safeArea },
+    nodes: page.nodes.map((node) => ({
+      ...node,
+      lines: node.lines.map((line) => ({ ...line })),
+      image: node.image ? { ...node.image } : undefined,
+      style: node.style ? { ...node.style } : undefined,
+    })),
+    overflow: page.overflow.map((issue) => ({ ...issue })),
+  };
+}
+
+function readCardLayoutPage(value: unknown): CardLayoutPage[] {
+  if (!isRecord(value) || typeof value.id !== "string" || !Array.isArray(value.nodes)) return [];
+  return [cloneCardLayoutPage(value as CardLayoutPage)];
+}
+
+function sanitizeNode(parent: ParentNode) {
+  const blockedTags = new Set(["script", "style", "iframe", "object", "embed", "svg", "math", "template", "meta", "link", "base", "form", "input"]);
+  const allowedTags = new Set(["section", "div", "p", "span", "strong", "b", "em", "i", "br", "img", "blockquote", "ul", "ol", "li", "code", "pre", "hr", "a"]);
+  const elements = Array.from(parent.querySelectorAll("*"));
+
+  for (const element of elements) {
+    const tagName = element.tagName.toLowerCase();
+    if (blockedTags.has(tagName)) {
+      element.remove();
+      continue;
+    }
+    if (!allowedTags.has(tagName)) {
+      element.replaceWith(...Array.from(element.childNodes));
+      continue;
+    }
+    sanitizeAttributes(element, tagName);
+  }
+}
+
+function sanitizeAttributes(element: Element, tagName: string) {
+  const globalAttributes = new Set(["style", "title", "data-wechat-block-type"]);
+  const tagAttributes: Record<string, Set<string>> = {
+    a: new Set(["href"]),
+    img: new Set(["src", "alt", "width", "height"]),
+  };
+  for (const attribute of Array.from(element.attributes)) {
+    const name = attribute.name.toLowerCase();
+    const value = attribute.value;
+    const allowed = globalAttributes.has(name) || tagAttributes[tagName]?.has(name);
+    if (!allowed || name.startsWith("on")) {
+      element.removeAttribute(attribute.name);
+      continue;
+    }
+    if ((name === "href" || name === "src") && !isSafeWechatUrl(value, name === "src" && tagName === "img")) {
+      element.removeAttribute(attribute.name);
+      continue;
+    }
+    if (name === "style") {
+      const style = sanitizeStyleValue(value);
+      if (style) element.setAttribute("style", style);
+      else element.removeAttribute("style");
+    }
+  }
+}
+
+function isSafeWechatUrl(value: string, allowImageData: boolean) {
+  const trimmed = value.trim().replace(/[\u0000-\u001f\u007f\s]+/g, "").toLowerCase();
+  if (/^(javascript|vbscript|file):/.test(trimmed)) return false;
+  if (trimmed.startsWith("data:")) {
+    return allowImageData && /^data:image\/(?:png|jpe?g|gif|webp);base64,/.test(trimmed);
+  }
+  return /^(https?:|mailto:|tel:|blob:|#|\/)/.test(trimmed);
+}
+
+function sanitizeStyleValue(value: string) {
+  return value
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => !/(?:expression\s*\(|url\s*\(|@import|javascript\s*:|vbscript\s*:|-moz-binding|behavior\s*:)/i.test(part))
+    .join("; ");
+}
+
+function sanitizeWechatHtmlFallback(html: string) {
+  return html
+    .replace(/<(script|style|iframe|object|embed|svg|math|template)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
+    .replace(/<(?:script|style|iframe|object|embed|svg|math|template)\b[^>]*\/?>/gi, "")
+    .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/\s(?:href|src)\s*=\s*(?:"\s*(?:javascript|vbscript|file):[^"]*"|'\s*(?:javascript|vbscript|file):[^']*'|\s*(?:javascript|vbscript|file):[^\s>]+)/gi, "")
+    .replace(/\s(?:href|src)\s*=\s*(?:"\s*data:(?!image\/(?:png|jpe?g|gif|webp);base64,)[^"]*"|'\s*data:(?!image\/(?:png|jpe?g|gif|webp);base64,)[^']*'|\s*data:(?!image\/(?:png|jpe?g|gif|webp);base64,)[^\s>]+)/gi, "")
+    .replace(/\sstyle\s*=\s*(?:"[^"]*(?:expression\s*\(|url\s*\(|@import|javascript\s*:|vbscript\s*:)[^"]*"|'[^']*(?:expression\s*\(|url\s*\(|@import|javascript\s*:|vbscript\s*:)[^']*')/gi, "")
+    .trim();
 }
