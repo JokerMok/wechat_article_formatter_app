@@ -1,6 +1,7 @@
 export {
   collectLayoutText,
   detectPageOverflow,
+  ensureUniqueCardPageIds,
   getCardCanvasSize,
   getCardSafeArea,
   getCardTypography,

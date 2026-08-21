@@ -111,6 +111,7 @@ export type CardOverflowIssue = {
   pageId: string;
   nodeId: string;
   type: "vertical" | "horizontal";
+  edge?: "top" | "right" | "bottom" | "left";
   amount: number;
 };
 

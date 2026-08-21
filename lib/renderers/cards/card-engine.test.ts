@@ -4,6 +4,7 @@ import type { UnifiedArticleBlock, UnifiedArticleContent } from "../../content";
 import {
   collectLayoutText,
   createApproximateTextMeasurer,
+  detectPageOverflow,
   drawCardImagePage,
   layoutCardPages,
   lockCardImagePage,
@@ -180,6 +181,90 @@ describe("card image layout engine", () => {
       rotation: -4,
       opacity: 0.6,
     });
+  });
+
+  it("preserves the remaining fragments when a page containing only the first fragment is locked", () => {
+    const text = "锁定页只保存长段落的首个片段，后续片段仍然必须继续流入可编辑页面。".repeat(120);
+    const content = article([textBlock("long", "paragraph", text)]);
+    const initial = layoutCardPages(content, createApproximateTextMeasurer(), { aspectRatio: "3:4" });
+    const lockedFirstPage = initial.pages[0];
+
+    expect(initial.pages.length).toBeGreaterThan(1);
+    expect(lockedFirstPage.nodes.some((node) => node.continuesOnNextPage)).toBe(true);
+
+    const reflowed = layoutCardPages(content, createApproximateTextMeasurer(), {
+      aspectRatio: "3:4",
+      typography: { bodyFontSize: 42, paragraphSpacing: 46 },
+      lockedPages: [lockedFirstPage],
+    });
+
+    expect(collectLayoutText(reflowed)).toBe(text);
+    expect(reflowed.pages.slice(1).some((page) => page.nodes.some((node) => node.entryId === "long"))).toBe(true);
+  });
+
+  it("reports top and left clipping for both image placements and layout entries", () => {
+    const result = layoutCardPages(
+      article([
+        textBlock("body", "paragraph", "普通布局节点也必须参与安全区溢出检测。"),
+        textBlock("image", "image", "安全区外的图片"),
+      ]),
+      createApproximateTextMeasurer(),
+      {
+        aspectRatio: "3:4",
+        imagePlacements: { image: { x: 32, y: 76, width: 240, height: 180 } },
+      },
+    );
+    const page = result.pages[0];
+    const body = page.nodes.find((node) => node.blockId === "body") as CardLayoutPage["nodes"][number];
+    const image = page.nodes.find((node) => node.blockId === "image") as CardLayoutPage["nodes"][number];
+    const clippedBody = { ...body, id: "body-clipped", x: page.safeArea.x - 18, y: page.safeArea.y - 22 };
+    const rightBottomBody = {
+      ...body,
+      id: "body-right-bottom",
+      x: page.safeArea.x + page.safeArea.width - 10,
+      y: page.safeArea.y + page.safeArea.height - 10,
+      width: 20,
+      height: 20,
+    };
+    const overflow = detectPageOverflow({ ...page, nodes: [clippedBody, image, rightBottomBody] });
+
+    expect(overflow).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ nodeId: "body-clipped", type: "horizontal", edge: "left" }),
+        expect.objectContaining({ nodeId: "body-clipped", type: "vertical", edge: "top" }),
+        expect.objectContaining({ nodeId: image.id, type: "horizontal", edge: "left" }),
+        expect.objectContaining({ nodeId: image.id, type: "vertical", edge: "top" }),
+        expect.objectContaining({ nodeId: "body-right-bottom", type: "horizontal", edge: "right" }),
+        expect.objectContaining({ nodeId: "body-right-bottom", type: "vertical", edge: "bottom" }),
+      ]),
+    );
+  });
+
+  it("keeps reflowed locked and manual page IDs unique and targets the locked page in operations", () => {
+    const blocks = [
+      textBlock("before", "paragraph", "锁定页前的内容。"),
+      textBlock("locked", "paragraph", "锁定页内容。"),
+      textBlock("after", "paragraph", "手动页内容。"),
+    ];
+    const content = article(blocks);
+    const initial = layoutCardPages(content, createApproximateTextMeasurer(), { aspectRatio: "3:4" });
+    const lockedPage = initial.pages[0];
+    const reflowed = layoutCardPages(content, createApproximateTextMeasurer(), {
+      aspectRatio: "3:4",
+      lockedPages: [lockedPage],
+      manualPages: [{ id: "page-1", blockIds: ["after"], locked: false }],
+    });
+    const ids = reflowed.pages.map((page) => page.id);
+    const locked = reflowed.pages.find((page) => page.locked);
+    const manual = reflowed.pages.find((page) => page.manual && !page.locked);
+
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(locked?.id).toBe("page-1");
+    expect(manual?.id).not.toBe("page-1");
+
+    const moved = moveCardImagePage(reflowed, "page-1", reflowed.pages.length - 1);
+    expect(moved.pages.at(-1)?.locked).toBe(true);
+    expect(collectLayoutText(moved)).toBe(expectedText(blocks));
   });
 
   it("keeps section titles with following content instead of creating orphan title pages", () => {

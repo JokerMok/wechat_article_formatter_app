@@ -88,16 +88,19 @@ export function layoutCardPages(
   const maxPages = options.maxPages ?? 1_000;
   const entries = createFlowEntries(source.blocks);
   const lockedPages = (options.lockedPages ?? []).map((page) => clonePage(page, true));
-  const lockedBlockIds = new Set(lockedPages.flatMap((page) => page.nodes.map((node) => node.blockId)));
-  const manualPages = createManualPages(entries, measurer, canvas, safeArea, typography, options).filter((page) =>
-    page.nodes.every((node) => !lockedBlockIds.has(node.blockId)),
-  );
-  const manualBlockIds = new Set(manualPages.flatMap((page) => page.nodes.map((node) => node.blockId)));
+  const lockedReservations = collectPageReservations(lockedPages);
+  const lockedEntryIds = new Set(lockedReservations.keys());
+  const manualPages = createManualPages(entries, measurer, canvas, safeArea, typography, options)
+    .map((page) => ({
+      ...page,
+      nodes: page.nodes.filter((node) => !lockedEntryIds.has(node.entryId)),
+    }))
+    .filter((page) => page.nodes.length > 0);
+  const manualReservations = collectPageReservations(manualPages);
   const reservedSourceIndexes = [...manualPages, ...lockedPages].flatMap((page) => page.nodes.map((node) => node.sourceIndex));
+  const entriesAfterLockedPages = applyPageReservations(entries, lockedReservations);
   const automaticEntries = insertBreaksAroundReservedEntries(
-    entries.filter(
-    (entry) => entry.kind === "pageBreak" || (!lockedBlockIds.has(entry.blockId) && !manualBlockIds.has(entry.blockId)),
-    ),
+    applyPageReservations(entriesAfterLockedPages, manualReservations),
     reservedSourceIndexes,
   );
   const automaticPages = paginateEntries(automaticEntries, measurer, canvas, safeArea, typography, options, maxPages);
@@ -125,17 +128,25 @@ export function collectLayoutText(result: CardLayoutResult | CardLayoutPage): st
 }
 
 export function detectPageOverflow(page: CardLayoutPage): CardOverflowIssue[] {
+  const safeLeft = page.safeArea.x;
   const safeRight = page.safeArea.x + page.safeArea.width;
+  const safeTop = page.safeArea.y;
   const safeBottom = page.safeArea.y + page.safeArea.height;
   return page.nodes.flatMap((node) => {
     const issues: CardOverflowIssue[] = [];
+    if (node.x < safeLeft) {
+      issues.push({ pageId: page.id, nodeId: node.id, type: "horizontal", edge: "left", amount: safeLeft - node.x });
+    }
     const right = node.x + node.width;
+    if (node.y < safeTop) {
+      issues.push({ pageId: page.id, nodeId: node.id, type: "vertical", edge: "top", amount: safeTop - node.y });
+    }
     const bottom = node.y + node.height;
     if (right > safeRight) {
-      issues.push({ pageId: page.id, nodeId: node.id, type: "horizontal", amount: right - safeRight });
+      issues.push({ pageId: page.id, nodeId: node.id, type: "horizontal", edge: "right", amount: right - safeRight });
     }
     if (bottom > safeBottom) {
-      issues.push({ pageId: page.id, nodeId: node.id, type: "vertical", amount: bottom - safeBottom });
+      issues.push({ pageId: page.id, nodeId: node.id, type: "vertical", edge: "bottom", amount: bottom - safeBottom });
     }
     return issues;
   });
@@ -144,7 +155,7 @@ export function detectPageOverflow(page: CardLayoutPage): CardOverflowIssue[] {
 function mergeOverflow(issues: CardOverflowIssue[]) {
   const seen = new Set<string>();
   return issues.filter((issue) => {
-    const key = `${issue.pageId}:${issue.nodeId}:${issue.type}:${Math.round(issue.amount * 1000)}`;
+    const key = `${issue.pageId}:${issue.nodeId}:${issue.type}:${issue.edge ?? "unknown"}:${Math.round(issue.amount * 1000)}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -270,6 +281,43 @@ function createManualPages(
     const page = createBlankPage(manual.id, canvas, safeArea, [], true, manual.locked);
     layoutEntriesOnPage(page, manualEntries, measurer, typography, options);
     return [page];
+  });
+}
+
+type PageReservation = {
+  text: string;
+  lastSourceIndex: number;
+};
+
+function collectPageReservations(pages: Array<Pick<CardLayoutPage, "nodes">>): Map<string, PageReservation> {
+  const reservations = new Map<string, PageReservation>();
+  for (const page of pages) {
+    const nodes = [...page.nodes].sort((left, right) => left.sourceIndex - right.sourceIndex || left.id.localeCompare(right.id));
+    for (const node of nodes) {
+      const current = reservations.get(node.entryId);
+      reservations.set(node.entryId, {
+        text: `${current?.text ?? ""}${node.text}`,
+        lastSourceIndex: Math.max(current?.lastSourceIndex ?? Number.NEGATIVE_INFINITY, node.sourceIndex),
+      });
+    }
+  }
+  return reservations;
+}
+
+function applyPageReservations(entries: FlowEntry[], reservations: Map<string, PageReservation>): FlowEntry[] {
+  return entries.flatMap((entry) => {
+    const reservation = reservations.get(entry.id);
+    if (!reservation || entry.kind === "pageBreak") return [entry];
+    if (!entry.text.startsWith(reservation.text)) return [entry];
+
+    const remainingText = entry.text.slice(reservation.text.length);
+    if (!remainingText) return [];
+    return [{
+      ...entry,
+      text: remainingText,
+      sourceIndex: Math.max(entry.sourceIndex, reservation.lastSourceIndex + 1 / 1_000_000),
+      fragmentIndex: undefined,
+    }];
   });
 }
 
@@ -599,11 +647,47 @@ function pageSortKey(id: string) {
 
 function numberPages(pages: PageDraft[], aspectRatio: CardAspectRatio): CardLayoutPage[] {
   const totalPages = pages.length;
+  const ids = getUniquePageIds(pages);
   return pages.map((page, index) => ({
     ...page,
-    id: page.id || `page-${index + 1}`,
+    id: ids[index],
     pageNumber: index + 1,
     totalPages,
     aspectRatio,
   }));
+}
+
+export function ensureUniqueCardPageIds(pages: CardLayoutPage[]): CardLayoutPage[] {
+  const ids = getUniquePageIds(pages);
+  return pages.map((page, index) => ({ ...page, id: ids[index] }));
+}
+
+function getUniquePageIds(pages: Array<Pick<CardLayoutPage, "id" | "manual" | "locked">>): string[] {
+  const explicitIds = new Set(pages.filter((page) => page.manual || page.locked).map((page) => page.id));
+  const used = new Set<string>();
+  const ids = Array.from({ length: pages.length }, () => "");
+  const indices = pages.map((_, index) => index).sort((left, right) => {
+    const leftPriority = pages[left].locked ? 0 : pages[left].manual ? 1 : 2;
+    const rightPriority = pages[right].locked ? 0 : pages[right].manual ? 1 : 2;
+    return leftPriority - rightPriority || left - right;
+  });
+
+  for (const index of indices) {
+    const page = pages[index];
+    const candidate = page.id || `page-${index + 1}`;
+    const explicit = Boolean(page.manual || page.locked);
+    let id = candidate;
+    if (used.has(id) || (!explicit && explicitIds.has(id))) {
+      const base = explicit ? candidate : `${candidate}-auto`;
+      id = base;
+      let suffix = 2;
+      while (used.has(id) || (!explicit && explicitIds.has(id))) {
+        id = `${base}-${suffix}`;
+        suffix += 1;
+      }
+    }
+    used.add(id);
+    ids[index] = id;
+  }
+  return ids;
 }
