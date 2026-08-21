@@ -4,7 +4,16 @@ import type { UnifiedArticleContent } from "../content";
 import { toDouyinImageText, toDouyinLongform, type DouyinImageOutput, type DouyinImageRatio, type DouyinLongformOutput } from "../platforms/douyin";
 import { createWechatPlatformContent, type WechatPlatformContent } from "../platforms/wechat";
 import { toXiaohongshuImageText, type XiaohongshuImageTextOutput } from "../platforms/xiaohongshu";
-import { drawCardImagePage, layoutCardPages, type CardAspectRatio, type CardImageCanvasContext, type CardLayoutPage, type CardLayoutOptions, type TextMeasurer } from "../renderers/cards";
+import {
+  drawCardImagePage,
+  layoutCardPages,
+  type CardAspectRatio,
+  type CardImageCanvasContext,
+  type CardLayoutPage,
+  type CardLayoutOptions,
+  type DrawCardImagePageOptions,
+  type TextMeasurer,
+} from "../renderers/cards";
 import type { WechatImageNode } from "../renderers/wechat";
 import { createProjectBackupPayload, type AssetBlobRepository, type ProjectDocument, type StoredAssetMetadata, type StoredAssetRecord } from "../storage";
 
@@ -17,12 +26,15 @@ export type ExportedFile = {
 
 export type ExportTimestamp = string | Date;
 
+export type CardRenderImages = NonNullable<DrawCardImagePageOptions["images"]>;
+
 export type CardPageRenderInput = {
   page: CardLayoutPage;
   platform: "xiaohongshu" | "douyinImage";
   ratio: CardAspectRatio;
   fileName: string;
   pageIndex: number;
+  images?: CardRenderImages;
 };
 
 export type CardPageRenderer = (input: CardPageRenderInput) => Promise<Blob>;
@@ -94,6 +106,20 @@ export type ProjectBackupExportResult = {
   assetFiles: ExportedFile[];
   zipBlob: Blob;
 };
+
+export type ExportPackageErrorCode = "card_page_ratio_mismatch" | "project_backup_asset_missing" | "project_backup_asset_unavailable";
+
+export class ExportPackageError extends Error {
+  readonly code: ExportPackageErrorCode;
+  readonly details: Record<string, unknown>;
+
+  constructor(code: ExportPackageErrorCode, message: string, details: Record<string, unknown> = {}) {
+    super(message);
+    this.name = "ExportPackageError";
+    this.code = code;
+    this.details = details;
+  }
+}
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
@@ -247,7 +273,7 @@ async function renderBrowserCardPageToPng(input: CardPageRenderInput): Promise<B
     throw new Error("card_canvas_context_unavailable");
   }
 
-  drawCardImagePage(context as unknown as CardImageCanvasContext, input.page);
+  drawCardImagePage(context as unknown as CardImageCanvasContext, input.page, { images: input.images });
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (blob) resolve(blob);
@@ -272,6 +298,7 @@ async function renderImageFiles(input: {
   ratio: CardAspectRatio;
   baseName: string;
   renderer?: CardPageRenderer;
+  images?: CardRenderImages;
 }) {
   const renderer = input.renderer ?? renderBrowserCardPageToPng;
   const files: ExportedFile[] = [];
@@ -283,6 +310,7 @@ async function renderImageFiles(input: {
       ratio: input.ratio,
       fileName,
       pageIndex: index,
+      images: input.images,
     });
     files.push(exportedFile(`images/${fileName}`, blob, "image/png"));
   }
@@ -320,11 +348,36 @@ async function packagePlatformImageExport<TOutput extends { title: string; tags:
   };
 }
 
+function expectedRatioValue(ratio: CardAspectRatio) {
+  return ratio === "3:4" ? 3 / 4 : 9 / 16;
+}
+
+function assertPagesMatchRatio(pages: CardLayoutPage[], ratio: CardAspectRatio) {
+  const expected = expectedRatioValue(ratio);
+  for (const page of pages) {
+    const actual = page.canvas.width / page.canvas.height;
+    if (page.aspectRatio !== ratio || Math.abs(actual - expected) > 0.001) {
+      throw new ExportPackageError(
+        "card_page_ratio_mismatch",
+        `Card page ${page.id} is ${page.aspectRatio} (${page.canvas.width}x${page.canvas.height}); export requires ${ratio}. Regenerate pages for ${ratio} or omit pages so export can lay them out.`,
+        {
+          pageId: page.id,
+          expectedRatio: ratio,
+          actualRatio: page.aspectRatio,
+          width: page.canvas.width,
+          height: page.canvas.height,
+        },
+      );
+    }
+  }
+}
+
 export async function exportXiaohongshuPackage(input: {
   content: UnifiedArticleContent;
   output?: XiaohongshuImageTextOutput;
   pages?: CardLayoutPage[];
   renderer?: CardPageRenderer;
+  images?: CardRenderImages;
   layoutOptions?: CardLayoutOptions;
   measurer?: TextMeasurer;
   exportedAt?: ExportTimestamp;
@@ -333,7 +386,8 @@ export async function exportXiaohongshuPackage(input: {
   const exportedAt = toExportedAt(input.exportedAt);
   const baseName = createExportBaseName(output.title, exportedAt, "xiaohongshu");
   const pages = resolveCardPages({ content: input.content, ratio: "3:4", pages: input.pages, layoutOptions: input.layoutOptions, measurer: input.measurer });
-  const images = await renderImageFiles({ pages, platform: "xiaohongshu", ratio: "3:4", baseName, renderer: input.renderer });
+  assertPagesMatchRatio(pages, "3:4");
+  const images = await renderImageFiles({ pages, platform: "xiaohongshu", ratio: "3:4", baseName, renderer: input.renderer, images: input.images });
   const copyText = buildXiaohongshuCopy(output);
   const packaged = await packagePlatformImageExport({ output, platform: "xiaohongshu", ratio: "3:4", exportedAt, images, copyText });
   return {
@@ -353,6 +407,7 @@ export async function exportDouyinImagePackage(input: {
   output?: DouyinImageOutput;
   pages?: CardLayoutPage[];
   renderer?: CardPageRenderer;
+  images?: CardRenderImages;
   layoutOptions?: CardLayoutOptions;
   measurer?: TextMeasurer;
   exportedAt?: ExportTimestamp;
@@ -361,7 +416,8 @@ export async function exportDouyinImagePackage(input: {
   const exportedAt = toExportedAt(input.exportedAt);
   const baseName = createExportBaseName(output.title, exportedAt, `douyin-${output.ratio.replace(":", "x")}`);
   const pages = resolveCardPages({ content: input.content, ratio: output.ratio, pages: input.pages, layoutOptions: input.layoutOptions, measurer: input.measurer });
-  const images = await renderImageFiles({ pages, platform: "douyinImage", ratio: output.ratio, baseName, renderer: input.renderer });
+  assertPagesMatchRatio(pages, output.ratio);
+  const images = await renderImageFiles({ pages, platform: "douyinImage", ratio: output.ratio, baseName, renderer: input.renderer, images: input.images });
   const copyText = buildDouyinImageCopy(output);
   const packaged = await packagePlatformImageExport({ output, platform: "douyinImage", ratio: output.ratio, exportedAt, images, copyText });
   return {
@@ -435,14 +491,35 @@ async function resolveAssetRecords(input: {
       continue;
     }
 
-    if (!input.assetRepository) continue;
-    const loaded = await input.assetRepository.getAssetBlob(assetRef.id);
+    if (!input.assetRepository) {
+      throw new ExportPackageError("project_backup_asset_missing", `Project backup is missing referenced asset ${assetRef.id}.`, {
+        assetId: assetRef.id,
+        fileName: assetRef.fileName,
+      });
+    }
+
+    let loaded;
+    try {
+      loaded = await input.assetRepository.getAssetBlob(assetRef.id);
+    } catch (error) {
+      throw new ExportPackageError("project_backup_asset_unavailable", `Project backup could not load referenced asset ${assetRef.id}.`, {
+        assetId: assetRef.id,
+        fileName: assetRef.fileName,
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    }
     if (loaded.state === "ready") {
       records.push({
         ...loaded.asset,
         blob: loaded.blob,
       });
+      continue;
     }
+
+    throw new ExportPackageError("project_backup_asset_missing", `Project backup is missing referenced asset ${assetRef.id}.`, {
+      assetId: assetRef.id,
+      fileName: assetRef.fileName,
+    });
   }
 
   return records;

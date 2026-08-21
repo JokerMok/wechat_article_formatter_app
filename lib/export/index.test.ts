@@ -1,10 +1,11 @@
 import JSZip from "jszip";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UnifiedArticleContent } from "../content";
-import type { CardLayoutPage } from "../renderers/cards";
-import type { ProjectDocument, StoredAssetRecord } from "../storage";
+import type { CardAspectRatio, CardImageCanvasContext, CardLayoutPage } from "../renderers/cards";
+import type { AssetBlobRepository, ProjectDocument, StoredAssetRecord } from "../storage";
 import {
   createExportBaseName,
+  ExportPackageError,
   exportDouyinImagePackage,
   exportDouyinLongformText,
   exportProjectBackupPackage,
@@ -13,6 +14,10 @@ import {
 } from "./index";
 
 const exportedAt = "2026-01-02T03:04:05.000Z";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function source(startLine: number, sourceText: string) {
   return {
@@ -69,14 +74,16 @@ function articleContent(): UnifiedArticleContent {
   };
 }
 
-function page(id: string, pageNumber: number, text: string): CardLayoutPage {
+function page(id: string, pageNumber: number, text: string, aspectRatio: CardAspectRatio = "3:4"): CardLayoutPage {
+  const canvas = aspectRatio === "9:16" ? { width: 1080, height: 1920 } : { width: 1080, height: 1440 };
+  const safeArea = aspectRatio === "9:16" ? { top: 100, right: 100, bottom: 100, left: 100, x: 100, y: 100, width: 880, height: 1720 } : { top: 100, right: 100, bottom: 100, left: 100, x: 100, y: 100, width: 880, height: 1240 };
   return {
     id,
     pageNumber,
     totalPages: 2,
-    aspectRatio: "3:4",
-    canvas: { width: 1080, height: 1440 },
-    safeArea: { top: 100, right: 100, bottom: 100, left: 100, x: 100, y: 100, width: 880, height: 1240 },
+    aspectRatio,
+    canvas,
+    safeArea,
     nodes: [
       {
         id: `${id}-node`,
@@ -93,6 +100,57 @@ function page(id: string, pageNumber: number, text: string): CardLayoutPage {
       },
     ],
     overflow: [],
+  };
+}
+
+function imagePage(id: string, aspectRatio: CardAspectRatio = "3:4"): CardLayoutPage {
+  const base = page(id, 1, "Image", aspectRatio);
+  return {
+    ...base,
+    totalPages: 1,
+    nodes: [
+      {
+        id: `${id}-node`,
+        entryId: `${id}-entry`,
+        blockId: id,
+        kind: "image",
+        sourceIndex: 1,
+        text: "Image alt",
+        lines: [],
+        x: 100,
+        y: 140,
+        width: 320,
+        height: 180,
+        image: { x: 100, y: 140, width: 320, height: 180, rotation: 0, opacity: 1, alt: "Image alt" },
+      },
+    ],
+  };
+}
+
+function mockCanvasContext(overrides: Partial<CardImageCanvasContext> = {}): CardImageCanvasContext {
+  return {
+    fillStyle: "",
+    font: "",
+    textBaseline: "top",
+    textAlign: "left",
+    globalAlpha: 1,
+    beginPath: vi.fn(),
+    moveTo: vi.fn(),
+    arcTo: vi.fn(),
+    closePath: vi.fn(),
+    fill: vi.fn(),
+    fillRect: vi.fn(),
+    fillText: vi.fn(),
+    arc: vi.fn(),
+    save: vi.fn(),
+    restore: vi.fn(),
+    translate: vi.fn(),
+    rotate: vi.fn(),
+    drawImage: vi.fn(),
+    setLineDash: vi.fn(),
+    strokeRect: vi.fn(),
+    measureText: () => ({ width: 0 }) as TextMetrics,
+    ...overrides,
   };
 }
 
@@ -187,12 +245,37 @@ describe("platform exports", () => {
     await expect(files["copy.txt"].async("text")).resolves.toContain("Edited body survives export");
   });
 
+  it("passes embedded card image sources into browser PNG rendering", async () => {
+    const drawImage = vi.fn();
+    const context = mockCanvasContext({ drawImage });
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: vi.fn(() => context),
+      toBlob: vi.fn((callback: BlobCallback) => callback(new Blob(["png"], { type: "image/png" }))),
+    };
+    vi.stubGlobal("document", {
+      createElement: vi.fn(() => canvas),
+    });
+
+    const imageSource = {} as CanvasImageSource;
+    const result = await exportXiaohongshuPackage({
+      content: articleContent(),
+      exportedAt,
+      pages: [imagePage("image-a")],
+      images: { "image-a": imageSource },
+    });
+
+    expect(result.images[0]?.path).toBe("images/original-title-20260102-030405-xiaohongshu-01.png");
+    expect(drawImage).toHaveBeenCalledWith(imageSource, -160, -90, 320, 180);
+  });
+
   it("exports Douyin image packages for 9:16 with caption copy and tags", async () => {
     const result = await exportDouyinImagePackage({
       content: articleContent(),
       ratio: "9:16",
       exportedAt,
-      pages: [page("douyin", 1, "Douyin page")],
+      pages: [page("douyin", 1, "Douyin page", "9:16")],
       renderer: async ({ ratio }) => new Blob([`png:${ratio}`], { type: "image/png" }),
     });
 
@@ -204,6 +287,51 @@ describe("platform exports", () => {
     const files = await zipEntries(result.zipBlob);
     await expect(files["images/original-title-20260102-030405-douyin-9x16-01.png"].async("text")).resolves.toBe("png:9:16");
     await expect(files["manifest.json"].async("text")).resolves.toContain('"ratio": "9:16"');
+  });
+
+  it("exports Douyin image packages for 3:4 with matching page geometry", async () => {
+    const result = await exportDouyinImagePackage({
+      content: articleContent(),
+      ratio: "3:4",
+      exportedAt,
+      pages: [page("douyin", 1, "Douyin page", "3:4")],
+      renderer: async ({ ratio, page: renderedPage }) => new Blob([`png:${ratio}:${renderedPage.canvas.width}x${renderedPage.canvas.height}`], { type: "image/png" }),
+    });
+
+    expect(result.output.ratio).toBe("3:4");
+    expect(result.images[0]?.path).toBe("images/original-title-20260102-030405-douyin-3x4-01.png");
+
+    const files = await zipEntries(result.zipBlob);
+    await expect(files["images/original-title-20260102-030405-douyin-3x4-01.png"].async("text")).resolves.toBe("png:3:4:1080x1440");
+    await expect(files["manifest.json"].async("text")).resolves.toContain('"ratio": "3:4"');
+  });
+
+  it("rejects Douyin image pages that do not match the selected ratio", async () => {
+    await expect(
+      exportDouyinImagePackage({
+        content: articleContent(),
+        ratio: "9:16",
+        exportedAt,
+        pages: [page("wrong-shape", 1, "Wrong page", "3:4")],
+        renderer: async () => new Blob(["png"], { type: "image/png" }),
+      }),
+    ).rejects.toMatchObject({
+      code: "card_page_ratio_mismatch",
+      details: { pageId: "wrong-shape", expectedRatio: "9:16", actualRatio: "3:4", width: 1080, height: 1440 },
+    });
+
+    await expect(
+      exportDouyinImagePackage({
+        content: articleContent(),
+        ratio: "3:4",
+        exportedAt,
+        pages: [page("wrong-shape", 1, "Wrong page", "9:16")],
+        renderer: async () => new Blob(["png"], { type: "image/png" }),
+      }),
+    ).rejects.toMatchObject({
+      code: "card_page_ratio_mismatch",
+      details: { pageId: "wrong-shape", expectedRatio: "3:4", actualRatio: "9:16", width: 1080, height: 1920 },
+    });
   });
 
   it("exports Douyin longform text from edited platform output", async () => {
@@ -282,5 +410,54 @@ describe("project backup export", () => {
 
     const assetManifest = JSON.parse(await files["assets/manifest.json"].async("text")) as Array<{ path: string }>;
     expect(assetManifest[0]?.path).toBe("assets/001-cover-image.png");
+  });
+
+  it("fails explicitly when a referenced project asset is absent from backup inputs", async () => {
+    const project: ProjectDocument = {
+      schemaVersion: 2,
+      id: "project-1",
+      title: "Backup Title",
+      article: articleContent(),
+      assets: [{ id: "asset-missing", fileName: "Missing.png", mimeType: "image/png", byteLength: 7 }],
+      platformVersions: {},
+      createdAt: exportedAt,
+      updatedAt: exportedAt,
+    };
+
+    await expect(exportProjectBackupPackage({ project, assets: [], exportedAt })).rejects.toBeInstanceOf(ExportPackageError);
+    await expect(exportProjectBackupPackage({ project, assets: [], exportedAt })).rejects.toMatchObject({
+      code: "project_backup_asset_missing",
+      details: { assetId: "asset-missing", fileName: "Missing.png" },
+    });
+  });
+
+  it("fails explicitly when a referenced project asset cannot be loaded", async () => {
+    const project: ProjectDocument = {
+      schemaVersion: 2,
+      id: "project-1",
+      title: "Backup Title",
+      article: articleContent(),
+      assets: [{ id: "asset-broken", fileName: "Broken.png", mimeType: "image/png", byteLength: 7 }],
+      platformVersions: {},
+      createdAt: exportedAt,
+      updatedAt: exportedAt,
+    };
+    const assetRepository: AssetBlobRepository = {
+      saveImageBlob: async () => {
+        throw new Error("unused");
+      },
+      getAssetBlob: async () => {
+        throw new Error("idb failed");
+      },
+      listProjectAssets: async () => [],
+      deleteAsset: async () => undefined,
+      deleteUnreferencedAssets: async () => [],
+      close: async () => undefined,
+    };
+
+    await expect(exportProjectBackupPackage({ project, assetRepository, exportedAt })).rejects.toMatchObject({
+      code: "project_backup_asset_unavailable",
+      details: { assetId: "asset-broken", fileName: "Broken.png", cause: "idb failed" },
+    });
   });
 });
