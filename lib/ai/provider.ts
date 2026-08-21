@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../content";
 import { unifiedArticleContentSchema } from "../content";
-import type { PlatformId, PlatformVersionMap } from "../platforms/types";
+import type { PlatformId, PlatformVersion, PlatformVersionMap } from "../platforms/types";
 
 export const aiPlatformIds = ["wechat", "xiaohongshu", "douyinImage", "douyinLongform"] as const;
 
@@ -165,6 +165,9 @@ export class OpenAICompatibleProvider {
     let abortKind: "timeout" | "cancelled" | undefined;
 
     const cancelFromCaller = () => {
+      if (abortKind) {
+        return;
+      }
       abortKind = "cancelled";
       if (!abortController.signal.aborted) {
         abortController.abort(new Error("AI request cancelled"));
@@ -186,11 +189,11 @@ export class OpenAICompatibleProvider {
 
     try {
       const throwIfAborted = () => {
-        if (abortKind === "cancelled" || options.signal?.aborted) {
-          throw this.error("cancelled", "AI request was cancelled.", false, diagnostics);
-        }
         if (abortKind === "timeout") {
           throw this.error("timeout", "AI provider request timed out.", true, diagnostics);
+        }
+        if (abortKind === "cancelled" || options.signal?.aborted) {
+          throw this.error("cancelled", "AI request was cancelled.", false, diagnostics);
         }
       };
 
@@ -243,11 +246,11 @@ export class OpenAICompatibleProvider {
         diagnostics: responseDiagnostics,
       };
     } catch (error) {
-      if (abortKind === "cancelled" || options.signal?.aborted) {
-        throw this.error("cancelled", "AI request was cancelled.", false, diagnostics);
-      }
       if (abortKind === "timeout") {
         throw this.error("timeout", "AI provider request timed out.", true, diagnostics);
+      }
+      if (abortKind === "cancelled" || options.signal?.aborted) {
+        throw this.error("cancelled", "AI request was cancelled.", false, diagnostics);
       }
       if (error instanceof AIProviderError) {
         throw error;
@@ -373,16 +376,17 @@ export function buildFallbackPlatformVersions(source: UnifiedArticleContent, pla
 
   return platforms.reduce<PlatformVersionMap>((versions, platform) => {
     const summary = truncateText(summarySource, platformSummaryLength(platform));
-    const safeHighlights = highlights.length > 0 ? highlights : [summary];
+    const safeHighlights = highlights.length > 0 ? [...highlights] : [summary];
+    const cover = platform === "douyinImage" ? { title: platformTitle(platform, title), subtitle: summary } : undefined;
     versions[platform] = {
       platform,
       status: "draft",
       title: platformTitle(platform, title),
-      content: source,
+      content: cloneUnifiedArticleContent(source),
       summary,
       highlights: safeHighlights,
-      tags: fallbackTags(platform),
-      cover: platform === "douyinImage" ? { title: platformTitle(platform, title), subtitle: summary } : undefined,
+      tags: [...fallbackTags(platform)],
+      cover: cover ? { ...cover } : undefined,
       updatedAt,
     };
     return versions;
@@ -391,8 +395,8 @@ export function buildFallbackPlatformVersions(source: UnifiedArticleContent, pla
 
 export function buildPlatformChangeRecords(
   platforms: PlatformId[],
-  previousVersions: PlatformVersionMap,
-  nextVersions: PlatformVersionMap
+  previousVersions: Partial<Record<PlatformId, PlatformVersion<unknown>>>,
+  nextVersions: Partial<Record<PlatformId, PlatformVersion<unknown>>>
 ): AIChangeRecord[] {
   const fields: AIChangeField[] = ["title", "summary", "highlights", "tags", "cover", "content"];
 
@@ -493,7 +497,7 @@ function buildGeneratedPlatformVersions(
   return versions;
 }
 
-type PlatformVersionValue = NonNullable<PlatformVersionMap[PlatformId]>;
+type PlatformVersionValue = PlatformVersion<unknown>;
 
 function platformFieldValue(version: PlatformVersionValue | undefined, field: AIChangeField) {
   if (!version) {
@@ -522,11 +526,40 @@ function changeMetadata(field: AIChangeField, value: unknown): AIChangeMetadata 
     return { fieldCount: Object.keys(cover).length, textLength };
   }
 
-  const content = value as UnifiedArticleContent;
+  return contentMetadata(value);
+}
+
+function contentMetadata(value: unknown): AIChangeMetadata {
+  if (!isRecord(value)) {
+    return { blockCount: 0, textLength: 0 };
+  }
+
+  const blocks = Array.isArray(value.blocks) ? value.blocks : [];
   return {
-    blockCount: content.blocks.length,
-    textLength: content.blocks.reduce((total, block) => total + block.plainText.length, 0),
+    blockCount: blocks.length,
+    textLength: blocks.reduce((total, block) => total + blockTextLength(block), 0),
   };
+}
+
+function blockTextLength(block: unknown) {
+  if (!isRecord(block)) {
+    return 0;
+  }
+
+  const directText = firstString(block.plainText, block.text, block.markdown, block.html, block.alt, block.title, block.body);
+  if (directText !== undefined) {
+    return directText.length;
+  }
+
+  if (Array.isArray(block.items)) {
+    return block.items.reduce((total, item) => total + (typeof item === "string" ? item.length : 0), 0);
+  }
+
+  return 0;
+}
+
+function firstString(...values: unknown[]) {
+  return values.find((value): value is string => typeof value === "string");
 }
 
 function sameValue(left: unknown, right: unknown) {
@@ -702,6 +735,10 @@ function sourceSupportedText(source: UnifiedArticleContent) {
 
 function blockPlainText(block: UnifiedArticleBlock) {
   return block.plainText;
+}
+
+function cloneUnifiedArticleContent(content: UnifiedArticleContent): UnifiedArticleContent {
+  return structuredClone(content);
 }
 
 function extractNumbers(text: string) {

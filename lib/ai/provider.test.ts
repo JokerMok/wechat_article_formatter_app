@@ -11,10 +11,12 @@ import validFixture from "../../tests/fixtures/ai/valid-response.json";
 import {
   OpenAICompatibleProvider,
   buildFallbackPlatformVersions,
+  buildPlatformChangeRecords,
   generatePlatformVersions,
   validateGeneratedFacts,
 } from "./provider";
 import type { GeneratePlatformVersionsResult } from "./provider";
+import type { PlatformVersionMap } from "../platforms/types";
 
 const source = parseArticleContent(`知识库重构
 
@@ -117,6 +119,68 @@ describe("OpenAICompatibleProvider", () => {
       title: "知识库重构",
       updatedAt: "2026-08-21T00:00:00.000Z",
     });
+  });
+
+  it("keeps fallback platform content isolated from source and sibling versions", () => {
+    const fallback = buildFallbackPlatformVersions(source, ["wechat", "xiaohongshu", "douyinImage"], "2026-08-21T00:00:00.000Z");
+    const wechat = fallback.wechat!;
+    const xiaohongshu = fallback.xiaohongshu!;
+    const douyinImage = fallback.douyinImage!;
+    const wechatContent = fallback.wechat!.content;
+    const xiaohongshuContent = fallback.xiaohongshu!.content;
+    const douyinImageContent = fallback.douyinImage!.content;
+    const originalBlockCount = source.blocks.length;
+    const originalWechatHighlights = [...wechat.highlights!];
+    const originalXiaohongshuTags = [...xiaohongshu.tags!];
+    const originalDouyinImageCover = { ...douyinImage.cover };
+
+    wechat.highlights!.push("mutated highlight");
+    wechat.tags!.push("mutated tag");
+    douyinImage.cover!.title = "mutated cover title";
+    wechatContent.blocks[0]!.plainText = "mutated fallback title";
+    wechatContent.blocks[0]!.source.sourceText = "mutated source text";
+    wechatContent.blocks.push({
+      id: "mutated-block",
+      type: "paragraph",
+      text: "mutated block",
+      plainText: "mutated block",
+      markdown: "mutated block",
+      source: {
+        startLine: 1,
+        endLine: 1,
+        startOffset: 0,
+        endOffset: 1,
+        sourceText: "mutated block source",
+      },
+    });
+    wechatContent.warnings.push({
+      code: "unsupported_block",
+      message: "mutated warning",
+      source: {
+        startLine: 1,
+        endLine: 1,
+        startOffset: 0,
+        endOffset: 1,
+        sourceText: "mutated warning source",
+      },
+    });
+
+    expect(wechat.highlights).toEqual([...originalWechatHighlights, "mutated highlight"]);
+    expect(xiaohongshu.highlights).toEqual(originalWechatHighlights);
+    expect(douyinImage.highlights).toEqual(originalWechatHighlights);
+    expect(xiaohongshu.tags).toEqual(originalXiaohongshuTags);
+    expect(douyinImage.cover).toEqual({ ...originalDouyinImageCover, title: "mutated cover title" });
+    expect(source.blocks[0]!.plainText).toBe("知识库重构");
+    expect(source.blocks[0]!.source.sourceText).toBe("知识库重构");
+    expect(source.blocks).toHaveLength(originalBlockCount);
+    expect(source.warnings).toEqual([]);
+    expect(xiaohongshuContent.blocks[0]!.plainText).toBe("知识库重构");
+    expect(xiaohongshuContent.blocks[0]!.source.sourceText).toBe("知识库重构");
+    expect(xiaohongshuContent.blocks).toHaveLength(originalBlockCount);
+    expect(xiaohongshuContent.warnings).toEqual([]);
+    expect(xiaohongshuContent.blocks[0]!.source).toEqual(source.blocks[0]!.source);
+    expect(douyinImageContent.blocks[0]!.plainText).toBe("知识库重构");
+    expect(douyinImageContent.warnings).toEqual([]);
   });
 
   it("TEST-008 classifies invalid assistant JSON as a schema error", async () => {
@@ -254,6 +318,24 @@ describe("OpenAICompatibleProvider", () => {
     await expect(timeoutPromise).resolves.toMatchObject({ ok: false, error: { code: "timeout" } });
   });
 
+  it("TEST-008 preserves timeout when caller aborts after timeout but before body rejection settles", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn(async () => delayedRejectingJsonResponse()));
+
+    const controller = new AbortController();
+    const timeoutPromise = generatePlatformVersions({
+      provider: new OpenAICompatibleProvider({ ...baseProviderConfig, timeoutMs: 25 }),
+      source,
+      sourceVersionId: "source-v1",
+      platforms: ["wechat"],
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 30);
+
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(timeoutPromise).resolves.toMatchObject({ ok: false, error: { code: "timeout" } });
+  });
+
   it("TEST-008 keeps caller cancellation during 429 body parsing from being reclassified as rate_limit", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn(async () => delayedRejectingJsonResponse({ status: 429, statusText: "Too Many Requests" })));
@@ -299,6 +381,41 @@ describe("OpenAICompatibleProvider", () => {
     expect(changes).not.toContain(baseProviderConfig.apiKey);
     expect(changes).not.toContain("chatcmpl-diff");
     expect(result.changes.every((change) => change.before || change.after)).toBe(true);
+  });
+
+  it("builds safe change records for existing WeChat platform block content", () => {
+    const previous = {
+      wechat: {
+        platform: "wechat",
+        status: "edited",
+        title: "旧微信版本",
+        summary: "旧摘要",
+        content: {
+          blocks: [
+            { id: "wx-1", type: "richText", html: "<p>旧正文</p>", text: "旧正文" },
+            { id: "wx-2", type: "image", imageId: "cover-1", alt: "封面" },
+          ],
+          html: "<section><p>旧正文</p></section>",
+        },
+        updatedAt: "2026-08-20T00:00:00.000Z",
+      },
+    } satisfies PlatformVersionMap<unknown>;
+    const next = buildFallbackPlatformVersions(source, ["wechat"], "2026-08-21T00:00:00.000Z");
+
+    const changes = buildPlatformChangeRecords(["wechat"], previous, next);
+
+    expect(changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        platform: "wechat",
+        field: "content",
+        kind: "rewritten",
+        before: { blockCount: 2, textLength: 5 },
+        after: { blockCount: source.blocks.length, textLength: 30 },
+      }),
+    ]));
+    expect(JSON.stringify(changes)).not.toContain("旧正文");
+    expect(JSON.stringify(changes)).not.toContain("<section>");
+    expect(JSON.stringify(changes)).not.toContain("资料散落在不同地方");
   });
 
   it("TEST-009 rejects generated numbers that are not supported by source text", async () => {
