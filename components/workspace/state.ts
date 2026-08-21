@@ -1,6 +1,7 @@
 import type { TemplateKey } from "../../lib/article-types";
 import { parseArticleContent } from "../../lib/article-parser";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../../lib/content";
+import { unifiedArticleContentSchema } from "../../lib/content/schemas";
 import { toDouyinImageText, toDouyinLongform } from "../../lib/platforms/douyin";
 import type { PlatformId, PlatformVersion, PlatformVersionMap } from "../../lib/platforms/types";
 import { createWechatPlatformVersion } from "../../lib/platforms/wechat";
@@ -30,6 +31,9 @@ export const WORKSPACE_PLATFORM_LABELS: Record<PlatformId, string> = {
 };
 
 export const WORKSPACE_VERSION_KEY = "__unifiedSelfMediaWorkspace";
+
+export const PROJECT_BACKUP_IMAGE_NOTICE =
+  "项目备份只包含项目结构和图片元数据；图片文件仍保存在当前浏览器本地素材库，未随 JSON 导出。";
 
 export const DEFAULT_SOURCE_MARKDOWN = `# 统一自媒体工作区
 
@@ -490,14 +494,15 @@ export function readPersistedWorkspace(value: unknown): WorkspacePersistedState 
 
   const fallback = createWorkspaceState(raw.sourceMarkdown);
   const rawPlatforms = raw.platforms;
+  const platforms = readPlatformDrafts(rawPlatforms, fallback);
+  if (!platforms) return undefined;
+
   return {
     schemaVersion: 1,
     sourceMarkdown: raw.sourceMarkdown,
     layout: readLayout(raw.layout, fallback.layout),
     ai: readAi(raw.ai, fallback.ai),
-    platforms: Object.fromEntries(
-      WORKSPACE_PLATFORM_IDS.map((platform) => [platform, readPlatformDraft(rawPlatforms[platform], platform, fallback.platforms[platform])]),
-    ) as Record<PlatformId, PlatformDraft>,
+    platforms,
   };
 }
 
@@ -510,6 +515,18 @@ export function serializeWorkspace(state: WorkspacePersistedState) {
 export function selectRestorableBackupProject(payload: ProjectBackupPayload): ProjectDocument | undefined {
   const projects = payload.projects.flatMap((project) => readRestorableBackupProject(project, payload.assets));
   return projects.sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+}
+
+export function describeProjectBackupExportStatus(assetCount: number) {
+  const imageCount = assetCount > 0 ? `共记录 ${assetCount} 张图片元数据。` : "当前项目没有图片元数据。";
+  return `项目备份 JSON 已导出。${imageCount}${PROJECT_BACKUP_IMAGE_NOTICE}`;
+}
+
+export function describeProjectBackupImportStatus(missingAssetCount: number) {
+  if (missingAssetCount > 0) {
+    return `项目备份已导入，但 ${missingAssetCount} 张图片缺失。${PROJECT_BACKUP_IMAGE_NOTICE}`;
+  }
+  return `项目备份已导入。${PROJECT_BACKUP_IMAGE_NOTICE}`;
 }
 
 function defaultRatioForPlatform(platform: PlatformId): CardAspectRatio {
@@ -640,9 +657,25 @@ function readAi(value: unknown, fallback: AiWorkspaceSettings): AiWorkspaceSetti
   };
 }
 
-function readPlatformDraft(value: unknown, platform: PlatformId, fallback: PlatformDraft): PlatformDraft {
-  if (!isRecord(value)) return fallback;
-  const content = isRecord(value.content) ? (value.content as UnifiedArticleContent) : fallback.content;
+function readArticleContent(value: unknown): UnifiedArticleContent | undefined {
+  const parsed = unifiedArticleContentSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function readPlatformDrafts(value: Record<string, unknown>, fallback: WorkspacePersistedState): Record<PlatformId, PlatformDraft> | undefined {
+  const entries: Array<[PlatformId, PlatformDraft]> = [];
+  for (const platform of WORKSPACE_PLATFORM_IDS) {
+    const draft = readPlatformDraft(value[platform], platform, fallback.platforms[platform]);
+    if (!draft) return undefined;
+    entries.push([platform, draft]);
+  }
+  return Object.fromEntries(entries) as Record<PlatformId, PlatformDraft>;
+}
+
+function readPlatformDraft(value: unknown, platform: PlatformId, fallback: PlatformDraft): PlatformDraft | undefined {
+  if (!isRecord(value)) return undefined;
+  const content = readArticleContent(value.content);
+  if (!content) return undefined;
   const ratio = value.ratio === "9:16" ? "9:16" : "3:4";
   return {
     ...fallback,
@@ -692,8 +725,8 @@ function readRestorableBackupProject(value: unknown, backupAssets: unknown[] = [
   if (!isRecord(value)) return [];
   const platformVersions = isRecord(value.platformVersions) ? value.platformVersions : {};
   const workspace = readPersistedWorkspace(platformVersions);
-  const article = isRecord(value.article) && typeof value.article.sourceText === "string" ? (value.article as ProjectDocument["article"]) : null;
-  if (!workspace && !article) return [];
+  const article = readArticleContent(value.article);
+  if (!workspace || !article) return [];
 
   const timestamp = typeof value.updatedAt === "string" ? value.updatedAt : new Date().toISOString();
   const id = typeof value.id === "string" ? value.id : "backup-project";

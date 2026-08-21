@@ -65,6 +65,8 @@ import {
   clearManualCardPages,
   createPlatformDraftSignatureMap,
   createWorkspaceState,
+  describeProjectBackupExportStatus,
+  describeProjectBackupImportStatus,
   getMissingAiProviderFields,
   isAiProviderConfigured,
   markAiConfigurationIncomplete,
@@ -79,6 +81,7 @@ import {
   sanitizeWechatHtml,
   serializeWorkspace,
   selectRestorableBackupProject,
+  PROJECT_BACKUP_IMAGE_NOTICE,
   updatePlatformBlock,
   updatePlatformCaption,
   updatePlatformRatio,
@@ -294,12 +297,14 @@ export default function UnifiedWorkspace() {
     );
   }
 
-  async function hydrateAssets(projectAssets: ProjectAssetReference[]) {
+  async function loadAssetPlaceholders(projectAssets: ProjectAssetReference[]) {
     const assetRepo = assetRepoRef.current;
-    const nextAssets: AssetPlaceholder[] = [];
+    const placeholders: AssetPlaceholder[] = [];
+    let missingAssetCount = 0;
     for (const asset of projectAssets) {
       const loaded = await assetRepo?.getAssetBlob(asset.id);
-      nextAssets.push({
+      if (loaded?.state !== "ready") missingAssetCount += 1;
+      placeholders.push({
         id: asset.id,
         fileName: asset.fileName,
         mimeType: asset.mimeType,
@@ -307,7 +312,13 @@ export default function UnifiedWorkspace() {
         objectUrl: loaded?.state === "ready" ? URL.createObjectURL(loaded.blob) : undefined,
       });
     }
-    replaceAssets(nextAssets);
+    return { assets: placeholders, missingAssetCount };
+  }
+
+  async function hydrateAssets(projectAssets: ProjectAssetReference[]) {
+    const result = await loadAssetPlaceholders(projectAssets);
+    replaceAssets(result.assets);
+    return { missingAssetCount: result.missingAssetCount };
   }
 
   async function loadLatestProject() {
@@ -416,7 +427,7 @@ export default function UnifiedWorkspace() {
       });
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
       downloadBlob(blob, `${projectTitle || "workspace"}-backup.json`);
-      setStatusMessage("项目备份已导出");
+      setStatusMessage(describeProjectBackupExportStatus(assetMetadataById.size));
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : "项目备份导出失败");
     }
@@ -435,16 +446,17 @@ export default function UnifiedWorkspace() {
 
       const importedProject = createEmptyProject({ title: project.title, article: project.article });
       const importedWorkspace = workspaceFromDocument(project);
+      const importedAssets = await loadAssetPlaceholders(project.assets);
       hydratedRef.current = false;
       setProjectId(importedProject.id);
       setProjectTitle(project.title);
       replaceWorkspace(importedWorkspace);
-      await hydrateAssets(project.assets);
+      replaceAssets(importedAssets.assets);
       resetPlatformHistories();
       revisionRef.current += 1;
       hydratedRef.current = true;
       setSaveState("dirty");
-      setStatusMessage("项目备份已导入");
+      setStatusMessage(describeProjectBackupImportStatus(importedAssets.missingAssetCount));
     } catch {
       setStatusMessage("备份文件无效，当前项目已保留");
     }
@@ -906,6 +918,7 @@ export default function UnifiedWorkspace() {
             ))}
           </div>
         </div>
+        <p className="mt-2 text-xs text-muted-foreground">{PROJECT_BACKUP_IMAGE_NOTICE}</p>
       </header>
 
       <div className="grid min-h-[calc(100vh-108px)] grid-cols-1 gap-0 lg:grid-cols-[320px_minmax(420px,1fr)_420px]">

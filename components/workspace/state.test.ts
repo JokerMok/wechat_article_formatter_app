@@ -9,6 +9,8 @@ import {
   clearManualCardPages,
   createPlatformDraftSignatureMap,
   createWorkspaceState,
+  describeProjectBackupExportStatus,
+  describeProjectBackupImportStatus,
   getMissingAiProviderFields,
   isAiProviderConfigured,
   markAiConfigurationIncomplete,
@@ -31,6 +33,7 @@ import {
   withLockedCardPage,
   withManualCardPages,
   withWechatHtmlOverride,
+  PROJECT_BACKUP_IMAGE_NOTICE,
 } from "./state";
 import { mergeAdjacentCardPages, moveCardImagePage, splitCardImagePageAfterElement, type CardLayoutPage, type CardLayoutResult } from "../../lib/renderers/cards";
 import type { DraftHistory } from "./types";
@@ -480,7 +483,7 @@ AI 正文。
           schemaVersion: 2,
           id: "invalid",
           title: "非法项目",
-          article: null,
+          article: state.platforms.wechat.content,
           assets: [],
           platformVersions: {},
           createdAt: "2026-08-20T00:00:00.000Z",
@@ -490,7 +493,7 @@ AI 正文。
           schemaVersion: 2,
           id: "valid",
           title: "可恢复项目",
-          article: null,
+          article: state.platforms.wechat.content,
           assets: [
             { id: "asset-2", fileName: "bad.svg", mimeType: "image/svg+xml", byteLength: 10 } as never,
           ],
@@ -506,5 +509,79 @@ AI 正文。
     expect(selected?.title).toBe("可恢复项目");
     expect(selected?.assets).toEqual([{ id: "asset-1", fileName: "cover.png", mimeType: "image/png", byteLength: 12, crop: undefined }]);
     expect(selectRestorableBackupProject({ schemaVersion: 1, exportedAt: "", projects: [], unknownProjects: [], assets: [] })).toBeUndefined();
+  });
+
+  it("rejects persisted workspace backups with invalid platform draft content", () => {
+    const state = createWorkspaceState(`# 合法标题
+
+正文。
+`);
+    const corrupted = serializeWorkspace({
+      ...state,
+      platforms: {
+        ...state.platforms,
+        wechat: {
+          ...state.platforms.wechat,
+          content: {} as never,
+        },
+      },
+    });
+
+    expect(readPersistedWorkspace(corrupted)).toBeUndefined();
+    expect(
+      selectRestorableBackupProject({
+        schemaVersion: 1,
+        exportedAt: "2026-08-21T00:00:00.000Z",
+        projects: [
+          {
+            schemaVersion: 2,
+            id: "corrupted",
+            title: "损坏项目",
+            article: state.platforms.wechat.content,
+            assets: [],
+            platformVersions: corrupted,
+            createdAt: "2026-08-21T00:00:00.000Z",
+            updatedAt: "2026-08-21T00:00:00.000Z",
+          },
+        ],
+        unknownProjects: [],
+        assets: [],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("rejects project backups with invalid article content", () => {
+    const state = createWorkspaceState(`# 合法标题
+
+正文。
+`);
+
+    expect(
+      selectRestorableBackupProject({
+        schemaVersion: 1,
+        exportedAt: "2026-08-21T00:00:00.000Z",
+        projects: [
+          {
+            schemaVersion: 2,
+            id: "invalid-article",
+            title: "坏正文",
+            article: {} as never,
+            assets: [],
+            platformVersions: serializeWorkspace(state),
+            createdAt: "2026-08-21T00:00:00.000Z",
+            updatedAt: "2026-08-21T00:00:00.000Z",
+          },
+        ],
+        unknownProjects: [],
+        assets: [],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("describes project backup image metadata limits and missing local blobs", () => {
+    expect(describeProjectBackupExportStatus(2)).toContain("共记录 2 张图片元数据");
+    expect(describeProjectBackupExportStatus(2)).toContain(PROJECT_BACKUP_IMAGE_NOTICE);
+    expect(describeProjectBackupImportStatus(3)).toContain("3 张图片缺失");
+    expect(describeProjectBackupImportStatus(3)).toContain(PROJECT_BACKUP_IMAGE_NOTICE);
   });
 });
