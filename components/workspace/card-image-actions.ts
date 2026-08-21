@@ -13,7 +13,8 @@ export type CardImageRenderOptions = {
 };
 
 export function createCardPngFilename(title: string, platform: PlatformId, pageNumber: number) {
-  return `${title || platform}-${pageNumber}.png`;
+  const baseName = title ? `${title}-${platform}` : platform;
+  return `${baseName}-${pageNumber}.png`;
 }
 
 export async function renderCardPagePngBlob(page: CardLayoutPage, imageUrlByBlock: Record<string, string>, options: CardImageRenderOptions = {}) {
