@@ -30,6 +30,10 @@ export const unifiedArticleBlockSchema = z.discriminatedUnion("type", [
   baseBlockSchema.extend({ type: z.literal("divider") }),
   baseBlockSchema.extend({ type: z.literal("pageBreak") }),
   baseBlockSchema.extend({
+    type: z.literal("code"),
+    language: z.string().optional(),
+  }),
+  baseBlockSchema.extend({
     type: z.literal("list"),
     items: z.array(z.string().min(1)),
   }),

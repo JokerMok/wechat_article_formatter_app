@@ -170,4 +170,45 @@ font-weight: 800;">你把逻辑解释清楚，不代表老板会觉得够。`);
     });
     expect(platformVersion.platform).toBe("wechat");
   });
+
+  it("does not strip generic types or comparison expressions as HTML tags", () => {
+    const content = parseArticleContent(`技术文章标题
+
+Promise<string> 表示异步字符串，表达式 3 < 5 > 2 不应该被删除。
+Promise<s> 这种短泛型参数也要保留。
+<span style="font-weight: 800;" onclick="evil()">真实 HTML 只保留正文</span>`);
+
+    expect(content.blocks[1]).toMatchObject({
+      type: "paragraph",
+      text: "Promise<string> 表示异步字符串，表达式 3 < 5 > 2 不应该被删除。Promise<s> 这种短泛型参数也要保留。真实 HTML 只保留正文",
+    });
+    expect(content.blocks[1]?.text).not.toMatch(/onclick|font-weight|evil/);
+  });
+
+  it("preserves fenced code blocks in unified content and compatible blocks", () => {
+    const raw = `技术文章标题
+
+\`\`\`ts
+const value: Promise<string> = fetchText();
+if (3 < 5 && 5 > 2) return value;
+\`\`\`
+
+正文继续。`;
+    const content = parseArticleContent(raw);
+
+    expect(content.blocks.map((block) => block.type)).toEqual(["title", "code", "paragraph"]);
+    expect(content.blocks[1]).toMatchObject({
+      type: "code",
+      text: "const value: Promise<string> = fetchText();\nif (3 < 5 && 5 > 2) return value;",
+      language: "ts",
+      source: {
+        startLine: 3,
+        endLine: 6,
+      },
+    });
+    expect(articleContentToBlocks(content)[1]).toEqual({
+      type: "paragraph",
+      text: "const value: Promise<string> = fetchText();\nif (3 < 5 && 5 > 2) return value;",
+    });
+  });
 });

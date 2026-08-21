@@ -12,12 +12,15 @@ type SourceLine = {
   markdown: string;
   sourceText: string;
   lineNumber: number;
+  endLine?: number;
   startOffset: number;
   endOffset: number;
   headingLevel?: number;
   quoted?: boolean;
   divider?: boolean;
   pageBreak?: boolean;
+  code?: boolean;
+  language?: string;
   sanitized?: boolean;
 };
 
@@ -28,15 +31,21 @@ type NormalizedText = {
 
 type ParseOptions = ArticleContentParseOptions;
 
+const explicitHtmlTagNames =
+  "a|abbr|address|article|aside|blockquote|br|button|caption|cite|code|col|colgroup|dd|del|details|div|dl|dt|em|figcaption|figure|footer|h[1-6]|header|hr|img|li|main|mark|ol|p|pre|section|small|span|strong|sub|summary|sup|table|tbody|td|tfoot|th|thead|tr|ul";
+const explicitHtmlTagPattern = new RegExp(`</?(?:${explicitHtmlTagNames})(?:\\s+[^<>]*)?/?>`, "gi");
+const pairedSingleLetterHtmlTagPattern = /<([bisu])(?:\s+[^<>]*)?>([\s\S]*?)<\/\1>/gi;
+
 function normalizeInlineText(text: string): NormalizedText {
   const original = text;
   const normalized = text
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(pairedSingleLetterHtmlTagPattern, "$2")
     .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
     .replace(/\s(?:href|src)\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*'|javascript:[^\s>]+)/gi, "")
     .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, url) => `图片：${alt || url}`)
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
-    .replace(/<\/?[^>]+>/g, "")
+    .replace(explicitHtmlTagPattern, "")
     .replace(/(?:^|\s)(?:style\s*=\s*)?["“”']?[^<>]*(?:font-weight|font-size|line-height|text-align|color|background|margin|padding)\s*:[^>]*>/gi, "")
     .replace(/&gt;/g, ">")
     .trim();
@@ -56,10 +65,11 @@ function detectSourceFormat(raw: string): ArticleSourceFormat {
 function normalizeInput(raw: string): SourceLine[] {
   const normalizedRaw = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const rawLines = normalizedRaw.split("\n");
+  const lines: SourceLine[] = [];
   let offset = 0;
-  let inFence = false;
 
-  return rawLines.map((rawLine, index) => {
+  for (let index = 0; index < rawLines.length; index += 1) {
+    const rawLine = rawLines[index];
     const lineNumber = index + 1;
     const startOffset = offset;
     const endOffset = startOffset + rawLine.length;
@@ -73,56 +83,103 @@ function normalizeInput(raw: string): SourceLine[] {
       endOffset,
     };
 
-    if (/^```/.test(trimmed)) {
-      inFence = !inFence;
-      return { ...base, text: "", markdown: rawLine };
+    const fenceStart = trimmed.match(/^```([A-Za-z0-9_-]+)?\s*$/);
+    if (fenceStart) {
+      const fenceLines = [rawLine];
+      const codeLines: string[] = [];
+      let fenceEndOffset = endOffset;
+      let endLine = lineNumber;
+
+      while (index + 1 < rawLines.length) {
+        index += 1;
+        const codeRawLine = rawLines[index];
+        const codeStartOffset = offset;
+        const codeEndOffset = codeStartOffset + codeRawLine.length;
+        offset = codeEndOffset + 1;
+        fenceLines.push(codeRawLine);
+        fenceEndOffset = codeEndOffset;
+        endLine = index + 1;
+
+        if (/^```\s*$/.test(codeRawLine.trim())) break;
+        codeLines.push(codeRawLine);
+      }
+
+      lines.push({
+        ...base,
+        text: codeLines.join("\n"),
+        markdown: fenceLines.join("\n"),
+        sourceText: fenceLines.join("\n"),
+        endLine,
+        endOffset: fenceEndOffset,
+        code: true,
+        language: fenceStart[1],
+      });
+      continue;
     }
 
-    if (inFence || !trimmed) return { ...base, text: "", markdown: rawLine };
-    if (/^(>|&gt;|＞)$/.test(trimmed)) return { ...base, text: "", markdown: rawLine };
+    if (!trimmed) {
+      lines.push({ ...base, text: "", markdown: rawLine });
+      continue;
+    }
+    if (/^(>|&gt;|＞)$/.test(trimmed)) {
+      lines.push({ ...base, text: "", markdown: rawLine });
+      continue;
+    }
 
     if (/^<!--\s*(pagebreak|分页)\s*-->$/i.test(trimmed) || /^\[(pagebreak|分页)]$/i.test(trimmed)) {
-      return { ...base, text: "pageBreak", markdown: trimmed, pageBreak: true };
+      lines.push({ ...base, text: "pageBreak", markdown: trimmed, pageBreak: true });
+      continue;
     }
 
     if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
-      return { ...base, text: "divider", markdown: trimmed, divider: true };
+      lines.push({ ...base, text: "divider", markdown: trimmed, divider: true });
+      continue;
     }
 
     const heading = trimmed.match(/^(#{1,6})\s*(.*)$/);
     if (heading) {
       const headingText = normalizeInlineText(heading[2]);
-      if (!headingText.text) return { ...base, text: "", markdown: rawLine, sanitized: headingText.sanitized };
-      return {
+      if (!headingText.text) {
+        lines.push({ ...base, text: "", markdown: rawLine, sanitized: headingText.sanitized });
+        continue;
+      }
+      lines.push({
         ...base,
         text: headingText.text,
         markdown: headingText.text,
         headingLevel: heading[1].length,
         sanitized: headingText.sanitized,
-      };
+      });
+      continue;
     }
 
     const quote = trimmed.match(/^(?:>|&gt;|＞)\s*(.*)$/);
     if (quote) {
       const quoteText = normalizeInlineText(quote[1]);
-      if (!quoteText.text) return { ...base, text: "", markdown: rawLine, sanitized: quoteText.sanitized };
-      return {
+      if (!quoteText.text) {
+        lines.push({ ...base, text: "", markdown: rawLine, sanitized: quoteText.sanitized });
+        continue;
+      }
+      lines.push({
         ...base,
         text: quoteText.text,
         markdown: `> ${quoteText.text}`,
         quoted: true,
         sanitized: quoteText.sanitized,
-      };
+      });
+      continue;
     }
 
     const normalizedText = normalizeInlineText(trimmed);
-    return {
+    lines.push({
       ...base,
       text: normalizedText.text,
       markdown: normalizedText.text,
       sanitized: normalizedText.sanitized,
-    };
-  });
+    });
+  }
+
+  return lines;
 }
 
 function looksLikeLead(text: string) {
@@ -226,7 +283,7 @@ function makeSourcePosition(lines: SourceLine[]): SourcePosition {
 
   return {
     startLine: first.lineNumber,
-    endLine: last.lineNumber,
+    endLine: last.endLine ?? last.lineNumber,
     startOffset: first.startOffset,
     endOffset: last.endOffset,
     sourceText: lines.map((line) => line.sourceText).join("\n"),
@@ -250,14 +307,15 @@ function makeTextBlock(
   };
 }
 
-function makeStructuralBlock(id: string, type: "divider" | "pageBreak", line: SourceLine): UnifiedArticleBlock {
+function makeStructuralBlock(id: string, type: "divider" | "pageBreak" | "code", line: SourceLine): UnifiedArticleBlock {
   return {
     id,
     type,
-    text: type,
-    plainText: type,
+    text: line.code ? line.text : type,
+    plainText: line.code ? line.text : type,
     markdown: line.markdown,
     source: makeSourcePosition([line]),
+    language: line.language,
   };
 }
 
@@ -266,7 +324,7 @@ function hasSanitizedText(lines: SourceLine[]) {
 }
 
 function isStructuralLine(line: SourceLine) {
-  return line.divider || line.pageBreak;
+  return line.divider || line.pageBreak || line.code;
 }
 
 export function parseArticleContent(raw: string, options: ParseOptions = {}): UnifiedArticleContent {
@@ -304,6 +362,12 @@ export function parseArticleContent(raw: string, options: ParseOptions = {}): Un
 
     if (line.pageBreak) {
       pushBlock(makeStructuralBlock(id, "pageBreak", line), [line]);
+      i += 1;
+      continue;
+    }
+
+    if (line.code) {
+      pushBlock(makeStructuralBlock(id, "code", line), [line]);
       i += 1;
       continue;
     }
@@ -477,6 +541,8 @@ export function articleContentToBlocks(content: UnifiedArticleContent): ArticleB
       case "divider":
       case "pageBreak":
         return [];
+      case "code":
+        return block.text ? [{ type: "paragraph", text: block.text }] : [];
     }
   });
 }

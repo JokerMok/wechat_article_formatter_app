@@ -2,7 +2,7 @@ import type { ArticleBlock, ArticleParseMode, BlockType } from "../article-types
 
 export type ArticleSourceFormat = "markdown" | "plainText";
 
-export type StructuralContentBlockType = "divider" | "pageBreak";
+export type StructuralContentBlockType = "divider" | "pageBreak" | "code";
 
 export type UnifiedContentBlockType = BlockType | StructuralContentBlockType;
 
@@ -45,6 +45,7 @@ export type UnifiedStructuralBlock = UnifiedBlockBase<StructuralContentBlockType
   text: string;
   plainText: string;
   markdown: string;
+  language?: string;
 };
 
 export type UnifiedTextBlock =
