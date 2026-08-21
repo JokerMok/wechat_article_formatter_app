@@ -37,7 +37,8 @@ function publicError(error: unknown) {
 export function createProjectStore(options: ProjectStoreOptions): StoreApi<ProjectStoreState> {
   const autosaveDelayMs = options.autosaveDelayMs ?? 800;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let revision = 0;
+  let projectRevision = 0;
+  let loadRevision = 0;
 
   const store = createStore<ProjectStoreState>((set, get) => {
     async function saveCurrentProject() {
@@ -46,19 +47,25 @@ export function createProjectStore(options: ProjectStoreOptions): StoreApi<Proje
         return;
       }
 
-      const saveRevision = revision;
+      const saveRevision = projectRevision;
       set({ saveStatus: "saving", lastError: undefined });
       try {
         await options.repository.saveProject(project);
-        if (saveRevision !== revision) {
+        if (saveRevision !== projectRevision) {
           return;
         }
         set({ saveStatus: "saved", lastError: undefined });
       } catch (error) {
-        if (saveRevision !== revision) {
+        const lastError = publicError(error);
+        if (saveRevision !== projectRevision) {
+          if (get().saveStatus === "saving") {
+            set({ saveStatus: "unsaved", lastError });
+          } else {
+            set({ lastError });
+          }
           return;
         }
-        set({ saveStatus: "unsaved", lastError: publicError(error) });
+        set({ saveStatus: "unsaved", lastError });
       }
     }
 
@@ -77,15 +84,22 @@ export function createProjectStore(options: ProjectStoreOptions): StoreApi<Proje
       saveStatus: "idle",
 
       async load() {
-        revision += 1;
+        const loadToken = loadRevision + 1;
+        const startingProjectRevision = projectRevision;
+        loadRevision = loadToken;
         set({ loadState: "loading", lastError: undefined });
         try {
           const result = await options.repository.getLatestProject();
+          if (loadToken !== loadRevision || startingProjectRevision !== projectRevision) {
+            return;
+          }
           if (result.state === "empty") {
+            projectRevision += 1;
             set({ loadState: "empty", project: undefined, unknownRawProject: undefined, saveStatus: "idle" });
             return;
           }
           if (result.state === "unknownVersion") {
+            projectRevision += 1;
             set({
               loadState: "unknownVersion",
               project: undefined,
@@ -94,15 +108,20 @@ export function createProjectStore(options: ProjectStoreOptions): StoreApi<Proje
             });
             return;
           }
+          projectRevision += 1;
           set({ loadState: "ready", project: result.project, unknownRawProject: undefined, saveStatus: "saved" });
         } catch (error) {
-          set({ loadState: "error", lastError: publicError(error), saveStatus: get().project ? get().saveStatus : "idle" });
+          if (loadToken !== loadRevision || startingProjectRevision !== projectRevision) {
+            return;
+          }
+          const saveStatus = get().project ? (get().saveStatus === "saving" ? "unsaved" : get().saveStatus) : "idle";
+          set({ loadState: "error", lastError: publicError(error), saveStatus });
         }
       },
 
       createProject(input = {}) {
         const project = createEmptyProject(input);
-        revision += 1;
+        projectRevision += 1;
         set({ loadState: "ready", project, saveStatus: "dirty", lastError: undefined });
         scheduleAutosave();
         return project;
@@ -113,7 +132,7 @@ export function createProjectStore(options: ProjectStoreOptions): StoreApi<Proje
         if (!current) {
           return;
         }
-        revision += 1;
+        projectRevision += 1;
         set({
           project: {
             ...current,
@@ -127,7 +146,7 @@ export function createProjectStore(options: ProjectStoreOptions): StoreApi<Proje
       },
 
       async deleteProject(id) {
-        revision += 1;
+        projectRevision += 1;
         if (timer) {
           clearTimeout(timer);
           timer = undefined;

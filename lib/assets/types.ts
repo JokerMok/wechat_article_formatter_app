@@ -10,6 +10,7 @@ export type ImageValidationError = {
 export type ImageValidationSuccess = {
   mimeType: SupportedImageMimeType;
   byteLength: number;
+  dimensions: ImageDimensions;
 };
 
 export type ImageValidationResult =

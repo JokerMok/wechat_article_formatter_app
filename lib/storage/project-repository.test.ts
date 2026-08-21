@@ -169,4 +169,36 @@ describe("asset blob repository", () => {
     expect([...new Uint8Array(await restored.blob.arrayBuffer())].slice(0, 4)).toEqual([0x89, 0x50, 0x4e, 0x47]);
     await restoredRepo.close();
   });
+
+  it("normalizes crop metadata at the blob repository boundary", async () => {
+    const dbName = nextName();
+    const repo = createAssetBlobRepository({ dbName });
+    const blob = new Blob([validPng], { type: "image/png" });
+
+    const saved = await repo.saveImageBlob({
+      projectId: "project-1",
+      blob,
+      fileName: "cover.png",
+      crop: { x: 0.4, y: 0.4, width: 0.6, height: 0.6, unit: "pixel" },
+    });
+
+    expect(saved.crop).toEqual({ x: 0, y: 0, width: 1, height: 1, unit: "pixel" });
+    await repo.close();
+  });
+
+  it("rejects non-finite crop metadata before storing image blobs", async () => {
+    const dbName = nextName();
+    const repo = createAssetBlobRepository({ dbName });
+    const blob = new Blob([validPng], { type: "image/png" });
+
+    await expect(
+      repo.saveImageBlob({
+        projectId: "project-1",
+        blob,
+        fileName: "cover.png",
+        crop: { x: Number.NaN, y: 0, width: 1, height: 1, unit: "pixel" },
+      })
+    ).rejects.toMatchObject({ code: "validation_failed" });
+    await repo.close();
+  });
 });

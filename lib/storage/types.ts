@@ -1,4 +1,4 @@
-import type { CropParams, SupportedImageMimeType } from "../assets";
+import type { CropParams, CropParamsInput, SupportedImageMimeType } from "../assets";
 import type { UnifiedArticleContent } from "../content";
 
 export const CURRENT_PROJECT_SCHEMA_VERSION = 2;
@@ -80,7 +80,7 @@ export type AssetBlobRepository = {
     projectId: string;
     blob: Blob;
     fileName: string;
-    crop?: CropParams;
+    crop?: CropParamsInput;
   }): Promise<StoredAssetMetadata>;
   getAssetBlob(id: string): Promise<AssetLoadResult>;
   listProjectAssets(projectId: string): Promise<StoredAssetMetadata[]>;

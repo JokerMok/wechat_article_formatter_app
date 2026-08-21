@@ -1,4 +1,4 @@
-import { validateImageBlob } from "../assets";
+import { normalizeCropParams, validateImageBlob } from "../assets";
 import { FormatterDatabase, type BrowserDatabaseOptions } from "./browser-database";
 import { categorizeStorageWriteError, StorageWriteError } from "./storage-error";
 import type { AssetBlobRepository, AssetLoadResult, StoredAssetMetadata, StoredAssetRecord } from "./types";
@@ -38,13 +38,20 @@ export function createAssetBlobRepository(options: BrowserDatabaseOptions = {}):
         throw new StorageWriteError("validation_failed", validation.error.message);
       }
 
+      let crop: StoredAssetRecord["crop"];
+      try {
+        crop = input.crop ? normalizeCropParams(input.crop, validation.value.dimensions) : undefined;
+      } catch {
+        throw new StorageWriteError("validation_failed", "裁剪参数无效。");
+      }
+
       const record: StoredAssetRecord = {
         id: createId("asset"),
         projectId: input.projectId,
         fileName: input.fileName,
         mimeType: validation.value.mimeType,
         byteLength: validation.value.byteLength,
-        crop: input.crop,
+        crop,
         createdAt: nowIso(),
         blob: input.blob,
       };

@@ -33,10 +33,16 @@ describe("asset image validation", () => {
 
   it("rejects truncated or structurally damaged image fixtures", async () => {
     const truncatedPng = validPng.slice(0, -12);
+    const damagedPngSignature = new Uint8Array(validPng);
     const damagedJpeg = new Uint8Array(validJpeg.slice(0, -2));
     const damagedWebp = validWebp.slice(0, -1);
+    damagedPngSignature[4] = 0x00;
 
     await expect(validateImageBlob(new Blob([truncatedPng], { type: "image/png" }))).resolves.toMatchObject({
+      ok: false,
+      error: { code: "invalid_image_data" },
+    });
+    await expect(validateImageBlob(new Blob([damagedPngSignature], { type: "image/png" }))).resolves.toMatchObject({
       ok: false,
       error: { code: "invalid_image_data" },
     });
@@ -79,5 +85,11 @@ describe("asset image validation", () => {
     expect(() => normalizeCropParams({ x: 500, y: 0, width: 200, height: 100 }, { width: 640, height: 480 })).toThrow(
       "crop_out_of_bounds"
     );
+    expect(() => normalizeCropParams({ x: Number.NaN, y: 0, width: 100, height: 100 }, { width: 640, height: 480 })).toThrow(
+      "crop_out_of_bounds"
+    );
+    expect(() =>
+      normalizeCropParams({ x: 0, y: 0, width: Number.POSITIVE_INFINITY, height: 100 }, { width: 640, height: 480 })
+    ).toThrow("crop_out_of_bounds");
   });
 });
