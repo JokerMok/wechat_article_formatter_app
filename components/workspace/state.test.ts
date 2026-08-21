@@ -73,6 +73,24 @@ function emptyHistories() {
   >;
 }
 
+function projectBackupWithMutatedManualPage(mutate: (page: CardLayoutPage) => void) {
+  const state = createWorkspaceState(`# 合法标题
+
+正文。
+`);
+  const platformWithManualPage = withManualCardPages(state.platforms.xiaohongshu, [cardPage("manual-page", "手动分页")]);
+  const platformVersions = serializeWorkspace({
+    ...state,
+    platforms: {
+      ...state.platforms,
+      xiaohongshu: platformWithManualPage,
+    },
+  });
+  const raw = platformVersions[WORKSPACE_VERSION_KEY] as ReturnType<typeof createWorkspaceState>;
+  mutate(raw.platforms.xiaohongshu.manualPages[0]);
+  return { state, platformVersions };
+}
+
 describe("workspace state", () => {
   it("uses the required workspace timing and history limits", () => {
     expect(AUTO_SAVE_DEBOUNCE_MS).toBe(800);
@@ -579,6 +597,38 @@ AI 正文。
     expect("polluted" in (restored?.platforms.xiaohongshu.meta ?? {})).toBe(false);
     expect(Array.isArray(restoredFromProject?.platforms.xiaohongshu.meta.tags)).toBe(true);
     expect(restoredFromProject?.platforms.xiaohongshu.meta.tags.join(" ")).toBe(xiaohongshuTags.join(" "));
+  });
+
+  it.each([
+    ["canvas width is a string", (page: CardLayoutPage) => ((page.canvas as unknown as Record<string, unknown>).width = "bad")],
+    ["node x is Infinity", (page: CardLayoutPage) => (page.nodes[0].x = Number.POSITIVE_INFINITY)],
+    ["line height is an object", (page: CardLayoutPage) => ((page.nodes[0].lines[0] as unknown as Record<string, unknown>).height = { value: 40 })],
+  ])("drops corrupted manual card pages when %s", (_name, mutate) => {
+    const { state, platformVersions } = projectBackupWithMutatedManualPage(mutate);
+
+    const selected = selectRestorableBackupProject({
+      schemaVersion: 1,
+      exportedAt: "2026-08-21T00:00:00.000Z",
+      projects: [
+        {
+          schemaVersion: 2,
+          id: "corrupted-manual-page",
+          title: "损坏手动分页",
+          article: state.platforms.wechat.content,
+          assets: [],
+          platformVersions,
+          createdAt: "2026-08-21T00:00:00.000Z",
+          updatedAt: "2026-08-21T00:00:00.000Z",
+        },
+      ],
+      unknownProjects: [],
+      assets: [],
+    });
+    const restored = readPersistedWorkspace(selected?.platformVersions);
+
+    expect(selected?.title).toBe("损坏手动分页");
+    expect(restored?.platforms.xiaohongshu.manualPages).toEqual([]);
+    expect(restored?.platforms.xiaohongshu.content.blocks).toEqual(state.platforms.xiaohongshu.content.blocks);
   });
 
   it("rejects persisted workspace backups with invalid platform draft content", () => {

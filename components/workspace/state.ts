@@ -677,6 +677,8 @@ function readPlatformDraft(value: unknown, platform: PlatformId, fallback: Platf
   const content = readArticleContent(value.content);
   if (!content) return undefined;
   const ratio = value.ratio === "9:16" ? "9:16" : "3:4";
+  const manualPages = Array.isArray(value.manualPages) ? value.manualPages.flatMap(readCardLayoutPage) : [];
+  const manualPageIds = new Set(manualPages.map((page) => page.id));
   return {
     ...fallback,
     platform,
@@ -686,8 +688,8 @@ function readPlatformDraft(value: unknown, platform: PlatformId, fallback: Platf
     templateKey: typeof value.templateKey === "string" && value.templateKey in styleTemplates ? (value.templateKey as TemplateKey) : fallback.templateKey,
     ratio,
     meta: readPlatformMeta(value.meta, fallback.meta),
-    lockedPageIds: Array.isArray(value.lockedPageIds) ? value.lockedPageIds.filter((id): id is string => typeof id === "string") : [],
-    manualPages: Array.isArray(value.manualPages) ? value.manualPages.flatMap(readCardLayoutPage) : [],
+    lockedPageIds: Array.isArray(value.lockedPageIds) ? value.lockedPageIds.filter((id): id is string => typeof id === "string" && manualPageIds.has(id)) : [],
+    manualPages,
     editedWechatHtml: typeof value.editedWechatHtml === "string" ? sanitizeWechatHtml(value.editedWechatHtml) : undefined,
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : fallback.updatedAt,
   };
@@ -744,6 +746,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function isCardAspectRatio(value: unknown): value is CardAspectRatio {
+  return value === "3:4" || value === "9:16";
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readRequiredNumberRecord<T extends string>(value: unknown, keys: readonly T[]): Record<T, number> | undefined {
+  if (!isRecord(value)) return undefined;
+  const entries = keys.map((key) => [key, readFiniteNumber(value[key])] as const);
+  if (entries.some(([, field]) => field === undefined)) return undefined;
+  return Object.fromEntries(entries) as Record<T, number>;
+}
+
 function cloneCardLayoutPage(page: CardLayoutPage): CardLayoutPage {
   return {
     ...page,
@@ -759,19 +776,125 @@ function cloneCardLayoutPage(page: CardLayoutPage): CardLayoutPage {
   };
 }
 
-function readCardLayoutPage(value: unknown): CardLayoutPage[] {
+type CardLayoutNodeValue = CardLayoutPage["nodes"][number];
+type CardLayoutLineValue = CardLayoutNodeValue["lines"][number];
+type CardLayoutNodeKindValue = CardLayoutNodeValue["kind"];
+type CardLayoutTextStyleValue = NonNullable<CardLayoutNodeValue["style"]>;
+type CardLayoutImageValue = NonNullable<CardLayoutNodeValue["image"]>;
+type CardOverflowIssueValue = CardLayoutPage["overflow"][number];
+
+const CARD_LAYOUT_NODE_KINDS = new Set<CardLayoutNodeKindValue>(["title", "heading", "body", "focus", "image"]);
+const CARD_OVERFLOW_TYPES = new Set<CardOverflowIssueValue["type"]>(["vertical", "horizontal"]);
+const CARD_OVERFLOW_EDGES = new Set<NonNullable<CardOverflowIssueValue["edge"]>>(["top", "right", "bottom", "left"]);
+
+function readCardLayoutLine(value: unknown): CardLayoutLineValue | undefined {
+  if (!isRecord(value) || typeof value.text !== "string") return undefined;
+  const box = readRequiredNumberRecord(value, ["x", "y", "width", "height"]);
+  return box ? { text: value.text, ...box } : undefined;
+}
+
+function readCardLayoutStyle(value: unknown): CardLayoutTextStyleValue | undefined {
+  if (!isRecord(value) || typeof value.fontFamily !== "string") return undefined;
+  const style = readRequiredNumberRecord(value, ["fontSize", "fontWeight", "lineHeight"]);
+  return style ? { fontFamily: value.fontFamily, ...style } : undefined;
+}
+
+function readCardLayoutImage(value: unknown): CardLayoutImageValue | undefined {
+  if (!isRecord(value) || typeof value.alt !== "string") return undefined;
+  const box = readRequiredNumberRecord(value, ["x", "y", "width", "height"]);
+  if (!box) return undefined;
+  const rotation = readFiniteNumber(value.rotation);
+  const opacity = readFiniteNumber(value.opacity);
+  return {
+    ...box,
+    alt: value.alt,
+    ...(rotation === undefined ? {} : { rotation }),
+    ...(opacity === undefined ? {} : { opacity }),
+    ...(value.mode === "inline" || value.mode === "absolute" ? { mode: value.mode } : {}),
+  };
+}
+
+function readCardLayoutNode(value: unknown): CardLayoutNodeValue | undefined {
   if (
     !isRecord(value) ||
     typeof value.id !== "string" ||
-    !isRecord(value.canvas) ||
-    !isRecord(value.safeArea) ||
-    !Array.isArray(value.nodes) ||
-    !Array.isArray(value.overflow) ||
-    !value.nodes.every((node) => isRecord(node) && Array.isArray(node.lines))
+    typeof value.entryId !== "string" ||
+    typeof value.blockId !== "string" ||
+    !CARD_LAYOUT_NODE_KINDS.has(value.kind as CardLayoutNodeKindValue) ||
+    typeof value.text !== "string" ||
+    !Array.isArray(value.lines)
   ) {
-    return [];
+    return undefined;
   }
-  return [cloneCardLayoutPage(value as CardLayoutPage)];
+
+  const sourceIndex = readFiniteNumber(value.sourceIndex);
+  const box = readRequiredNumberRecord(value, ["x", "y", "width", "height"]);
+  const lines = value.lines.map(readCardLayoutLine);
+  if (sourceIndex === undefined || !box || lines.some((line) => line === undefined)) return undefined;
+
+  const style = readCardLayoutStyle(value.style);
+  const image = readCardLayoutImage(value.image);
+  return {
+    id: value.id,
+    entryId: value.entryId,
+    blockId: value.blockId,
+    kind: value.kind as CardLayoutNodeKindValue,
+    sourceIndex,
+    text: value.text,
+    lines: lines as CardLayoutLineValue[],
+    ...box,
+    ...(style ? { style } : {}),
+    ...(typeof value.continuedFromPreviousPage === "boolean" ? { continuedFromPreviousPage: value.continuedFromPreviousPage } : {}),
+    ...(typeof value.continuesOnNextPage === "boolean" ? { continuesOnNextPage: value.continuesOnNextPage } : {}),
+    ...(image ? { image } : {}),
+  };
+}
+
+function readCardOverflowIssue(value: unknown): CardOverflowIssueValue | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.pageId !== "string" ||
+    typeof value.nodeId !== "string" ||
+    !CARD_OVERFLOW_TYPES.has(value.type as CardOverflowIssueValue["type"])
+  ) {
+    return undefined;
+  }
+  const amount = readFiniteNumber(value.amount);
+  if (amount === undefined) return undefined;
+  return {
+    pageId: value.pageId,
+    nodeId: value.nodeId,
+    type: value.type as CardOverflowIssueValue["type"],
+    amount,
+    ...(CARD_OVERFLOW_EDGES.has(value.edge as NonNullable<CardOverflowIssueValue["edge"]>)
+      ? { edge: value.edge as NonNullable<CardOverflowIssueValue["edge"]> }
+      : {}),
+  };
+}
+
+function readCardLayoutPage(value: unknown): CardLayoutPage[] {
+  if (!isRecord(value) || typeof value.id !== "string" || !isCardAspectRatio(value.aspectRatio) || !Array.isArray(value.nodes)) return [];
+  const pageNumber = readFiniteNumber(value.pageNumber);
+  const totalPages = readFiniteNumber(value.totalPages);
+  const canvas = readRequiredNumberRecord(value.canvas, ["width", "height"]);
+  const safeArea = readRequiredNumberRecord(value.safeArea, ["top", "right", "bottom", "left", "x", "y", "width", "height"]);
+  const nodes = value.nodes.map(readCardLayoutNode);
+  if (pageNumber === undefined || totalPages === undefined || !canvas || !safeArea || nodes.some((node) => node === undefined)) return [];
+
+  return [
+    {
+      id: value.id,
+      pageNumber,
+      totalPages,
+      aspectRatio: value.aspectRatio,
+      canvas,
+      safeArea,
+      nodes: nodes as CardLayoutNodeValue[],
+      ...(typeof value.manual === "boolean" ? { manual: value.manual } : {}),
+      ...(typeof value.locked === "boolean" ? { locked: value.locked } : {}),
+      overflow: Array.isArray(value.overflow) ? value.overflow.flatMap((issue) => readCardOverflowIssue(issue) ?? []) : [],
+    },
+  ];
 }
 
 function readRestorableBackupProject(value: unknown, backupAssets: unknown[] = []): ProjectDocument[] {
