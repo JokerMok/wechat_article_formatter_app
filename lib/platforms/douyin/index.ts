@@ -1,5 +1,12 @@
 import type { UnifiedArticleContent } from "../../content";
-import { selectFallbackTitle, buildSourceTrace, collectRenderableBlocks, collectTags, paginateBlocks } from "../platform-profiles";
+import {
+  selectFallbackTitle,
+  buildSourceTrace,
+  collectRenderableBlocks,
+  collectTags,
+  paginateBlocks,
+  resolveDouyinImageRatio,
+} from "../platform-profiles";
 import { platformProfiles } from "../platform-profiles";
 import type { PlatformProfile, RenderableBlock, DouyinImageProfile, DouyinLongformProfile } from "../platform-profiles";
 
@@ -75,12 +82,12 @@ function buildIntroText(blocks: RenderableBlock[], blocksMaxWords: number) {
   return clampText(firstParagraph?.text ?? "", blocksMaxWords * 2);
 }
 
-function buildLongformBody(blocks: RenderableBlock[], blocksMaxWords: number) {
+function buildLongformBody(blocks: RenderableBlock[], profile: DouyinLongformProfile) {
   const bodyText = blocks.map((block) => block.text).join("\n\n");
-  const intro = buildIntroText(blocks, 16);
+  const intro = buildIntroText(blocks, profile.introTargetWords);
   const ending = (() => {
     const endingCandidate = blocks.findLast((block) => block.kind === "summary" || block.kind === "cta" || block.kind === "section");
-    return clampText(endingCandidate?.text ?? intro, blocksMaxWords);
+    return clampText(endingCandidate?.text ?? intro, profile.endingTargetWords);
   })();
 
   const highlightSources = blocks.filter((block) => block.kind === "golden" || block.kind === "quote" || block.kind === "card");
@@ -98,8 +105,12 @@ export type DouyinImageOptions = {
   ratio?: DouyinImageRatio;
 };
 
+export type DouyinLongformOptions = {
+  profile?: DouyinLongformProfile;
+};
+
 export function toDouyinImageText(content: UnifiedArticleContent, options: DouyinImageOptions = {}): DouyinImageOutput {
-  const ratio = options.ratio ?? douyinImageProfile.defaultAspectRatio;
+  const ratio = resolveDouyinImageRatio(options.ratio, douyinImageProfile);
   const blocks = collectRenderableBlocks(content);
   const title = selectFallbackTitle(content);
   const caption = buildImageCaption(title, buildIntroText(blocks, 16), collectTags(content, douyinImageProfile.maxTags));
@@ -118,17 +129,18 @@ export function toDouyinImageText(content: UnifiedArticleContent, options: Douyi
   };
 }
 
-export function toDouyinLongform(content: UnifiedArticleContent): DouyinLongformOutput {
+export function toDouyinLongform(content: UnifiedArticleContent, options: DouyinLongformOptions = {}): DouyinLongformOutput {
+  const profile = options.profile ?? douyinLongProfile;
   const blocks = collectRenderableBlocks(content);
   const title = selectFallbackTitle(content);
-  const { intro, ending, body, highlights } = buildLongformBody(blocks, douyinLongProfile.endingTargetWords);
-  const tags = collectTags(content, douyinLongProfile.maxTags);
+  const { intro, ending, body, highlights } = buildLongformBody(blocks, profile);
+  const tags = collectTags(content, profile.maxTags);
   const caption = `${title}${intro ? ` - ${intro}` : ""}`;
 
   return {
     platform: "douyinLongform",
-    schemaVersion: douyinLongProfile.outputSchemaVersion,
-    profileVersion: douyinLongProfile.profileVersion,
+    schemaVersion: profile.outputSchemaVersion,
+    profileVersion: profile.profileVersion,
     source: buildSourceTrace(content),
     title,
     intro,

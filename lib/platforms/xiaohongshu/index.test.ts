@@ -45,14 +45,33 @@ describe("toXiaohongshuImageText", () => {
 
 这是正文正文正文。
 `);
-  const output = toXiaohongshuImageText(content);
+    const output = toXiaohongshuImageText(content);
 
-  expect(output.title).toBe("第一段没有标题");
-  expect(output.cover.title).toBe("第一段没有标题");
-  expect(output.cover.subtitle).toBe("这是正文正文正文。");
-  expect(output.pages.length).toBeGreaterThan(0);
-  expect(output.tags[0]).toBeDefined();
-});
+    expect(output.title).toBe("第一段没有标题");
+    expect(output.cover.title).toBe("第一段没有标题");
+    expect(output.cover.subtitle).toBe("这是正文正文正文。");
+    expect(output.pages.length).toBeGreaterThan(0);
+    expect(output.tags[0]).toBeDefined();
+  });
+
+  it("derives page title and focus prompt for paragraph-only pages", () => {
+    const raw = Array.from(
+      { length: 8 },
+      (_, index) =>
+        `这是第${index + 1}段纯正文内容，只有连续的自然语言段落，没有章节标题或重点标记，但仍然需要稳定生成可读的正文页信息。`
+    ).join("\n\n");
+    const content = parseArticleContent(raw);
+    const output = toXiaohongshuImageText(content);
+
+    expect(output.pages.length).toBeGreaterThan(1);
+    expect(output.pages.every((page) => page.pageTitle.length > 0)).toBe(true);
+    expect(output.pages.every((page) => page.focusPrompt.length > 0)).toBe(true);
+    expect(output.pages.every((page) => page.focusPrompt.includes("重点"))).toBe(true);
+    expect(output.pages.flatMap((page) => page.sourceBlockIds)).toEqual(
+      collectRenderableBlocks(content).map((block) => block.blockId)
+    );
+    expect(toXiaohongshuImageText(content)).toEqual(output);
+  });
 
   it("handles long inputs without dropped pages", () => {
     const content = parseArticleContent(makeLongArticle);

@@ -8,6 +8,8 @@ export type XiaohongshuPageBlock = RenderableBlock;
 
 export type XiaohongshuBodyPage = {
   pageIndex: number;
+  pageTitle: string;
+  focusPrompt: string;
   blocks: XiaohongshuPageBlock[];
   sourceBlockIds: string[];
 };
@@ -32,15 +34,42 @@ export type XiaohongshuImageTextOutput = {
 
 const profile = platformProfiles.xiaohongshu as XiaohongshuProfile;
 
+function clampText(text: string, maxChars: number) {
+  const normalized = text.trim();
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxChars).trim()}...`;
+}
+
+function derivePageTitle(pageBlocks: XiaohongshuPageBlock[], fallbackTitle: string, pageIndex: number) {
+  const firstBlockText = pageBlocks[0]?.text ?? "";
+  return clampText(firstBlockText || fallbackTitle || `第${pageIndex + 1}页`, 32);
+}
+
+function deriveFocusPrompt(pageBlocks: XiaohongshuPageBlock[], pageTitle: string) {
+  const focusBlock =
+    pageBlocks.find((block) => ["golden", "quote", "card", "section", "subsection", "lead", "summary"].includes(block.kind)) ??
+    pageBlocks[0];
+  const focusText = clampText(focusBlock?.text ?? pageTitle, 48);
+  return `本页重点：${focusText}`;
+}
+
 function buildPages(profilePageCapacity: number, content: UnifiedArticleContent): XiaohongshuBodyPage[] {
   const blocks = collectRenderableBlocks(content);
   const pages = paginateBlocks(blocks, profilePageCapacity);
+  const fallbackTitle = selectFallbackTitle(content);
 
-  return pages.map((pageBlocks, pageIndex) => ({
-    pageIndex,
-    blocks: pageBlocks.map((block) => ({ ...block })),
-    sourceBlockIds: pageBlocks.map((block) => block.blockId),
-  }));
+  return pages.map((pageBlocks, pageIndex) => {
+    const pageTitle = derivePageTitle(pageBlocks, fallbackTitle, pageIndex);
+    return {
+      pageIndex,
+      pageTitle,
+      focusPrompt: deriveFocusPrompt(pageBlocks, pageTitle),
+      blocks: pageBlocks.map((block) => ({ ...block })),
+      sourceBlockIds: pageBlocks.map((block) => block.blockId),
+    };
+  });
 }
 
 function buildCover(content: UnifiedArticleContent): XiaohongshuCover {

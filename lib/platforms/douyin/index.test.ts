@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseArticleContent } from "../../article-parser";
+import { collectRenderableBlocks, platformProfiles, type DouyinLongformProfile } from "../platform-profiles";
 import { toDouyinImageText, toDouyinLongform, type DouyinImageRatio } from ".";
 
 const longArticle = Array.from({ length: 220 }, (_, index) => {
@@ -65,6 +66,17 @@ describe("toDouyinImageText & toDouyinLongform", () => {
     expect(nineBlocks.length).toEqual(threeBlocks.length);
   });
 
+  it("falls back deterministically for an unsupported runtime ratio without dropping blocks", () => {
+    const content = parseArticleContent(longArticle);
+    const output = toDouyinImageText(content, { ratio: "1:1" as DouyinImageRatio });
+    const blocks = output.pages.flatMap((page) => page.blocks);
+
+    expect(output.ratio).toBe(platformProfiles.douyinImage.defaultAspectRatio);
+    expect(blocks).toHaveLength(collectRenderableBlocks(content).length);
+    expect(output.pages.every((page) => page.blocks.length > 0)).toBe(true);
+    expect(output.pages.every((page) => page.blocks.every((block) => Number.isFinite(block.text.length)))).toBe(true);
+  });
+
   it("builds longform intro/body/highlights/ending deterministically", () => {
     const content = parseArticleContent(normalArticle);
     const longformFirst = toDouyinLongform(content);
@@ -76,5 +88,23 @@ describe("toDouyinImageText & toDouyinLongform", () => {
     expect(longformFirst.highlights.length).toBeGreaterThan(0);
     expect(longformFirst.ending).toBeTruthy();
     expect(longformFirst.caption).toContain(longformFirst.title);
+  });
+
+  it("uses the centralized intro target from the selected versioned profile", () => {
+    const content = parseArticleContent(
+      `这是一段足够长的普通正文，用来验证导语目标长度确实来自所选的平台 profile，而不是转换器内部的固定数字，并且继续补充内容以确保解析器将它识别为段落，而不是文章标题。`
+    );
+    const defaultOutput = toDouyinLongform(content);
+    const tunedProfile: DouyinLongformProfile = {
+      ...platformProfiles.douyinLongform,
+      profileVersion: "1.1.0",
+      introTargetWords: 4,
+    };
+    const tunedOutput = toDouyinLongform(content, { profile: tunedProfile });
+
+    expect(tunedOutput.profileVersion).toBe("1.1.0");
+    expect(tunedOutput.schemaVersion).toBe(tunedProfile.outputSchemaVersion);
+    expect(tunedOutput.intro.length).toBeLessThan(defaultOutput.intro.length);
+    expect(tunedOutput.intro).toBe(toDouyinLongform(content, { profile: tunedProfile }).intro);
   });
 });

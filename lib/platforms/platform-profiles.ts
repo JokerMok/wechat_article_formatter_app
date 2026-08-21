@@ -72,8 +72,8 @@ export type DouyinImageProfile = PlatformProfileCommon & {
 
 export type DouyinLongformProfile = PlatformProfileCommon & {
   platform: "douyinLongform";
-  introTargetWords: 32;
-  endingTargetWords: 24;
+  introTargetWords: number;
+  endingTargetWords: number;
 };
 
 export type PlatformProfile = XiaohongshuProfile | DouyinImageProfile | DouyinLongformProfile;
@@ -135,6 +135,18 @@ export type PlatformProfileId = keyof typeof platformProfiles;
 
 export function getPlatformProfile(platform: PlatformProfileId): PlatformProfile {
   return platformProfiles[platform];
+}
+
+export function resolveDouyinImageRatio(value: unknown, profile: DouyinImageProfile): DouyinImageAspectRatio {
+  const candidate = value as DouyinImageAspectRatio;
+  const isSupported =
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(profile.aspectRatios, value) &&
+    Object.prototype.hasOwnProperty.call(profile.maxBlocksPerPage, value) &&
+    Number.isFinite(profile.maxBlocksPerPage[candidate]) &&
+    profile.maxBlocksPerPage[candidate] >= 1;
+
+  return isSupported ? candidate : profile.defaultAspectRatio;
 }
 
 export function stableChecksum(input: string) {
@@ -283,7 +295,7 @@ export function collectTags(content: UnifiedArticleContent, maxCount: number) {
 }
 
 export function paginateBlocks(blocks: RenderableBlock[], maxBlocksPerPage: number) {
-  const pageSize = Math.max(1, Math.floor(maxBlocksPerPage));
+  const pageSize = Number.isFinite(maxBlocksPerPage) ? Math.max(1, Math.floor(maxBlocksPerPage)) : 1;
   if (blocks.length === 0) {
     return [];
   }
