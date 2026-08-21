@@ -270,6 +270,60 @@ describe("platform exports", () => {
     expect(drawImage).toHaveBeenCalledWith(imageSource, -160, -90, 320, 180);
   });
 
+  it("resolves default Markdown card image sources for auto-generated PNG pages", async () => {
+    const loadedSources: string[] = [];
+    class FakeImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      crossOrigin = "";
+      private currentSrc = "";
+
+      get src() {
+        return this.currentSrc;
+      }
+
+      set src(value: string) {
+        this.currentSrc = value;
+        loadedSources.push(value);
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+    vi.stubGlobal("Image", FakeImage);
+
+    let renderImages: Record<string, CanvasImageSource> | undefined;
+    const result = await exportXiaohongshuPackage({
+      content: articleContent(),
+      exportedAt,
+      renderer: async ({ images }) => {
+        renderImages = images;
+        return new Blob(["png:with-image"], { type: "image/png" });
+      },
+    });
+
+    expect(loadedSources).toEqual(["data:image/png;base64,aaa"]);
+    expect(renderImages?.["image-a"]).toBeInstanceOf(FakeImage);
+    expect(result.manifest.pageCount).toBeGreaterThan(0);
+    const files = await zipEntries(result.zipBlob);
+    await expect(files[result.images[0]?.path ?? ""].async("text")).resolves.toBe("png:with-image");
+  });
+
+  it("fails explicitly when a required default card image source is unavailable", async () => {
+    const content = articleContent();
+    content.blocks = content.blocks.map((block) => (block.id === "image-a" ? { ...block, markdown: "![Image A](./local.png)", source: source(3, "![Image A](./local.png)") } : block));
+
+    await expect(
+      exportXiaohongshuPackage({
+        content,
+        exportedAt,
+        pages: [imagePage("image-a")],
+        renderer: async () => new Blob(["placeholder"], { type: "image/png" }),
+      }),
+    ).rejects.toMatchObject({
+      code: "card_image_source_unavailable",
+      details: { blockId: "image-a", reason: "missing_supported_content_image" },
+    });
+  });
+
   it("exports Douyin image packages for 9:16 with caption copy and tags", async () => {
     const result = await exportDouyinImagePackage({
       content: articleContent(),

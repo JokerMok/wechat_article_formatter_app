@@ -108,7 +108,7 @@ export type ProjectBackupExportResult = {
   zipBlob: Blob;
 };
 
-export type ExportPackageErrorCode = "card_page_ratio_mismatch" | "project_backup_asset_missing" | "project_backup_asset_unavailable";
+export type ExportPackageErrorCode = "card_page_ratio_mismatch" | "card_image_source_unavailable" | "project_backup_asset_missing" | "project_backup_asset_unavailable";
 
 export class ExportPackageError extends Error {
   readonly code: ExportPackageErrorCode;
@@ -284,6 +284,115 @@ async function renderBrowserCardPageToPng(input: CardPageRenderInput): Promise<B
   });
 }
 
+function isSafeCardImageSrc(src: string) {
+  return /^(https?:\/\/|blob:|data:image\/(?:png|jpe?g|gif|webp);base64,)/i.test(src.trim());
+}
+
+function summarizeImageSrc(src: string) {
+  const trimmed = src.trim();
+  if (trimmed.startsWith("data:")) {
+    const mimeType = trimmed.match(/^data:([^;,]+)/i)?.[1] ?? "data";
+    return `${mimeType} data URL`;
+  }
+  return trimmed.slice(0, 120);
+}
+
+function parseMarkdownImageSrc(value: string) {
+  const match = value.match(/!\[[^\]]*]\(([^)\s]+)(?:\s+"[^"]*")?\)/);
+  return match?.[1]?.trim();
+}
+
+function getContentImageSources(content: UnifiedArticleContent) {
+  const sources = new Map<string, string>();
+  for (const block of content.blocks) {
+    if (block.type !== "image") continue;
+    const candidates = [block.source.sourceText, block.markdown, block.text, block.plainText];
+    const src = candidates.map(parseMarkdownImageSrc).find((candidate): candidate is string => Boolean(candidate));
+    if (src && isSafeCardImageSrc(src)) {
+      sources.set(block.id, src.trim());
+    }
+  }
+  return sources;
+}
+
+function requiredCardImageKeys(pages: CardLayoutPage[]) {
+  const keys = new Set<string>();
+  for (const page of pages) {
+    for (const node of page.nodes) {
+      if (node.kind === "image" && node.image) {
+        keys.add(node.blockId);
+      }
+    }
+  }
+  return keys;
+}
+
+function assertCardImagesCoverPages(pages: CardLayoutPage[], images: CardRenderImages) {
+  for (const blockId of requiredCardImageKeys(pages)) {
+    if (!images[blockId]) {
+      throw new ExportPackageError(
+        "card_image_source_unavailable",
+        `Card image block ${blockId} has no renderable image source. Provide input.images for that block before exporting PNG cards.`,
+        { blockId, reason: "missing_input_image" },
+      );
+    }
+  }
+}
+
+async function loadCardImage(src: string, blockId: string) {
+  if (typeof Image === "undefined") {
+    throw new ExportPackageError(
+      "card_image_source_unavailable",
+      `Card image block ${blockId} references ${summarizeImageSrc(src)}, but this environment cannot create browser images. Provide input.images or run the PNG export in a browser.`,
+      { blockId, source: summarizeImageSrc(src), reason: "image_loader_unavailable" },
+    );
+  }
+
+  return new Promise<CanvasImageSource>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => {
+      reject(
+        new ExportPackageError(
+          "card_image_source_unavailable",
+          `Card image block ${blockId} could not load ${summarizeImageSrc(src)}. Provide input.images with a loaded image or remove the image block before exporting PNG cards.`,
+          { blockId, source: summarizeImageSrc(src), reason: "image_load_failed" },
+        ),
+      );
+    };
+    if (/^https?:\/\//i.test(src)) {
+      image.crossOrigin = "anonymous";
+    }
+    image.src = src;
+  });
+}
+
+async function resolveCardRenderImages(input: { content: UnifiedArticleContent; pages: CardLayoutPage[]; images?: CardRenderImages }) {
+  if (input.images) {
+    assertCardImagesCoverPages(input.pages, input.images);
+    return input.images;
+  }
+
+  const required = requiredCardImageKeys(input.pages);
+  if (!required.size) return undefined;
+
+  const contentSources = getContentImageSources(input.content);
+  const images: CardRenderImages = {};
+  for (const blockId of required) {
+    const src = contentSources.get(blockId);
+    if (!src) {
+      throw new ExportPackageError(
+        "card_image_source_unavailable",
+        `Card image block ${blockId} has no supported Markdown/data image source. Provide input.images for that block before exporting PNG cards.`,
+        { blockId, reason: "missing_supported_content_image" },
+      );
+    }
+    images[blockId] = await loadCardImage(src, blockId);
+  }
+
+  return images;
+}
+
 function resolveCardPages(input: {
   content: UnifiedArticleContent;
   ratio: CardAspectRatio;
@@ -389,7 +498,8 @@ export async function exportXiaohongshuPackage(input: {
   const baseName = createExportBaseName(output.title, exportedAt, "xiaohongshu");
   const pages = resolveCardPages({ content: input.content, ratio: "3:4", pages: input.pages, layoutOptions: input.layoutOptions, measurer: input.measurer });
   assertPagesMatchRatio(pages, "3:4");
-  const images = await renderImageFiles({ pages, platform: "xiaohongshu", ratio: "3:4", baseName, renderer: input.renderer, images: input.images });
+  const renderImages = await resolveCardRenderImages({ content: input.content, pages, images: input.images });
+  const images = await renderImageFiles({ pages, platform: "xiaohongshu", ratio: "3:4", baseName, renderer: input.renderer, images: renderImages });
   const copyText = buildXiaohongshuCopy(output);
   const packaged = await packagePlatformImageExport({ output, platform: "xiaohongshu", ratio: "3:4", exportedAt, images, copyText });
   return {
@@ -419,7 +529,8 @@ export async function exportDouyinImagePackage(input: {
   const baseName = createExportBaseName(output.title, exportedAt, `douyin-${output.ratio.replace(":", "x")}`);
   const pages = resolveCardPages({ content: input.content, ratio: output.ratio, pages: input.pages, layoutOptions: input.layoutOptions, measurer: input.measurer });
   assertPagesMatchRatio(pages, output.ratio);
-  const images = await renderImageFiles({ pages, platform: "douyinImage", ratio: output.ratio, baseName, renderer: input.renderer, images: input.images });
+  const renderImages = await resolveCardRenderImages({ content: input.content, pages, images: input.images });
+  const images = await renderImageFiles({ pages, platform: "douyinImage", ratio: output.ratio, baseName, renderer: input.renderer, images: renderImages });
   const copyText = buildDouyinImageCopy(output);
   const packaged = await packagePlatformImageExport({ output, platform: "douyinImage", ratio: output.ratio, exportedAt, images, copyText });
   return {
