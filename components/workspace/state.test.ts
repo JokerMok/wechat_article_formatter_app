@@ -5,7 +5,9 @@ import {
   applyManualPageOrder,
   clearManualCardPages,
   createWorkspaceState,
+  getMissingAiProviderFields,
   isAiProviderConfigured,
+  markAiConfigurationIncomplete,
   markAiGenerationFailure,
   platformVersionsFromDrafts,
   readPersistedWorkspace,
@@ -152,6 +154,24 @@ describe("workspace state", () => {
     ]);
   });
 
+  it("filters empty automatic trailing pages after manual card pages consume all entries", () => {
+    const state = createWorkspaceState();
+    const manual = cardPage("manual-1", "手动第一页");
+    const emptyAutomatic = { ...cardPage("page-1", "自动空白"), id: "page-1", manual: false, nodes: [] };
+    const layout: CardLayoutResult = {
+      source: state.platforms.xiaohongshu.content,
+      pages: [
+        { ...manual, pageNumber: 1, totalPages: 2 },
+        { ...emptyAutomatic, pageNumber: 2, totalPages: 2 },
+      ],
+      overflow: [],
+    };
+
+    const ordered = applyManualPageOrder(layout, [manual]);
+
+    expect(ordered.pages.map((page) => [page.id, page.pageNumber, page.totalPages, page.nodes.length])).toEqual([["manual-1", 1, 1, 1]]);
+  });
+
   it("can lock, unlock, and clear card page state without id-only placeholders", () => {
     const state = createWorkspaceState();
     const page = cardPage("page-1", "固定内容");
@@ -193,6 +213,35 @@ describe("workspace state", () => {
     expect(isAiProviderConfigured(next.ai, "")).toBe(false);
     expect(JSON.stringify(serializeWorkspace(next))).not.toContain("session-token");
     expect(platformVersionsFromDrafts(next.platforms).wechat?.title).toBe(next.platforms.wechat.title);
+  });
+
+  it("marks incomplete AI configuration without replacing any current platform drafts", () => {
+    const state = createWorkspaceState(`# 标题
+
+正文。
+`);
+    const paragraph = state.platforms.wechat.content.blocks.find((block) => block.type === "paragraph");
+    expect(paragraph).toBeDefined();
+    const editedWechat = updatePlatformBlock(state.platforms.wechat, paragraph!.id, "公众号人工修改。");
+    const editedXiaohongshu = updatePlatformCaption(state.platforms.xiaohongshu, "小红书人工发布文案");
+    const current = {
+      ...state,
+      ai: { ...state.ai, mode: "assistant" as const, baseUrl: "", model: "" },
+      platforms: {
+        ...state.platforms,
+        wechat: editedWechat,
+        xiaohongshu: editedXiaohongshu,
+      },
+    };
+
+    const missingFields = getMissingAiProviderFields(current.ai, "");
+    const next = markAiConfigurationIncomplete(current, missingFields);
+
+    expect(missingFields).toEqual(["Base URL", "模型", "Session API Key"]);
+    expect(next.platforms).toBe(current.platforms);
+    expect(next.platforms.wechat.content.blocks.find((block) => block.id === paragraph!.id && "text" in block)?.text).toBe("公众号人工修改。");
+    expect(next.platforms.xiaohongshu.meta.caption).toBe("小红书人工发布文案");
+    expect(next.ai.lastFallbackReason).toContain("切回本地模式后重新生成");
   });
 
   it("marks AI generation failures without replacing edited drafts with fallback content", () => {

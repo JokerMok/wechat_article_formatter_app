@@ -53,7 +53,9 @@ import {
   applyManualPageOrder,
   clearManualCardPages,
   createWorkspaceState,
+  getMissingAiProviderFields,
   isAiProviderConfigured,
+  markAiConfigurationIncomplete,
   markAiGenerationFailure,
   parseSourceMarkdown,
   platformDraftFromVersion,
@@ -453,9 +455,18 @@ export default function UnifiedWorkspace() {
   }
 
   async function regeneratePlatforms(platforms: PlatformId[]) {
-    if (workspace.ai.mode !== "assistant" || !isAiProviderConfigured(workspace.ai, sessionApiKey)) {
+    if (workspace.ai.mode !== "assistant") {
       applyDeterministicRegeneration(platforms);
-      setStatusMessage(workspace.ai.mode === "assistant" ? "AI 配置不完整，已使用本地确定性生成" : "已使用本地确定性生成");
+      setAiRunState("idle");
+      setStatusMessage("已使用本地确定性生成");
+      return;
+    }
+
+    const missingFields = getMissingAiProviderFields(workspace.ai, sessionApiKey);
+    if (!isAiProviderConfigured(workspace.ai, sessionApiKey)) {
+      setWorkspace((current) => markAiConfigurationIncomplete(current, missingFields));
+      setAiRunState("error");
+      setStatusMessage(`AI 配置不完整：请填写 ${missingFields.join("、") || "Base URL、模型、Session API Key"}，或切回本地模式后重新生成。`);
       return;
     }
 
@@ -804,7 +815,7 @@ export default function UnifiedWorkspace() {
                 ai: {
                   ...workspace.ai,
                   mode: modeValue,
-                  lastFallbackReason: modeValue === "assistant" ? "AI 接口未在本工作区配置，生成时会退回本地确定性转换。" : DEFAULT_SOURCE_MARKDOWN ? "当前使用本地确定性转换。" : undefined,
+                  lastFallbackReason: modeValue === "assistant" ? "请填写 Base URL、模型和 Session API Key；缺失时不会覆盖当前编辑稿。" : "当前使用本地确定性转换。",
                 },
               })
             }

@@ -321,14 +321,15 @@ export function clearManualCardPages(draft: PlatformDraft): PlatformDraft {
 }
 
 export function applyManualPageOrder(result: CardLayoutResult, manualPages: CardLayoutPage[]): CardLayoutResult {
-  if (manualPages.length < result.pages.length) return result;
+  const filteredResult = filterEmptyAutomaticCardPages(result, manualPages);
+  if (manualPages.length < filteredResult.pages.length) return filteredResult;
   const manualOrder = new Map(manualPages.map((page, index) => [page.id, index]));
-  if (!result.pages.every((page) => manualOrder.has(page.id))) return result;
-  const totalPages = result.pages.length;
-  const pages = [...result.pages]
+  if (!filteredResult.pages.every((page) => manualOrder.has(page.id))) return filteredResult;
+  const totalPages = filteredResult.pages.length;
+  const pages = [...filteredResult.pages]
     .sort((left, right) => (manualOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (manualOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER))
     .map((page, index) => ({ ...page, pageNumber: index + 1, totalPages }));
-  return { ...result, pages, overflow: pages.flatMap((page) => page.overflow) };
+  return { ...filteredResult, pages, overflow: pages.flatMap((page) => page.overflow) };
 }
 
 export function markAiGenerationFailure(state: WorkspacePersistedState, message: string): WorkspacePersistedState {
@@ -341,8 +342,28 @@ export function markAiGenerationFailure(state: WorkspacePersistedState, message:
   };
 }
 
+export function markAiConfigurationIncomplete(state: WorkspacePersistedState, missingFields: string[]): WorkspacePersistedState {
+  const fieldList = missingFields.length ? missingFields.join("、") : "AI 配置";
+  return {
+    ...state,
+    ai: {
+      ...state.ai,
+      lastFallbackReason: `AI 配置不完整：请填写 ${fieldList}，或切回本地模式后重新生成。已保留当前编辑稿。`,
+    },
+  };
+}
+
 export function isAiProviderConfigured(ai: AiWorkspaceSettings, sessionApiKey: string) {
   return ai.mode === "assistant" && ai.baseUrl.trim().length > 0 && ai.model.trim().length > 0 && sessionApiKey.trim().length > 0;
+}
+
+export function getMissingAiProviderFields(ai: AiWorkspaceSettings, sessionApiKey: string): string[] {
+  if (ai.mode !== "assistant") return [];
+  return [
+    ai.baseUrl.trim().length === 0 ? "Base URL" : undefined,
+    ai.model.trim().length === 0 ? "模型" : undefined,
+    sessionApiKey.trim().length === 0 ? "Session API Key" : undefined,
+  ].filter((field): field is string => Boolean(field));
 }
 
 export function sanitizeWechatHtml(html: string): string {
@@ -554,6 +575,15 @@ function cloneCardLayoutPage(page: CardLayoutPage): CardLayoutPage {
 function readCardLayoutPage(value: unknown): CardLayoutPage[] {
   if (!isRecord(value) || typeof value.id !== "string" || !Array.isArray(value.nodes)) return [];
   return [cloneCardLayoutPage(value as CardLayoutPage)];
+}
+
+function filterEmptyAutomaticCardPages(result: CardLayoutResult, manualPages: CardLayoutPage[]): CardLayoutResult {
+  if (manualPages.length === 0) return result;
+  const pages = result.pages.filter((page) => page.manual || page.locked || page.nodes.length > 0);
+  if (pages.length === 0 || pages.length === result.pages.length) return result;
+  const totalPages = pages.length;
+  const numberedPages = pages.map((page, index) => ({ ...page, pageNumber: index + 1, totalPages }));
+  return { ...result, pages: numberedPages, overflow: numberedPages.flatMap((page) => page.overflow) };
 }
 
 function sanitizeNode(parent: ParentNode) {
