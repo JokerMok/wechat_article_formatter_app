@@ -1,0 +1,16 @@
+{
+  "id": "chatcmpl-invalid-json",
+  "object": "chat.completion",
+  "created": 1787270400,
+  "model": "fixture-model",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{not valid json"
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}
