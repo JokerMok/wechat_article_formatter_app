@@ -1,0 +1,341 @@
+import { describe, expect, it } from "vitest";
+
+import type { UnifiedArticleBlock, UnifiedArticleContent } from "../../content";
+import {
+  collectLayoutText,
+  createApproximateTextMeasurer,
+  drawCardImagePage,
+  layoutCardPages,
+  lockCardImagePage,
+  mergeAdjacentCardPages,
+  moveCardImagePage,
+  splitCardImagePageAfterElement,
+  type CardImageCanvasContext,
+  type CardLayoutPage,
+  type TextMeasurer,
+  type TextStyle,
+} from "./index";
+
+function source(sourceText: string) {
+  return {
+    startLine: 1,
+    endLine: 1,
+    startOffset: 0,
+    endOffset: sourceText.length,
+    sourceText,
+  };
+}
+
+function textBlock(id: string, type: Exclude<UnifiedArticleBlock["type"], "list" | "card">, text: string): UnifiedArticleBlock {
+  return {
+    id,
+    type,
+    text,
+    plainText: text,
+    markdown: text,
+    source: source(text),
+  } as UnifiedArticleBlock;
+}
+
+function article(blocks: UnifiedArticleBlock[]): UnifiedArticleContent {
+  return {
+    schemaVersion: 1,
+    sourceText: blocks.map((block) => ("plainText" in block ? block.plainText : "")).join("\n"),
+    sourceFormat: "plainText",
+    parseMode: "knowledge",
+    blocks,
+    warnings: [],
+  };
+}
+
+function expectedText(blocks: UnifiedArticleBlock[]) {
+  return blocks
+    .flatMap((block) => {
+      if (block.type === "pageBreak") return [];
+      if (block.type === "list") return block.items;
+      if (block.type === "card") return [block.title, block.body].filter(Boolean) as string[];
+      if (block.type === "image") return [block.text];
+      return "text" in block ? [block.text] : [];
+    })
+    .join("");
+}
+
+function measuringSpy(base: TextMeasurer) {
+  const calls: Array<{ text: string; style: TextStyle }> = [];
+  return {
+    calls,
+    measurer: {
+      measureText(text: string, style: TextStyle) {
+        calls.push({ text, style });
+        return base.measureText(text, style);
+      },
+    } satisfies TextMeasurer,
+  };
+}
+
+describe("card image layout engine", () => {
+  it("TEST-013 remeasures and reflows every affected page when font and spacing change", () => {
+    const blocks = [
+      textBlock("title", "title", "字号变化必须触发完整重排"),
+      ...Array.from({ length: 55 }, (_, index) =>
+        textBlock(
+          `p${index}`,
+          "paragraph",
+          `第${index + 1}段内容用于制造多页图文。调整字号、行距、段距和边距以后，所有受影响页面都要重新测量并重新分页，不能沿用旧位置。`,
+        ),
+      ),
+    ];
+    const content = article(blocks);
+
+    const firstSpy = measuringSpy(createApproximateTextMeasurer());
+    const first = layoutCardPages(content, firstSpy.measurer, {
+      aspectRatio: "3:4",
+      typography: { bodyFontSize: 30, lineSpacing: 1.2, paragraphSpacing: 24 },
+    });
+
+    const secondSpy = measuringSpy(createApproximateTextMeasurer());
+    const second = layoutCardPages(content, secondSpy.measurer, {
+      aspectRatio: "3:4",
+      typography: { bodyFontSize: 42, lineSpacing: 1.55, paragraphSpacing: 46 },
+    });
+
+    expect(first.pages.length).toBeGreaterThanOrEqual(5);
+    expect(second.pages.length).toBeGreaterThan(first.pages.length);
+    expect(secondSpy.calls.length).toBeGreaterThan(firstSpy.calls.length);
+    expect(secondSpy.calls.some((call) => call.style.fontSize === 42)).toBe(true);
+    expect(collectLayoutText(first)).toBe(expectedText(blocks));
+    expect(collectLayoutText(second)).toBe(expectedText(blocks));
+    expect(second.overflow).toEqual([]);
+  });
+
+  it("TEST-014 preserves manual page order, locked page layout, and image placement metadata", () => {
+    const blocks = [
+      textBlock("p1", "paragraph", "第一页自动内容。"),
+      textBlock("p2", "paragraph", "这一页稍后会被锁定，修改字号时不能改动它的布局坐标。"),
+      textBlock("img1", "image", "配图：锁定页上的图。"),
+      textBlock("p3", "paragraph", "锁定页之后的自动内容。"),
+    ];
+    const content = article(blocks);
+    const measurer = createApproximateTextMeasurer();
+
+    const initial = layoutCardPages(content, measurer, {
+      aspectRatio: "3:4",
+      manualPages: [{ id: "locked-middle", blockIds: ["p2", "img1"], locked: true }],
+      imagePlacements: {
+        img1: { x: 120, y: 620, width: 420, height: 260, rotation: 7, opacity: 0.82 },
+      },
+    });
+    const locked = initial.pages.find((page) => page.id === "locked-middle") as CardLayoutPage;
+
+    const changed = layoutCardPages(content, measurer, {
+      aspectRatio: "3:4",
+      typography: { bodyFontSize: 44, lineSpacing: 1.5 },
+      lockedPages: [locked],
+    });
+    const preserved = changed.pages.find((page) => page.id === "locked-middle");
+
+    expect(preserved?.locked).toBe(true);
+    expect(preserved?.nodes).toEqual(locked.nodes);
+    expect(preserved?.nodes.find((node) => node.kind === "image")?.image).toMatchObject({
+      x: 120,
+      y: 620,
+      width: 420,
+      height: 260,
+      rotation: 7,
+      opacity: 0.82,
+    });
+    expect(collectLayoutText(changed)).toBe(expectedText(blocks));
+
+    const editable = layoutCardPages(
+      article([
+        textBlock("s1", "paragraph", "第一段可拆分内容。"),
+        textBlock("s2", "paragraph", "第二段可拆分内容。"),
+        textBlock("s3", "paragraph", "第三段可拆分内容。"),
+      ]),
+      measurer,
+      { aspectRatio: "3:4" },
+    );
+    const splitTarget = editable.pages.find((page) => page.nodes.length > 1) as CardLayoutPage;
+    const split = splitCardImagePageAfterElement(editable, splitTarget.id, splitTarget.nodes[0].id);
+    expect(split.pages.length).toBe(editable.pages.length + 1);
+    expect(split.pages.find((page) => page.id === splitTarget.id)?.manual).toBe(true);
+    expect(collectLayoutText(split)).toBe("第一段可拆分内容。第二段可拆分内容。第三段可拆分内容。");
+
+    const moved = moveCardImagePage(split, split.pages[1].id, 0);
+    expect(moved.pages[0].id).toBe(split.pages[1].id);
+
+    const merged = mergeAdjacentCardPages(split, splitTarget.id);
+    expect(merged.pages.length).toBe(editable.pages.length);
+    expect(collectLayoutText(merged)).toBe("第一段可拆分内容。第二段可拆分内容。第三段可拆分内容。");
+
+    const relocked = lockCardImagePage(initial, "locked-middle", {
+      images: [{ imageId: "img1", x: 220, y: 720, width: 360, height: 200, rotation: -4, opacity: 0.6 }],
+    });
+    expect(relocked.pages.find((page) => page.id === "locked-middle")?.locked).toBe(true);
+    expect(relocked.pages.find((page) => page.id === "locked-middle")?.nodes.find((node) => node.kind === "image")?.image).toMatchObject({
+      x: 220,
+      y: 720,
+      width: 360,
+      height: 200,
+      rotation: -4,
+      opacity: 0.6,
+    });
+  });
+
+  it("keeps section titles with following content instead of creating orphan title pages", () => {
+    const intro = "前置内容填充页面，直到下一节标题接近页底。";
+    const blocks = [
+      textBlock("title", "title", "标题孤页保护"),
+      ...Array.from({ length: 4 }, (_, index) => textBlock(`intro-${index}`, "paragraph", intro.repeat(8))),
+      textBlock("heading", "section", "不能单独留在上一页的小标题"),
+      textBlock("after-heading", "paragraph", "标题后面的正文至少要和标题一起进入同一页。"),
+    ];
+
+    const result = layoutCardPages(article(blocks), createApproximateTextMeasurer(), {
+      aspectRatio: "3:4",
+      typography: { bodyFontSize: 34, headingFontSize: 40, lineSpacing: 1.35, paragraphSpacing: 34 },
+    });
+    const headingPageIndex = result.pages.findIndex((page) => page.nodes.some((node) => node.blockId === "heading"));
+    const headingPage = result.pages[headingPageIndex];
+
+    expect(headingPage?.nodes.some((node) => node.blockId === "after-heading")).toBe(true);
+    expect(headingPage?.nodes.at(-1)?.blockId).not.toBe("heading");
+    expect(collectLayoutText(result)).toBe(expectedText(blocks));
+  });
+
+  it("TEST-015 reflows independently for 3:4 and 9:16 without mutating source content", () => {
+    const blocks = [
+      textBlock("title", "title", "比例切换"),
+      ...Array.from({ length: 16 }, (_, index) =>
+        textBlock(`p${index}`, "paragraph", `长文第${index + 1}段。图文比例切换只能影响图文页布局，不能污染统一内容或其他平台长文。`),
+      ),
+    ];
+    const content = article(blocks);
+    const snapshot = JSON.stringify(content);
+    const measurer = createApproximateTextMeasurer();
+
+    const portrait34 = layoutCardPages(content, measurer, { aspectRatio: "3:4" });
+    const portrait916 = layoutCardPages(content, measurer, { aspectRatio: "9:16" });
+
+    expect(portrait34.pages[0]?.canvas.height).toBe(1440);
+    expect(portrait916.pages[0]?.canvas.height).toBe(1920);
+    expect(portrait916.pages.length).toBeLessThanOrEqual(portrait34.pages.length);
+    expect(collectLayoutText(portrait34)).toBe(expectedText(blocks));
+    expect(collectLayoutText(portrait916)).toBe(expectedText(blocks));
+    expect(JSON.stringify(content)).toBe(snapshot);
+  });
+
+  it("TEST-023 handles empty, very long text, long words, and many images without truncation or infinite loops", () => {
+    const longChinese = "极端输入仍然必须完整保留。".repeat(520);
+    const longWord = "Supercalifragilisticexpialidocious".repeat(38);
+    const imageBlocks = Array.from({ length: 50 }, (_, index) => textBlock(`img${index}`, "image", `图片 ${index + 1}`));
+    const blocks = [
+      textBlock("title", "title", "极端边界"),
+      textBlock("long-zh", "paragraph", longChinese),
+      textBlock("long-word", "paragraph", longWord),
+      ...imageBlocks,
+    ];
+
+    const start = performance.now();
+    const result = layoutCardPages(article(blocks), createApproximateTextMeasurer(), {
+      aspectRatio: "9:16",
+      defaultImageBox: { width: 360, height: 140 },
+      maxPages: 500,
+    });
+    const elapsed = performance.now() - start;
+    const empty = layoutCardPages(article([]), createApproximateTextMeasurer());
+
+    expect(elapsed).toBeLessThan(1000);
+    expect(result.pages.length).toBeGreaterThan(1);
+    expect(result.pages.length).toBeLessThan(500);
+    expect(result.overflow).toEqual([]);
+    expect(collectLayoutText(result)).toBe(expectedText(blocks));
+    expect(empty.pages).toHaveLength(1);
+    expect(empty.overflow).toEqual([]);
+  });
+
+  it("TEST-024 keeps unified block content in order across title, list, card, quote, and CTA blocks", () => {
+    const blocks: UnifiedArticleBlock[] = [
+      textBlock("title", "title", "现有能力回归"),
+      {
+        id: "list",
+        type: "list",
+        items: ["第一条", "第二条"],
+        text: "第一条\n第二条",
+        plainText: "第一条\n第二条",
+        markdown: "- 第一条\n- 第二条",
+        source: source("第一条\n第二条"),
+      },
+      {
+        id: "card",
+        type: "card",
+        title: "核心判断",
+        body: "不要丢失卡片正文。",
+        text: "核心判断：不要丢失卡片正文。",
+        plainText: "核心判断：不要丢失卡片正文。",
+        markdown: "核心判断：不要丢失卡片正文。",
+        source: source("核心判断：不要丢失卡片正文。"),
+      },
+      textBlock("quote", "quote", "引用也要保留。"),
+      textBlock("cta", "cta", "最后是行动建议。"),
+    ];
+
+    const result = layoutCardPages(article(blocks), createApproximateTextMeasurer(), { aspectRatio: "3:4" });
+
+    expect(collectLayoutText(result)).toBe(expectedText(blocks));
+    expect(result.pages.flatMap((page) => page.nodes).map((node) => node.blockId)).toEqual([
+      "title",
+      "list",
+      "list",
+      "card",
+      "card",
+      "quote",
+      "cta",
+    ]);
+    expect(result.overflow).toEqual([]);
+  });
+
+  it("draws all layout text nodes to canvas without clipping overflow away", () => {
+    const blocks = [
+      textBlock("title", "title", "画布绘制回归"),
+      textBlock("focus", "quote", "绘制层只能消费布局树。"),
+      textBlock("body", "paragraph", "正文必须进入 fillText，不能在 Canvas 阶段 break 截断。"),
+    ];
+    const result = layoutCardPages(article(blocks), createApproximateTextMeasurer(), { aspectRatio: "3:4" });
+    const calls: string[] = [];
+    const ctx: CardImageCanvasContext = {
+      fillStyle: "",
+      font: "",
+      textBaseline: "top",
+      textAlign: "left",
+      globalAlpha: 1,
+      beginPath: () => calls.push("beginPath"),
+      moveTo: () => calls.push("moveTo"),
+      arcTo: () => calls.push("arcTo"),
+      closePath: () => calls.push("closePath"),
+      fill: () => calls.push("fill"),
+      fillRect: (...args) => calls.push(`fillRect:${args.join(",")}`),
+      fillText: (text) => calls.push(`fillText:${text}`),
+      arc: () => calls.push("arc"),
+      save: () => calls.push("save"),
+      restore: () => calls.push("restore"),
+      translate: () => calls.push("translate"),
+      rotate: () => calls.push("rotate"),
+      drawImage: () => calls.push("drawImage"),
+      setLineDash: () => calls.push("setLineDash"),
+      strokeRect: () => calls.push("strokeRect"),
+      measureText: (text) => ({ width: text.length * 18 }) as TextMetrics,
+    };
+
+    drawCardImagePage(ctx, result.pages[0]);
+
+    const drawnText = calls
+      .filter((call) => call.startsWith("fillText:"))
+      .map((call) => call.slice("fillText:".length))
+      .join("");
+    expect(drawnText).toContain("画布绘制回归");
+    expect(drawnText).toContain("绘制层只能消费布局树。");
+    expect(drawnText).toContain("正文必须进入 fillText，不能在 Canvas 阶段 break 截断。");
+    expect(calls).not.toContain("clip");
+  });
+});
