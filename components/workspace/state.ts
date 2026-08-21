@@ -33,7 +33,7 @@ export const WORKSPACE_PLATFORM_LABELS: Record<PlatformId, string> = {
 export const WORKSPACE_VERSION_KEY = "__unifiedSelfMediaWorkspace";
 
 export const PROJECT_BACKUP_IMAGE_NOTICE =
-  "项目备份只包含项目结构和图片元数据；图片文件仍保存在当前浏览器本地素材库，未随 JSON 导出。";
+  "项目备份 ZIP 包含项目结构、图片文件和清单；单独导入 JSON 时，图片仍依赖当前浏览器本地素材库。";
 
 export const DEFAULT_SOURCE_MARKDOWN = `# 统一自媒体工作区
 
@@ -519,7 +519,7 @@ export function selectRestorableBackupProject(payload: ProjectBackupPayload): Pr
 
 export function describeProjectBackupExportStatus(assetCount: number) {
   const imageCount = assetCount > 0 ? `共记录 ${assetCount} 张图片元数据。` : "当前项目没有图片元数据。";
-  return `项目备份 JSON 已导出。${imageCount}${PROJECT_BACKUP_IMAGE_NOTICE}`;
+  return `项目备份 ZIP 已导出。${imageCount}${PROJECT_BACKUP_IMAGE_NOTICE}`;
 }
 
 export function describeProjectBackupImportStatus(missingAssetCount: number) {

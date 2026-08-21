@@ -1,4 +1,5 @@
 import { expect, test, type BrowserContext, type Download, type Page } from "@playwright/test";
+import JSZip from "jszip";
 import { articleById, fixedArticles } from "../fixtures/content/articles";
 
 const onePixelPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
@@ -67,6 +68,13 @@ async function readDownloadText(downloadPromise: Promise<Download>) {
   const buffer = await readDownloadBuffer(download);
   expect(buffer.byteLength, `text download:${download.suggestedFilename()}`).toBeGreaterThan(0);
   return buffer.toString("utf8");
+}
+
+async function readDownloadZip(downloadPromise: Promise<Download>) {
+  const download = await downloadPromise;
+  const buffer = await readDownloadBuffer(download);
+  expect(buffer.byteLength, `zip download:${download.suggestedFilename()}`).toBeGreaterThan(0);
+  return { download, zip: await JSZip.loadAsync(buffer) };
 }
 
 async function assertPngDownload(downloadPromise: Promise<Download>, expectedFilename: RegExp, label: string) {
@@ -229,6 +237,13 @@ test("TEST-012/013/014/015 card previews keep real ratios, reflow after layout e
   await expect(page.getByText(/1080x1440/).first()).toBeVisible();
   const desktopCard = await assertCardRatio(page, 1080, 1440);
   await expect(desktopCard).toHaveScreenshot("desktop-xiaohongshu-3x4-card.png");
+  const xhsPackageDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载 ZIP" }).click();
+  const { download: xhsPackage, zip: xhsZip } = await readDownloadZip(xhsPackageDownload);
+  expect(xhsPackage.suggestedFilename()).toMatch(/xiaohongshu\.zip$/);
+  expect(xhsZip.file("manifest.json")).not.toBeNull();
+  expect(xhsZip.file("copy.txt")).not.toBeNull();
+  expect(xhsZip.file("tags.txt")).not.toBeNull();
   await page.getByText(/^正文 /).locator("..").getByRole("slider").press("ArrowRight");
   await expect(page.getByText(/1080x1440 · 1\//).first()).toBeVisible();
   await expect(page.locator("text=当前页有溢出")).toHaveCount(0);
@@ -282,14 +297,20 @@ test("TEST-016/018 project backup, image restore, PNG download and invalid file 
 
   const backupDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出项目" }).click();
-  const backup = await backupDownload;
-  expect(backup.suggestedFilename()).toMatch(/backup\.json$/);
-  const backupPayload = JSON.parse((await readDownloadBuffer(backup)).toString("utf8"));
+  const { download: backup, zip } = await readDownloadZip(backupDownload);
+  expect(backup.suggestedFilename()).toMatch(/backup\.zip$/);
+  const backupPayload = JSON.parse(await zip.file("backup.json")!.async("text"));
   expect(backupPayload).toMatchObject({
     schemaVersion: 1,
     projects: [expect.objectContaining({ title: articleById("image-placeholder").title })],
     assets: [expect.objectContaining({ fileName: "cover.png", mimeType: "image/png" })],
   });
+  expect(zip.file("project.json")).not.toBeNull();
+  expect(zip.file("manifest.json")).not.toBeNull();
+  const assetManifest = JSON.parse(await zip.file("assets/manifest.json")!.async("text")) as Array<{ path: string; fileName: string }>;
+  expect(assetManifest).toEqual([expect.objectContaining({ fileName: "cover.png" })]);
+  expect(assetManifest[0]?.path).toBeTruthy();
+  expect(zip.file(assetManifest[0]!.path)).not.toBeNull();
 
   await page.reload();
   await expect(page.getByRole("button", { name: "cover.png" })).toBeVisible();

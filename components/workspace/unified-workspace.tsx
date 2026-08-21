@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import JSZip from "jszip";
 import {
   Download,
   FilePlus2,
@@ -46,13 +47,14 @@ import { renderWechatContentHtml } from "@/lib/renderers/wechat";
 import {
   createAssetBlobRepository,
   createEmptyProject,
-  createProjectBackupPayload,
   createProjectRepository,
   readProjectBackupBlob,
+  readProjectBackupPayload,
   type ProjectAssetReference,
   type ProjectDocument,
-  type StoredAssetMetadata,
+  type StoredAssetRecord,
 } from "@/lib/storage";
+import { exportDouyinImagePackage, exportProjectBackupPackage, exportXiaohongshuPackage } from "@/lib/export";
 import { styleTemplates, templateList } from "@/lib/style-templates";
 import { cn } from "@/lib/utils";
 import {
@@ -91,7 +93,7 @@ import {
   withManualCardPages,
   withWechatHtmlOverride,
 } from "./state";
-import { createCardPngFilename, renderCardPagePngBlob } from "./card-image-actions";
+import { createCardPngFilename, loadCardCanvasImages, renderCardPagePngBlob } from "./card-image-actions";
 import { createInitialProjectId, describeAssetUploadStatus, type AssetUploadFailure } from "./client-state";
 import type { AssetPlaceholder, DraftHistory, LayoutSettings, PlatformDraft, RatioMode, WorkspaceMode, WorkspacePersistedState } from "./types";
 
@@ -105,6 +107,43 @@ const measurer = createApproximateTextMeasurer();
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+type ProjectBackupFile = {
+  payload: ReturnType<typeof readProjectBackupPayload>;
+  assets: StoredAssetRecord[];
+};
+
+async function readProjectBackupFile(file: File): Promise<ProjectBackupFile> {
+  if (!file.name.toLowerCase().endsWith(".zip")) {
+    return { payload: await readProjectBackupBlob(file), assets: [] };
+  }
+
+  const zip = await JSZip.loadAsync(await file.arrayBuffer());
+  const backupEntry = zip.file("backup.json");
+  if (!backupEntry) throw new Error("invalid_backup_package");
+  const payload = readProjectBackupPayload(JSON.parse(await backupEntry.async("text")));
+  const manifestEntry = zip.file("assets/manifest.json");
+  const manifest = manifestEntry ? JSON.parse(await manifestEntry.async("text")) : payload.assets;
+  if (!Array.isArray(manifest)) throw new Error("invalid_backup_package_assets");
+
+  const assets: StoredAssetRecord[] = [];
+  for (const item of manifest) {
+    if (!item || typeof item !== "object" || typeof item.id !== "string" || typeof item.path !== "string") continue;
+    const assetEntry = zip.file(item.path);
+    if (!assetEntry) throw new Error(`missing_backup_asset:${item.id}`);
+    assets.push({
+      id: item.id,
+      projectId: typeof item.projectId === "string" ? item.projectId : "",
+      fileName: typeof item.fileName === "string" ? item.fileName : item.id,
+      mimeType: item.mimeType,
+      byteLength: typeof item.byteLength === "number" ? item.byteLength : 0,
+      crop: item.crop,
+      createdAt: typeof item.createdAt === "string" ? item.createdAt : nowIso(),
+      blob: await assetEntry.async("blob"),
+    });
+  }
+  return { payload, assets };
 }
 
 function createEmptyHistories(): Record<PlatformId, DraftHistory> {
@@ -416,29 +455,16 @@ export default function UnifiedWorkspace() {
       return;
     }
     try {
-      const storedAssets = assetRepo ? await assetRepo.listProjectAssets(projectId) : [];
-      const assetMetadataById = new Map<string, StoredAssetMetadata>();
-      for (const asset of storedAssets) assetMetadataById.set(asset.id, asset);
-      for (const asset of assets) {
-        if (!assetMetadataById.has(asset.id)) {
-          assetMetadataById.set(asset.id, {
-            id: asset.id,
-            projectId,
-            fileName: asset.fileName,
-            mimeType: asset.mimeType,
-            byteLength: asset.byteLength,
-            createdAt: nowIso(),
-          });
-        }
+      const project = currentProjectDocument();
+      const storedAssets: StoredAssetRecord[] = [];
+      for (const asset of project.assets) {
+        const loaded = await assetRepo?.getAssetBlob(asset.id);
+        if (loaded?.state !== "ready") throw new Error(`项目图片 ${asset.fileName} 不存在，无法生成完整备份包`);
+        storedAssets.push({ ...loaded.asset, blob: loaded.blob });
       }
-      const payload = createProjectBackupPayload({
-        projects: [currentProjectDocument()],
-        unknownProjects: [],
-        assets: [...assetMetadataById.values()],
-      });
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
-      downloadBlob(blob, `${projectTitle || "workspace"}-backup.json`);
-      setStatusMessage(describeProjectBackupExportStatus(assetMetadataById.size));
+      const result = await exportProjectBackupPackage({ project, assets: storedAssets });
+      downloadBlob(result.zipBlob, `${projectTitle || "workspace"}-backup.zip`);
+      setStatusMessage(describeProjectBackupExportStatus(result.assetFiles.length));
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : "项目备份导出失败");
     }
@@ -446,8 +472,8 @@ export default function UnifiedWorkspace() {
 
   async function importProjectBackup(file: File) {
     try {
-      const payload = await readProjectBackupBlob(file);
-      const project = selectRestorableBackupProject(payload);
+      const backup = await readProjectBackupFile(file);
+      const project = selectRestorableBackupProject(backup.payload);
       if (!project) {
         setStatusMessage("备份文件无可恢复项目");
         return;
@@ -456,6 +482,11 @@ export default function UnifiedWorkspace() {
       if (!canReplace) return;
 
       const importedProject = createEmptyProject({ title: project.title, article: project.article });
+      const assetRepo = assetRepoRef.current;
+      if (backup.assets.length && !assetRepo?.putImageBlob) throw new Error("当前浏览器不支持恢复项目图片");
+      for (const asset of backup.assets) {
+        await assetRepo?.putImageBlob?.({ ...asset, projectId: importedProject.id });
+      }
       const importedWorkspace = workspaceFromDocument(project);
       const importedAssets = await loadAssetPlaceholders(project.assets);
       hydratedRef.current = false;
@@ -811,6 +842,25 @@ export default function UnifiedWorkspace() {
     if (blob) downloadBlob(blob, createCardPngFilename(activeDraft.title, activePlatform, page.pageNumber));
   }
 
+  async function exportCardPackage() {
+    if (!cardLayout || activePlatform === "wechat" || activePlatform === "douyinLongform") return;
+    try {
+      const imageUrlByBlock = createImageUrlByBlock(activeDraft.content, assets);
+      const imageSources: Record<string, CanvasImageSource> = {};
+      for (const page of cardLayout.pages) {
+        Object.assign(imageSources, await loadCardCanvasImages(page, imageUrlByBlock));
+      }
+      const result =
+        activePlatform === "xiaohongshu"
+          ? await exportXiaohongshuPackage({ content: activeDraft.content, pages: cardLayout.pages, images: imageSources })
+          : await exportDouyinImagePackage({ content: activeDraft.content, ratio: activeDraft.ratio, pages: cardLayout.pages, images: imageSources });
+      downloadBlob(result.zipBlob, `${activeDraft.title || "cards"}-${activePlatform}.zip`);
+      setStatusMessage(`${WORKSPACE_PLATFORM_LABELS[activePlatform]}整包已导出，包含 ${result.images.length} 张 PNG 和文案清单`);
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "图文整包导出失败");
+    }
+  }
+
   async function copyCardPng(page: CardLayoutPage) {
     const blob = await renderCardPagePngBlob(page, createImageUrlByBlock(activeDraft.content, assets));
     if (!blob) return;
@@ -985,6 +1035,7 @@ export default function UnifiedWorkspace() {
             onClearManualPages={clearManualPages}
             onExportCard={(page) => void exportCardPng(page)}
             onCopyCard={(page) => void copyCardPng(page)}
+            onExportPackage={() => void exportCardPackage()}
             aiMode={workspace.ai.mode}
             aiBaseUrl={workspace.ai.baseUrl}
             aiModel={workspace.ai.model}
@@ -1022,7 +1073,7 @@ export default function UnifiedWorkspace() {
       <input
         ref={backupInputRef}
         type="file"
-        accept="application/json,.json"
+        accept="application/json,.json,application/zip,.zip"
         className="hidden"
         onChange={(event) => {
           const file = event.currentTarget.files?.[0];
@@ -1216,6 +1267,7 @@ function PreviewPanel(props: {
   onClearManualPages: () => void;
   onExportCard: (page: CardLayoutPage) => void;
   onCopyCard: (page: CardLayoutPage) => void;
+  onExportPackage: () => void;
   aiMode: "deterministic" | "assistant";
   aiBaseUrl: string;
   aiModel: string;
@@ -1318,6 +1370,7 @@ function PreviewPanel(props: {
             onClearManualPages={props.onClearManualPages}
             onExportCard={props.onExportCard}
             onCopyCard={props.onCopyCard}
+            onExportPackage={props.onExportPackage}
           />
         )}
       </div>
@@ -1378,11 +1431,19 @@ function CardPreview(props: {
   onClearManualPages: () => void;
   onExportCard: (page: CardLayoutPage) => void;
   onCopyCard: (page: CardLayoutPage) => void;
+  onExportPackage: () => void;
 }) {
   if (!props.layout) return null;
   const hasManualPages = props.layout.pages.some((page) => page.manual || page.locked);
   return (
     <div className="space-y-5">
+      <div className="mx-auto flex w-[270px] items-center justify-between rounded-md border bg-white p-2 text-xs text-muted-foreground">
+        <span>当前平台全部页面</span>
+        <Button type="button" size="sm" variant="outline" onClick={props.onExportPackage}>
+          <Download className="h-4 w-4" />
+          下载 ZIP
+        </Button>
+      </div>
       {hasManualPages && (
         <div className="mx-auto flex w-[270px] items-center justify-between rounded-md border bg-white p-2 text-xs text-muted-foreground">
           <span>已启用手动页</span>
