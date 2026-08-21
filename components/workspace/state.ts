@@ -6,6 +6,7 @@ import type { PlatformId, PlatformVersion, PlatformVersionMap } from "../../lib/
 import { createWechatPlatformVersion } from "../../lib/platforms/wechat";
 import { toXiaohongshuImageText } from "../../lib/platforms/xiaohongshu";
 import type { CardAspectRatio, CardLayoutPage, CardLayoutResult } from "../../lib/renderers/cards";
+import type { ProjectAssetReference, ProjectBackupPayload, ProjectDocument } from "../../lib/storage";
 import { styleTemplates } from "../../lib/style-templates";
 import type {
   AiWorkspaceSettings,
@@ -198,6 +199,68 @@ export function pushDraftRedoHistory(history: DraftHistory, current: PlatformDra
     past: [...history.past, current].slice(-WORKSPACE_HISTORY_LIMIT),
     future: history.future.slice(1),
   };
+}
+
+export type PlatformDraftSignatureMap = Record<PlatformId, string>;
+
+export function createPlatformDraftSignature(draft: PlatformDraft): string {
+  return JSON.stringify({
+    updatedAt: draft.updatedAt,
+    status: draft.status,
+    title: draft.title,
+    content: draft.content,
+    meta: draft.meta,
+    editedWechatHtml: draft.editedWechatHtml,
+  });
+}
+
+export function createPlatformDraftSignatureMap(drafts: Record<PlatformId, PlatformDraft>, platforms: PlatformId[] = [...WORKSPACE_PLATFORM_IDS]): PlatformDraftSignatureMap {
+  return Object.fromEntries(WORKSPACE_PLATFORM_IDS.map((platform) => [platform, platforms.includes(platform) ? createPlatformDraftSignature(drafts[platform]) : ""])) as PlatformDraftSignatureMap;
+}
+
+export function platformDraftChangedSince(draft: PlatformDraft, signature: string): boolean {
+  return createPlatformDraftSignature(draft) !== signature;
+}
+
+export function applyPlatformDraftReplacements(input: {
+  drafts: Record<PlatformId, PlatformDraft>;
+  histories: Record<PlatformId, DraftHistory>;
+  replacements: Partial<Record<PlatformId, PlatformDraft>>;
+  changedSince?: Partial<Record<PlatformId, string>>;
+}): {
+  drafts: Record<PlatformId, PlatformDraft>;
+  histories: Record<PlatformId, DraftHistory>;
+  appliedPlatforms: PlatformId[];
+  skippedChangedPlatforms: PlatformId[];
+} {
+  const nextDrafts = { ...input.drafts };
+  const nextHistories = { ...input.histories };
+  const appliedPlatforms: PlatformId[] = [];
+  const skippedChangedPlatforms: PlatformId[] = [];
+
+  for (const platform of WORKSPACE_PLATFORM_IDS) {
+    const replacement = input.replacements[platform];
+    if (!replacement) continue;
+
+    const current = input.drafts[platform];
+    const startingSignature = input.changedSince?.[platform];
+    if (startingSignature !== undefined && platformDraftChangedSince(current, startingSignature)) {
+      skippedChangedPlatforms.push(platform);
+      continue;
+    }
+
+    if (createPlatformDraftSignature(current) === createPlatformDraftSignature(replacement)) {
+      nextDrafts[platform] = replacement;
+      appliedPlatforms.push(platform);
+      continue;
+    }
+
+    nextHistories[platform] = pushDraftHistory(input.histories[platform], current);
+    nextDrafts[platform] = replacement;
+    appliedPlatforms.push(platform);
+  }
+
+  return { drafts: nextDrafts, histories: nextHistories, appliedPlatforms, skippedChangedPlatforms };
 }
 
 export function resolveRegenerationPlatforms(
@@ -444,6 +507,11 @@ export function serializeWorkspace(state: WorkspacePersistedState) {
   };
 }
 
+export function selectRestorableBackupProject(payload: ProjectBackupPayload): ProjectDocument | undefined {
+  const projects = payload.projects.flatMap((project) => readRestorableBackupProject(project, payload.assets));
+  return projects.sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+}
+
 function defaultRatioForPlatform(platform: PlatformId): CardAspectRatio {
   return platform === "douyinImage" ? "3:4" : "3:4";
 }
@@ -618,6 +686,47 @@ function cloneCardLayoutPage(page: CardLayoutPage): CardLayoutPage {
 function readCardLayoutPage(value: unknown): CardLayoutPage[] {
   if (!isRecord(value) || typeof value.id !== "string" || !Array.isArray(value.nodes)) return [];
   return [cloneCardLayoutPage(value as CardLayoutPage)];
+}
+
+function readRestorableBackupProject(value: unknown, backupAssets: unknown[] = []): ProjectDocument[] {
+  if (!isRecord(value)) return [];
+  const platformVersions = isRecord(value.platformVersions) ? value.platformVersions : {};
+  const workspace = readPersistedWorkspace(platformVersions);
+  const article = isRecord(value.article) && typeof value.article.sourceText === "string" ? (value.article as ProjectDocument["article"]) : null;
+  if (!workspace && !article) return [];
+
+  const timestamp = typeof value.updatedAt === "string" ? value.updatedAt : new Date().toISOString();
+  const id = typeof value.id === "string" ? value.id : "backup-project";
+  const projectAssets = Array.isArray(value.assets) ? value.assets.flatMap(readBackupAssetReference) : [];
+  const matchingBackupAssets = backupAssets.flatMap((asset) => (isRecord(asset) && asset.projectId === id ? readBackupAssetReference(asset) : []));
+  const assets = [...new Map([...projectAssets, ...matchingBackupAssets].map((asset) => [asset.id, asset])).values()];
+  return [
+    {
+      schemaVersion: 2,
+      id,
+      title: typeof value.title === "string" && value.title.trim() ? value.title : "导入项目",
+      article,
+      assets,
+      platformVersions,
+      createdAt: typeof value.createdAt === "string" ? value.createdAt : timestamp,
+      updatedAt: timestamp,
+    },
+  ];
+}
+
+function readBackupAssetReference(value: unknown): ProjectAssetReference[] {
+  if (!isRecord(value)) return [];
+  if (typeof value.id !== "string" || typeof value.fileName !== "string" || typeof value.byteLength !== "number") return [];
+  if (value.mimeType !== "image/png" && value.mimeType !== "image/jpeg" && value.mimeType !== "image/webp") return [];
+  return [
+    {
+      id: value.id,
+      fileName: value.fileName,
+      mimeType: value.mimeType,
+      byteLength: value.byteLength,
+      crop: isRecord(value.crop) ? (value.crop as ProjectAssetReference["crop"]) : undefined,
+    },
+  ];
 }
 
 function filterEmptyAutomaticCardPages(result: CardLayoutResult, manualPages: CardLayoutPage[]): CardLayoutResult {

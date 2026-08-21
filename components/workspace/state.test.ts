@@ -4,13 +4,16 @@ import {
   WORKSPACE_PLATFORM_IDS,
   WORKSPACE_HISTORY_LIMIT,
   WORKSPACE_VERSION_KEY,
+  applyPlatformDraftReplacements,
   applyManualPageOrder,
   clearManualCardPages,
+  createPlatformDraftSignatureMap,
   createWorkspaceState,
   getMissingAiProviderFields,
   isAiProviderConfigured,
   markAiConfigurationIncomplete,
   markAiGenerationFailure,
+  platformDraftFromVersion,
   platformVersionsFromDrafts,
   pushDraftHistory,
   pushDraftRedoHistory,
@@ -19,6 +22,7 @@ import {
   resolveRegenerationPlatforms,
   sanitizeWechatHtml,
   serializeWorkspace,
+  selectRestorableBackupProject,
   toggleLockedPage,
   updatePlatformBlock,
   updatePlatformCaption,
@@ -57,6 +61,13 @@ function cardPage(id: string, text: string): CardLayoutPage {
     ],
     overflow: [],
   };
+}
+
+function emptyHistories() {
+  return Object.fromEntries(WORKSPACE_PLATFORM_IDS.map((platform) => [platform, { past: [], future: [] }])) as unknown as Record<
+    (typeof WORKSPACE_PLATFORM_IDS)[number],
+    DraftHistory
+  >;
 }
 
 describe("workspace state", () => {
@@ -275,6 +286,79 @@ describe("workspace state", () => {
     expect(redoHistory.future).toEqual([]);
   });
 
+  it("pushes overwritten drafts into history for deterministic and AI replacement commits", () => {
+    const state = createWorkspaceState(`# 旧标题
+
+旧正文。
+`);
+    const deterministicSource = createWorkspaceState(`# 本地标题
+
+本地正文。
+`);
+    const deterministicDraft = regeneratePlatformDraft(state.platforms.wechat, deterministicSource.platforms.wechat.content, state.ai);
+    const deterministicResult = applyPlatformDraftReplacements({
+      drafts: state.platforms,
+      histories: emptyHistories(),
+      replacements: { wechat: deterministicDraft },
+    });
+
+    expect(deterministicResult.appliedPlatforms).toEqual(["wechat"]);
+    expect(deterministicResult.histories.wechat.past).toHaveLength(1);
+    expect(deterministicResult.histories.wechat.past[0]?.title).toBe("旧标题");
+    expect(deterministicResult.drafts.wechat.title).toBe("本地标题");
+
+    const aiSource = createWorkspaceState(`# AI 标题
+
+AI 正文。
+`);
+    const aiVersion = platformVersionsFromDrafts(aiSource.platforms).wechat;
+    expect(aiVersion).toBeDefined();
+    const aiDraft = platformDraftFromVersion(deterministicResult.drafts.wechat, aiVersion!);
+    const aiResult = applyPlatformDraftReplacements({
+      drafts: deterministicResult.drafts,
+      histories: deterministicResult.histories,
+      replacements: { wechat: aiDraft },
+    });
+
+    expect(aiResult.histories.wechat.past).toHaveLength(2);
+    expect(aiResult.histories.wechat.past.at(-1)?.title).toBe("本地标题");
+    expect(aiResult.drafts.wechat.title).toBe("AI 标题");
+  });
+
+  it("does not overwrite or write history for platform drafts edited during AI generation", () => {
+    const state = createWorkspaceState(`# 原标题
+
+原正文。
+`);
+    const requestSignatures = createPlatformDraftSignatureMap(state.platforms, ["wechat", "xiaohongshu"]);
+    const paragraph = state.platforms.wechat.content.blocks.find((block) => block.type === "paragraph");
+    expect(paragraph).toBeDefined();
+    const editedWechat = updatePlatformBlock(state.platforms.wechat, paragraph!.id, "AI 请求期间的人工修改。");
+    const currentDrafts = { ...state.platforms, wechat: editedWechat };
+    const aiSource = createWorkspaceState(`# AI 标题
+
+AI 正文。
+`);
+    const aiVersions = platformVersionsFromDrafts(aiSource.platforms);
+
+    const result = applyPlatformDraftReplacements({
+      drafts: currentDrafts,
+      histories: emptyHistories(),
+      replacements: {
+        wechat: platformDraftFromVersion(currentDrafts.wechat, aiVersions.wechat!),
+        xiaohongshu: platformDraftFromVersion(currentDrafts.xiaohongshu, aiVersions.xiaohongshu!),
+      },
+      changedSince: requestSignatures,
+    });
+
+    expect(result.skippedChangedPlatforms).toEqual(["wechat"]);
+    expect(result.appliedPlatforms).toEqual(["xiaohongshu"]);
+    expect(result.drafts.wechat.content.blocks.find((block) => block.id === paragraph!.id && "text" in block)?.text).toBe("AI 请求期间的人工修改。");
+    expect(result.drafts.xiaohongshu.title).toBe("AI 标题");
+    expect(result.histories.wechat.past).toEqual([]);
+    expect(result.histories.xiaohongshu.past).toHaveLength(1);
+  });
+
   it("requires explicit confirmation before regenerating edited platform drafts", () => {
     const state = createWorkspaceState(`# 标题
 
@@ -381,5 +465,46 @@ describe("workspace state", () => {
 
     expect(next.platforms.wechat.content.blocks.find((block) => block.id === paragraph!.id && "text" in block)?.text).toBe("人工修改稿。");
     expect(next.ai.lastFallbackReason).toContain("未自动套用本地回退版本");
+  });
+
+  it("selects a restorable project backup without accepting illegal asset metadata", () => {
+    const state = createWorkspaceState(`# 可恢复标题
+
+正文。
+`);
+    const selected = selectRestorableBackupProject({
+      schemaVersion: 1,
+      exportedAt: "2026-08-21T00:00:00.000Z",
+      projects: [
+        {
+          schemaVersion: 2,
+          id: "invalid",
+          title: "非法项目",
+          article: null,
+          assets: [],
+          platformVersions: {},
+          createdAt: "2026-08-20T00:00:00.000Z",
+          updatedAt: "2026-08-20T00:00:00.000Z",
+        },
+        {
+          schemaVersion: 2,
+          id: "valid",
+          title: "可恢复项目",
+          article: null,
+          assets: [
+            { id: "asset-2", fileName: "bad.svg", mimeType: "image/svg+xml", byteLength: 10 } as never,
+          ],
+          platformVersions: serializeWorkspace(state),
+          createdAt: "2026-08-21T00:00:00.000Z",
+          updatedAt: "2026-08-21T00:00:00.000Z",
+        },
+      ],
+      unknownProjects: [],
+      assets: [{ id: "asset-1", projectId: "valid", fileName: "cover.png", mimeType: "image/png", byteLength: 12, createdAt: "2026-08-21T00:00:00.000Z" }],
+    });
+
+    expect(selected?.title).toBe("可恢复项目");
+    expect(selected?.assets).toEqual([{ id: "asset-1", fileName: "cover.png", mimeType: "image/png", byteLength: 12, crop: undefined }]);
+    expect(selectRestorableBackupProject({ schemaVersion: 1, exportedAt: "", projects: [], unknownProjects: [], assets: [] })).toBeUndefined();
   });
 });

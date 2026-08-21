@@ -17,6 +17,7 @@ import {
   Settings2,
   Trash2,
   Undo2,
+  Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,7 +43,16 @@ import {
 import { OpenAICompatibleProvider, generatePlatformVersions } from "@/lib/ai";
 import type { WechatImageNode } from "@/lib/renderers/wechat";
 import { renderWechatContentHtml } from "@/lib/renderers/wechat";
-import { createAssetBlobRepository, createEmptyProject, createProjectRepository, type ProjectAssetReference, type ProjectDocument } from "@/lib/storage";
+import {
+  createAssetBlobRepository,
+  createEmptyProject,
+  createProjectBackupPayload,
+  createProjectRepository,
+  readProjectBackupBlob,
+  type ProjectAssetReference,
+  type ProjectDocument,
+  type StoredAssetMetadata,
+} from "@/lib/storage";
 import { styleTemplates, templateList } from "@/lib/style-templates";
 import { cn } from "@/lib/utils";
 import {
@@ -50,8 +60,10 @@ import {
   AUTO_SAVE_DEBOUNCE_MS,
   WORKSPACE_PLATFORM_IDS,
   WORKSPACE_PLATFORM_LABELS,
+  applyPlatformDraftReplacements,
   applyManualPageOrder,
   clearManualCardPages,
+  createPlatformDraftSignatureMap,
   createWorkspaceState,
   getMissingAiProviderFields,
   isAiProviderConfigured,
@@ -60,13 +72,13 @@ import {
   parseSourceMarkdown,
   platformDraftFromVersion,
   platformVersionsFromDrafts,
-  pushDraftHistory,
   pushDraftRedoHistory,
   readPersistedWorkspace,
   regeneratePlatformDraft,
   resolveRegenerationPlatforms,
   sanitizeWechatHtml,
   serializeWorkspace,
+  selectRestorableBackupProject,
   updatePlatformBlock,
   updatePlatformCaption,
   updatePlatformRatio,
@@ -180,6 +192,7 @@ function createImageUrlByBlock(article: UnifiedArticleContent, assets: AssetPlac
 
 export default function UnifiedWorkspace() {
   const [workspace, setWorkspace] = React.useState<WorkspacePersistedState>(() => createWorkspaceState());
+  const workspaceRef = React.useRef<WorkspacePersistedState>(workspace);
   const [projectId, setProjectId] = React.useState(() => createEmptyProject().id);
   const [projectTitle, setProjectTitle] = React.useState("统一自媒体工作区");
   const [projects, setProjects] = React.useState<ProjectListItem[]>([]);
@@ -189,6 +202,7 @@ export default function UnifiedWorkspace() {
   const [saveState, setSaveState] = React.useState<"loading" | "dirty" | "saving" | "saved" | "error">("loading");
   const [statusMessage, setStatusMessage] = React.useState("正在恢复本地项目");
   const [history, setHistory] = React.useState<Record<PlatformId, DraftHistory>>(() => createEmptyHistories());
+  const historyRef = React.useRef<Record<PlatformId, DraftHistory>>(createEmptyHistories());
   const [sessionApiKey, setSessionApiKey] = React.useState("");
   const [aiRunState, setAiRunState] = React.useState<"idle" | "generating" | "error">("idle");
   const repoRef = React.useRef<ReturnType<typeof createProjectRepository> | undefined>(undefined);
@@ -197,6 +211,7 @@ export default function UnifiedWorkspace() {
   const revisionRef = React.useRef(0);
   const aiAbortRef = React.useRef<AbortController | undefined>(undefined);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const backupInputRef = React.useRef<HTMLInputElement>(null);
   const activeDraft = workspace.platforms[activePlatform];
   const sourceArticle = React.useMemo(() => parseSourceMarkdown(workspace.sourceMarkdown), [workspace.sourceMarkdown]);
 
@@ -233,6 +248,14 @@ export default function UnifiedWorkspace() {
     const template = styleTemplates[activeDraft.templateKey] ?? styleTemplates.zhenyiKnowledgeMinimal;
     return activeDraft.editedWechatHtml ?? renderWechatContentHtml(activeDraft.content, { template, imageNodes: createWechatImageNodes(activeDraft.content, assets) });
   }, [activeDraft, assets]);
+
+  React.useEffect(() => {
+    workspaceRef.current = workspace;
+  }, [workspace]);
+
+  React.useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
 
   React.useEffect(() => {
     repoRef.current = createProjectRepository();
@@ -297,19 +320,19 @@ export default function UnifiedWorkspace() {
         const restored = workspaceFromDocument(result.project);
         setProjectId(result.project.id);
         setProjectTitle(result.project.title);
-        setWorkspace(restored);
+        replaceWorkspace(restored);
         await hydrateAssets(result.project.assets);
         setStatusMessage("已恢复本地项目");
       } else if (result.state === "unknownVersion") {
         const fresh = createWorkspaceState();
-        setWorkspace(fresh);
+        replaceWorkspace(fresh);
         setStatusMessage("发现更高版本项目，已保留数据并载入本地演示");
       } else {
         const fresh = createWorkspaceState();
         const project = createEmptyProject({ title: "统一自媒体工作区", article: parseSourceMarkdown(fresh.sourceMarkdown) });
         setProjectId(project.id);
         setProjectTitle(project.title);
-        setWorkspace(fresh);
+        replaceWorkspace(fresh);
         setStatusMessage("已创建本地演示项目");
       }
       await refreshProjects();
@@ -350,6 +373,83 @@ export default function UnifiedWorkspace() {
     }
   }
 
+  function currentProjectAssetReferences(): ProjectAssetReference[] {
+    return assets.map((asset) => ({
+      id: asset.id,
+      fileName: asset.fileName,
+      mimeType: asset.mimeType,
+      byteLength: asset.byteLength,
+    }));
+  }
+
+  function currentProjectDocument() {
+    return makeProjectFromWorkspace(projectId, projectTitle, sourceArticle, currentProjectAssetReferences(), workspace);
+  }
+
+  async function exportCurrentProjectBackup() {
+    const assetRepo = assetRepoRef.current;
+    const saved = await saveProject();
+    if (!saved) {
+      setStatusMessage("保存失败，未导出项目");
+      return;
+    }
+    try {
+      const storedAssets = assetRepo ? await assetRepo.listProjectAssets(projectId) : [];
+      const assetMetadataById = new Map<string, StoredAssetMetadata>();
+      for (const asset of storedAssets) assetMetadataById.set(asset.id, asset);
+      for (const asset of assets) {
+        if (!assetMetadataById.has(asset.id)) {
+          assetMetadataById.set(asset.id, {
+            id: asset.id,
+            projectId,
+            fileName: asset.fileName,
+            mimeType: asset.mimeType,
+            byteLength: asset.byteLength,
+            createdAt: nowIso(),
+          });
+        }
+      }
+      const payload = createProjectBackupPayload({
+        projects: [currentProjectDocument()],
+        unknownProjects: [],
+        assets: [...assetMetadataById.values()],
+      });
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+      downloadBlob(blob, `${projectTitle || "workspace"}-backup.json`);
+      setStatusMessage("项目备份已导出");
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "项目备份导出失败");
+    }
+  }
+
+  async function importProjectBackup(file: File) {
+    try {
+      const payload = await readProjectBackupBlob(file);
+      const project = selectRestorableBackupProject(payload);
+      if (!project) {
+        setStatusMessage("备份文件无可恢复项目");
+        return;
+      }
+      const canReplace = await confirmAndSaveBeforeReplacing("当前项目有未保存内容。先保存再导入项目？");
+      if (!canReplace) return;
+
+      const importedProject = createEmptyProject({ title: project.title, article: project.article });
+      const importedWorkspace = workspaceFromDocument(project);
+      hydratedRef.current = false;
+      setProjectId(importedProject.id);
+      setProjectTitle(project.title);
+      replaceWorkspace(importedWorkspace);
+      await hydrateAssets(project.assets);
+      resetPlatformHistories();
+      revisionRef.current += 1;
+      hydratedRef.current = true;
+      setSaveState("dirty");
+      setStatusMessage("项目备份已导入");
+    } catch {
+      setStatusMessage("备份文件无效，当前项目已保留");
+    }
+  }
+
   async function openProject(id: string) {
     const repo = repoRef.current;
     if (!repo) return;
@@ -364,9 +464,9 @@ export default function UnifiedWorkspace() {
     hydratedRef.current = false;
     setProjectId(result.project.id);
     setProjectTitle(result.project.title);
-    setWorkspace(workspaceFromDocument(result.project));
+    replaceWorkspace(workspaceFromDocument(result.project));
     await hydrateAssets(result.project.assets);
-    setHistory(createEmptyHistories());
+    resetPlatformHistories();
     revisionRef.current = 0;
     hydratedRef.current = true;
     setSaveState("saved");
@@ -385,9 +485,9 @@ export default function UnifiedWorkspace() {
     hydratedRef.current = false;
     setProjectId(project.id);
     setProjectTitle(project.title);
-    setWorkspace(fresh);
+    replaceWorkspace(fresh);
     replaceAssets([]);
-    setHistory(createEmptyHistories());
+    resetPlatformHistories();
     revisionRef.current += 1;
     hydratedRef.current = true;
     setSaveState("dirty");
@@ -429,22 +529,46 @@ export default function UnifiedWorkspace() {
     });
   }
 
+  function replaceWorkspace(next: WorkspacePersistedState) {
+    workspaceRef.current = next;
+    setWorkspace(next);
+  }
+
   function updateWorkspace(patch: Partial<WorkspacePersistedState>) {
-    setWorkspace((current) => ({ ...current, ...patch }));
+    setWorkspace((current) => {
+      const next = { ...current, ...patch };
+      workspaceRef.current = next;
+      return next;
+    });
+  }
+
+  function resetPlatformHistories() {
+    const nextHistories = createEmptyHistories();
+    historyRef.current = nextHistories;
+    setHistory(nextHistories);
+  }
+
+  function applyPlatformReplacements(replacements: Partial<Record<PlatformId, PlatformDraft>>, changedSince?: Partial<Record<PlatformId, string>>) {
+    const current = workspaceRef.current;
+    const result = applyPlatformDraftReplacements({
+      drafts: current.platforms,
+      histories: historyRef.current,
+      replacements,
+      changedSince,
+    });
+    const next = {
+      ...current,
+      platforms: result.drafts,
+    };
+    workspaceRef.current = next;
+    historyRef.current = result.histories;
+    setHistory(result.histories);
+    setWorkspace(next);
+    return { appliedPlatforms: result.appliedPlatforms, skippedChangedPlatforms: result.skippedChangedPlatforms };
   }
 
   function commitPlatform(nextDraft: PlatformDraft) {
-    setWorkspace((current) => {
-      const previous = current.platforms[nextDraft.platform];
-      setHistory((histories) => ({
-        ...histories,
-        [nextDraft.platform]: pushDraftHistory(histories[nextDraft.platform], previous),
-      }));
-      return {
-        ...current,
-        platforms: { ...current.platforms, [nextDraft.platform]: nextDraft },
-      };
-    });
+    applyPlatformReplacements({ [nextDraft.platform]: nextDraft });
   }
 
   async function regenerateCurrentPlatform() {
@@ -471,7 +595,7 @@ export default function UnifiedWorkspace() {
 
     const missingFields = getMissingAiProviderFields(workspace.ai, sessionApiKey);
     if (!isAiProviderConfigured(workspace.ai, sessionApiKey)) {
-      setWorkspace((current) => markAiConfigurationIncomplete(current, missingFields));
+      replaceWorkspace(markAiConfigurationIncomplete(workspaceRef.current, missingFields));
       setAiRunState("error");
       setStatusMessage(`AI 配置不完整：请填写 ${missingFields.join("、") || "Base URL、模型、Session API Key"}，或切回本地模式后重新生成。`);
       return;
@@ -487,6 +611,7 @@ export default function UnifiedWorkspace() {
     aiAbortRef.current?.abort();
     const controller = new AbortController();
     aiAbortRef.current = controller;
+    const requestDraftSignatures = createPlatformDraftSignatureMap(workspaceRef.current.platforms, regeneration.platforms);
     setAiRunState("generating");
     setStatusMessage("正在生成平台版本");
 
@@ -509,16 +634,28 @@ export default function UnifiedWorkspace() {
     if (aiAbortRef.current === controller) aiAbortRef.current = undefined;
 
     if (result.ok) {
-      setWorkspace((current) => ({
+      const current = workspaceRef.current;
+      const replacements = createGeneratedDraftReplacements(current.platforms, result.versions, regeneration.platforms);
+      const merged = applyPlatformDraftReplacements({
+        drafts: current.platforms,
+        histories: historyRef.current,
+        replacements,
+        changedSince: requestDraftSignatures,
+      });
+      const next = {
         ...current,
         ai: { ...current.ai, lastFallbackReason: undefined },
-        platforms: mergeGeneratedVersions(current.platforms, result.versions, regeneration.platforms),
-      }));
+        platforms: merged.drafts,
+      };
+      workspaceRef.current = next;
+      historyRef.current = merged.histories;
+      setHistory(merged.histories);
+      setWorkspace(next);
       setAiRunState("idle");
       setStatusMessage(
-        regeneration.skippedEditedPlatforms.length
-          ? `AI 已生成 ${regeneration.platforms.length} 个平台版本，人工编辑稿已保留`
-          : `AI 已生成 ${regeneration.platforms.length} 个平台版本`,
+        regeneration.skippedEditedPlatforms.length || merged.skippedChangedPlatforms.length
+          ? `AI 已生成 ${merged.appliedPlatforms.length} 个平台版本，人工编辑稿已保留`
+          : `AI 已生成 ${merged.appliedPlatforms.length} 个平台版本`,
       );
       return;
     }
@@ -529,7 +666,7 @@ export default function UnifiedWorkspace() {
       return;
     }
 
-    setWorkspace((current) => markAiGenerationFailure(current, result.error.message));
+    replaceWorkspace(markAiGenerationFailure(workspaceRef.current, result.error.message));
     setAiRunState("error");
     setStatusMessage(`${result.error.message} 已保留当前编辑稿`);
   }
@@ -542,24 +679,20 @@ export default function UnifiedWorkspace() {
   }
 
   function applyDeterministicRegeneration(platforms: PlatformId[]) {
-    setWorkspace((current) => ({
-      ...current,
-      platforms: Object.fromEntries(
-        WORKSPACE_PLATFORM_IDS.map((platform) => [
-          platform,
-          platforms.includes(platform) ? regeneratePlatformDraft(current.platforms[platform], sourceArticle, current.ai) : current.platforms[platform],
-        ]),
-      ) as Record<PlatformId, PlatformDraft>,
-    }));
+    const current = workspaceRef.current;
+    const replacements = Object.fromEntries(
+      platforms.map((platform) => [platform, regeneratePlatformDraft(current.platforms[platform], sourceArticle, current.ai)]),
+    ) as Partial<Record<PlatformId, PlatformDraft>>;
+    applyPlatformReplacements(replacements);
   }
 
-  function mergeGeneratedVersions(currentDrafts: Record<PlatformId, PlatformDraft>, versions: ReturnType<typeof platformVersionsFromDrafts>, platforms: PlatformId[]) {
+  function createGeneratedDraftReplacements(currentDrafts: Record<PlatformId, PlatformDraft>, versions: ReturnType<typeof platformVersionsFromDrafts>, platforms: PlatformId[]) {
     return Object.fromEntries(
-      WORKSPACE_PLATFORM_IDS.map((platform) => {
+      platforms.flatMap((platform) => {
         const version = versions[platform];
-        return [platform, platforms.includes(platform) && version ? platformDraftFromVersion(currentDrafts[platform], version) : currentDrafts[platform]];
+        return version ? [[platform, platformDraftFromVersion(currentDrafts[platform], version)]] : [];
       }),
-    ) as Record<PlatformId, PlatformDraft>;
+    ) as Partial<Record<PlatformId, PlatformDraft>>;
   }
 
   function cancelAiGeneration() {
@@ -567,28 +700,36 @@ export default function UnifiedWorkspace() {
   }
 
   function undoPlatform() {
-    const h = history[activePlatform];
+    const h = historyRef.current[activePlatform];
     const previous = h.past.at(-1);
     if (!previous) return;
-    setHistory((histories) => ({
-      ...histories,
+    const nextHistory = {
+      ...historyRef.current,
       [activePlatform]: {
-        past: histories[activePlatform].past.slice(0, -1),
-        future: [activeDraft, ...histories[activePlatform].future],
+        past: h.past.slice(0, -1),
+        future: [workspaceRef.current.platforms[activePlatform], ...h.future],
       },
-    }));
-    setWorkspace((current) => ({ ...current, platforms: { ...current.platforms, [activePlatform]: previous } }));
+    };
+    const nextWorkspace = { ...workspaceRef.current, platforms: { ...workspaceRef.current.platforms, [activePlatform]: previous } };
+    historyRef.current = nextHistory;
+    workspaceRef.current = nextWorkspace;
+    setHistory(nextHistory);
+    setWorkspace(nextWorkspace);
   }
 
   function redoPlatform() {
-    const h = history[activePlatform];
+    const h = historyRef.current[activePlatform];
     const next = h.future[0];
     if (!next) return;
-    setHistory((histories) => ({
-      ...histories,
-      [activePlatform]: pushDraftRedoHistory(histories[activePlatform], activeDraft),
-    }));
-    setWorkspace((current) => ({ ...current, platforms: { ...current.platforms, [activePlatform]: next } }));
+    const nextHistory = {
+      ...historyRef.current,
+      [activePlatform]: pushDraftRedoHistory(h, workspaceRef.current.platforms[activePlatform]),
+    };
+    const nextWorkspace = { ...workspaceRef.current, platforms: { ...workspaceRef.current.platforms, [activePlatform]: next } };
+    historyRef.current = nextHistory;
+    workspaceRef.current = nextWorkspace;
+    setHistory(nextHistory);
+    setWorkspace(nextWorkspace);
   }
 
   async function uploadAssets(files: FileList | File[]) {
@@ -721,6 +862,14 @@ export default function UnifiedWorkspace() {
             <Save className="h-4 w-4" />
             保存
           </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => void exportCurrentProjectBackup()}>
+            <Download className="h-4 w-4" />
+            导出项目
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => backupInputRef.current?.click()}>
+            <Upload className="h-4 w-4" />
+            导入项目
+          </Button>
           <Button type="button" size="sm" variant="outline" onClick={() => void deleteCurrentProject()}>
             <Trash2 className="h-4 w-4" />
             删除
@@ -841,6 +990,17 @@ export default function UnifiedWorkspace() {
         className="hidden"
         onChange={(event) => {
           if (event.currentTarget.files) void uploadAssets(event.currentTarget.files);
+          event.currentTarget.value = "";
+        }}
+      />
+      <input
+        ref={backupInputRef}
+        type="file"
+        accept="application/json,.json"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          if (file) void importProjectBackup(file);
           event.currentTarget.value = "";
         }}
       />
