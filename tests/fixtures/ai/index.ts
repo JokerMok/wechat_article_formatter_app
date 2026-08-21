@@ -5,3 +5,4 @@ export { default as rateLimitResponseFixture } from "./rate-limit-response.json"
 export { default as timeoutResponseFixture } from "./timeout-response.json";
 export { default as cancelResponseFixture } from "./cancel-response.json";
 export { default as injectionResponseFixture } from "./injection-response.json";
+export { default as diffResponseFixture } from "./diff-response.json";

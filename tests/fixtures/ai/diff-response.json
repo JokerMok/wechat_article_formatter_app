@@ -1,0 +1,16 @@
+{
+  "id": "chatcmpl-diff",
+  "object": "chat.completion",
+  "created": 1787270400,
+  "model": "fixture-model",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{\"schemaVersion\":1,\"drafts\":[{\"platform\":\"wechat\",\"title\":\"资料重构方法\",\"summary\":\"把资料整理成可复用的知识库。\",\"highlights\":[\"先整理资料\",\"再建立结构\"],\"tags\":[\"知识库\",\"效率\"],\"cover\":{\"title\":\"资料重构\",\"subtitle\":\"先搭结构，再复用\"},\"content\":{\"schemaVersion\":1,\"sourceText\":\"知识库重构\\n资料散落在不同地方。\\n改造目标：整理成可复用知识库。\",\"sourceFormat\":\"plainText\",\"parseMode\":\"business\",\"title\":\"资料重构方法\",\"blocks\":[{\"id\":\"diff-wechat-title\",\"type\":\"title\",\"text\":\"资料重构方法\",\"plainText\":\"资料重构方法\",\"markdown\":\"资料重构方法\",\"source\":{\"startLine\":1,\"endLine\":1,\"startOffset\":0,\"endOffset\":5,\"sourceText\":\"知识库重构\"}},{\"id\":\"diff-wechat-body\",\"type\":\"paragraph\",\"text\":\"把资料整理成可复用的知识库。\",\"plainText\":\"把资料整理成可复用的知识库。\",\"markdown\":\"把资料整理成可复用的知识库。\",\"source\":{\"startLine\":2,\"endLine\":3,\"startOffset\":6,\"endOffset\":35,\"sourceText\":\"资料散落在不同地方。\\n改造目标：整理成可复用知识库。\"}}],\"warnings\":[]}},{\"platform\":\"xiaohongshu\",\"title\":\"资料太散，怎样整理才好复用\",\"summary\":\"用清晰结构整理资料，让内容更容易查找和继续编辑。\",\"highlights\":[\"先解决资料散落\",\"结构稳定才能复用\"],\"tags\":[\"知识库\",\"效率\"],\"content\":{\"schemaVersion\":1,\"sourceText\":\"知识库重构\\n资料散落在不同地方。\\n改造目标：整理成可复用知识库。\",\"sourceFormat\":\"plainText\",\"parseMode\":\"business\",\"title\":\"资料太散，怎样整理才好复用\",\"blocks\":[{\"id\":\"diff-xhs-title\",\"type\":\"title\",\"text\":\"资料太散，怎样整理才好复用\",\"plainText\":\"资料太散，怎样整理才好复用\",\"markdown\":\"资料太散，怎样整理才好复用\",\"source\":{\"startLine\":1,\"endLine\":1,\"startOffset\":0,\"endOffset\":5,\"sourceText\":\"知识库重构\"}},{\"id\":\"diff-xhs-body\",\"type\":\"paragraph\",\"text\":\"用清晰结构整理资料，让内容更容易查找和继续编辑。\",\"plainText\":\"用清晰结构整理资料，让内容更容易查找和继续编辑。\",\"markdown\":\"用清晰结构整理资料，让内容更容易查找和继续编辑。\",\"source\":{\"startLine\":2,\"endLine\":3,\"startOffset\":6,\"endOffset\":35,\"sourceText\":\"资料散落在不同地方。\\n改造目标：整理成可复用知识库。\"}}],\"warnings\":[]}}]}"
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}

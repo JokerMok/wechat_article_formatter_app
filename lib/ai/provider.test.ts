@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseArticleContent } from "../article-parser";
 import cancelFixture from "../../tests/fixtures/ai/cancel-response.json";
+import diffFixture from "../../tests/fixtures/ai/diff-response.json";
 import injectionFixture from "../../tests/fixtures/ai/injection-response.json";
 import invalidJsonFixture from "../../tests/fixtures/ai/invalid-json-response.json";
 import invalidFixture from "../../tests/fixtures/ai/invalid-response.json";
@@ -184,6 +185,57 @@ describe("OpenAICompatibleProvider", () => {
     });
     controller.abort();
     await expect(cancelPromise).resolves.toMatchObject({ ok: false, error: { code: "cancelled" } });
+  });
+
+  it("TEST-008 keeps delayed caller cancellation from being reclassified as timeout", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        setTimeout(() => reject(init.signal?.reason), 50);
+      }, { once: true });
+    })));
+
+    const controller = new AbortController();
+    const cancelPromise = generatePlatformVersions({
+      provider: new OpenAICompatibleProvider({ ...baseProviderConfig, timeoutMs: 25 }),
+      source,
+      sourceVersionId: "source-v1",
+      platforms: ["wechat"],
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 10);
+
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(cancelPromise).resolves.toMatchObject({ ok: false, error: { code: "cancelled" } });
+  });
+
+  it("TEST-007 exposes compact added, removed, and rewritten field changes", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(diffFixture)));
+    const existing = buildFallbackPlatformVersions(source, ["wechat", "xiaohongshu"], "2026-08-20T00:00:00.000Z");
+    existing.xiaohongshu!.cover = { title: "旧封面", subtitle: "旧副标题" };
+
+    const result = await generatePlatformVersions({
+      provider: new OpenAICompatibleProvider(baseProviderConfig),
+      source,
+      sourceVersionId: "source-v1",
+      platforms: ["wechat", "xiaohongshu"],
+      existingVersions: existing,
+      now: () => "2026-08-21T00:00:00.000Z",
+    });
+
+    expectOk(result);
+    expect(result.changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ platform: "wechat", field: "cover", kind: "added" }),
+      expect.objectContaining({ platform: "wechat", field: "title", kind: "rewritten" }),
+      expect.objectContaining({ platform: "xiaohongshu", field: "cover", kind: "removed" }),
+      expect.objectContaining({ platform: "xiaohongshu", field: "summary", kind: "rewritten" }),
+    ]));
+
+    const changes = JSON.stringify(result.changes);
+    expect(changes).not.toContain("资料散落在不同地方");
+    expect(changes).not.toContain(baseProviderConfig.apiKey);
+    expect(changes).not.toContain("chatcmpl-diff");
+    expect(result.changes.every((change) => change.before || change.after)).toBe(true);
   });
 
   it("TEST-009 rejects generated numbers that are not supported by source text", async () => {

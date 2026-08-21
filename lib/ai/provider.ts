@@ -56,6 +56,25 @@ export type AIDiagnostics = {
   details?: string[];
 };
 
+export type AIChangeKind = "added" | "removed" | "rewritten";
+
+export type AIChangeField = "title" | "summary" | "highlights" | "tags" | "cover" | "content";
+
+export type AIChangeMetadata = {
+  textLength?: number;
+  itemCount?: number;
+  blockCount?: number;
+  fieldCount?: number;
+};
+
+export type AIChangeRecord = {
+  platform: PlatformId;
+  field: AIChangeField;
+  kind: AIChangeKind;
+  before?: AIChangeMetadata;
+  after?: AIChangeMetadata;
+};
+
 export type AIProviderErrorInfo = {
   code: AIErrorCode;
   message: string;
@@ -82,6 +101,7 @@ export type GeneratePlatformVersionsResult =
       ok: true;
       versions: PlatformVersionMap;
       diagnostics: AIDiagnostics;
+      changes: AIChangeRecord[];
     }
   | {
       ok: false;
@@ -158,6 +178,9 @@ export class OpenAICompatibleProvider {
 
     options.signal?.addEventListener("abort", cancelFromCaller, { once: true });
     const timeoutId = setTimeout(() => {
+      if (abortKind === "cancelled" || options.signal?.aborted) {
+        return;
+      }
       abortKind = "timeout";
       abortController.abort(new Error("AI request timed out"));
     }, this.timeoutMs);
@@ -310,11 +333,16 @@ export async function generatePlatformVersions(options: GeneratePlatformVersions
       signal: options.signal,
     });
     const versions = buildGeneratedPlatformVersions(generated.response.drafts, platforms, options.source, now);
+    const baselineVersions = platforms.reduce<PlatformVersionMap>((baseline, platform) => {
+      baseline[platform] = currentVersions[platform] ?? fallbackVersions[platform];
+      return baseline;
+    }, {});
 
     return {
       ok: true,
       versions,
       diagnostics: generated.diagnostics,
+      changes: buildPlatformChangeRecords(platforms, baselineVersions, versions),
     };
   } catch (error) {
     return {
@@ -348,6 +376,37 @@ export function buildFallbackPlatformVersions(source: UnifiedArticleContent, pla
     };
     return versions;
   }, {});
+}
+
+export function buildPlatformChangeRecords(
+  platforms: PlatformId[],
+  previousVersions: PlatformVersionMap,
+  nextVersions: PlatformVersionMap
+): AIChangeRecord[] {
+  const fields: AIChangeField[] = ["title", "summary", "highlights", "tags", "cover", "content"];
+
+  return platforms.flatMap((platform) => {
+    const previous = previousVersions[platform];
+    const next = nextVersions[platform];
+
+    return fields.flatMap((field) => {
+      const beforeValue = platformFieldValue(previous, field);
+      const afterValue = platformFieldValue(next, field);
+      const before = changeMetadata(field, beforeValue);
+      const after = changeMetadata(field, afterValue);
+      let kind: AIChangeKind | undefined;
+
+      if (beforeValue === undefined && afterValue !== undefined) {
+        kind = "added";
+      } else if (beforeValue !== undefined && afterValue === undefined) {
+        kind = "removed";
+      } else if (!sameValue(beforeValue, afterValue)) {
+        kind = "rewritten";
+      }
+
+      return kind ? [{ platform, field, kind, before, after }] : [];
+    });
+  });
 }
 
 export function validateGeneratedFacts(generatedText: string, source: UnifiedArticleContent) {
@@ -419,6 +478,46 @@ function buildGeneratedPlatformVersions(
   }
 
   return versions;
+}
+
+type PlatformVersionValue = NonNullable<PlatformVersionMap[PlatformId]>;
+
+function platformFieldValue(version: PlatformVersionValue | undefined, field: AIChangeField) {
+  if (!version) {
+    return undefined;
+  }
+  return version[field];
+}
+
+function changeMetadata(field: AIChangeField, value: unknown): AIChangeMetadata | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (field === "title" || field === "summary") {
+    return { textLength: typeof value === "string" ? value.length : 0 };
+  }
+  if (field === "highlights" || field === "tags") {
+    const values = Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+    return { itemCount: values.length, textLength: values.reduce((total, item) => total + item.length, 0) };
+  }
+  if (field === "cover") {
+    const cover = isRecord(value) ? value : {};
+    const textLength = Object.values(cover).reduce<number>(
+      (total, item) => total + (typeof item === "string" ? item.length : 0),
+      0
+    );
+    return { fieldCount: Object.keys(cover).length, textLength };
+  }
+
+  const content = value as UnifiedArticleContent;
+  return {
+    blockCount: content.blocks.length,
+    textLength: content.blocks.reduce((total, block) => total + block.plainText.length, 0),
+  };
+}
+
+function sameValue(left: unknown, right: unknown) {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function normalizeAIError(error: unknown, model: string, sourceVersionId?: string): AIProviderErrorInfo {

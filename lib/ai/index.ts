@@ -2,6 +2,7 @@ export {
   OpenAICompatibleProvider,
   aiPlatformIds,
   buildFallbackPlatformVersions,
+  buildPlatformChangeRecords,
   generatePlatformVersions,
   sanitizeGeneratedText,
   validateGeneratedFacts,
@@ -9,6 +10,10 @@ export {
 
 export type {
   AIDiagnostics,
+  AIChangeField,
+  AIChangeKind,
+  AIChangeMetadata,
+  AIChangeRecord,
   AIErrorCode,
   AIProviderErrorInfo,
   GeneratePlatformVersionsOptions,
