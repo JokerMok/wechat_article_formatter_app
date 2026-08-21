@@ -111,7 +111,9 @@ function nowIso() {
 
 function remapAssetTokens(value: unknown, replacements: Map<string, string>): unknown {
   if (typeof value === "string") {
-    return [...replacements.entries()].reduce((result, [from, to]) => result.split(`asset:${from}`).join(`asset:${to}`), value);
+    return [...replacements.entries()]
+      .sort(([left], [right]) => right.length - left.length)
+      .reduce((result, [from, to]) => result.split(`asset:${from}`).join(`asset:${to}`), value);
   }
   if (Array.isArray(value)) return value.map((item) => remapAssetTokens(item, replacements));
   if (!value || typeof value !== "object") return value;
