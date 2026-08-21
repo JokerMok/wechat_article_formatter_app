@@ -157,9 +157,9 @@ function parseMarkdownImage(block: RenderableBlock) {
   return undefined;
 }
 
-function findImageNode(block: RenderableBlock, index: number, imageNodes: WechatImageNode[] = []) {
+function findImageNode(block: RenderableBlock, index: number, imageNodes: WechatImageNode[] = [], imageOrdinal = index) {
   const blockId = getBlockId(block, index);
-  return imageNodes.find((node) => node.blockId === blockId || node.id === blockId) ?? imageNodes[index];
+  return imageNodes.find((node) => node.blockId === blockId || node.id === blockId) ?? imageNodes[imageOrdinal];
 }
 
 function imageWidth(width?: number) {
@@ -182,9 +182,9 @@ function imageMargin(align?: WechatImageNode["align"]) {
   return "0 auto";
 }
 
-function renderImage(block: RenderableBlock, template: StyleTemplate, index: number, options: WechatRenderOptions) {
+function renderImage(block: RenderableBlock, template: StyleTemplate, index: number, options: WechatRenderOptions, imageOrdinal: number) {
   const visual = template.visual;
-  const explicitNode = findImageNode(block, index, options.imageNodes);
+  const explicitNode = findImageNode(block, index, options.imageNodes, imageOrdinal);
   const parsedImage = parseMarkdownImage(block);
   const src = explicitNode?.src ?? parsedImage?.src;
   const alt = stripUnsafeRichText(explicitNode?.alt ?? parsedImage?.alt ?? getBlockText(block));
@@ -262,7 +262,7 @@ function renderSection(block: RenderableBlock, template: StyleTemplate) {
   return `<section style="margin: 48px 0 26px; text-align: center;">${span({ display: "inline-block", width: "16px", height: "16px", "border-radius": "50%", "background-color": visual.softBg, border: `1px solid ${visual.primary}`, "vertical-align": "middle", margin: "0 8px 0 0" })}${paragraph(template.blocks.section, text)}</section>`;
 }
 
-export function renderWechatBlockHtml(block: RenderableBlock, template: StyleTemplate, index = 0, options: WechatRenderOptions = {}) {
+export function renderWechatBlockHtml(block: RenderableBlock, template: StyleTemplate, index = 0, options: WechatRenderOptions = {}, imageOrdinal = index) {
   const styles = template.blocks;
   const visual = template.visual;
 
@@ -289,7 +289,7 @@ export function renderWechatBlockHtml(block: RenderableBlock, template: StyleTem
       }
       return `<section style="${toWechatStyle(styles.cta)}">${span({ display: "block", "font-size": "13px", "font-weight": 700, opacity: 0.82, margin: "0 0 6px" }, visual.ctaPrefix)}${formatInline(block.text)}</section>`;
     case "image":
-      return renderImage(block, template, index, options);
+      return renderImage(block, template, index, options, imageOrdinal);
     case "list":
       return `<section style="${toWechatStyle(styles.list)}">${block.items
         .map((item, itemIndex) => {
@@ -326,7 +326,16 @@ export function renderWechatBlockHtml(block: RenderableBlock, template: StyleTem
 
 export function renderWechatBlocksHtml(blocks: RenderableBlock[], options: WechatRenderOptions = {}) {
   const template = options.template ?? styleTemplates.zhenyiKnowledgeMinimal;
-  return `<section style="${toWechatStyle({ ...template.container, "font-family": template.fontFamily })}">\n${blocks.map((block, index) => renderWechatBlockHtml(block, template, index, options)).join("\n\n")}\n</section>`;
+  let imageOrdinal = 0;
+  const renderedBlocks = blocks.map((block, index) => {
+    const currentImageOrdinal = imageOrdinal;
+    if (block.type === "image") {
+      imageOrdinal += 1;
+    }
+    return renderWechatBlockHtml(block, template, index, options, currentImageOrdinal);
+  });
+
+  return `<section style="${toWechatStyle({ ...template.container, "font-family": template.fontFamily })}">\n${renderedBlocks.join("\n\n")}\n</section>`;
 }
 
 export function renderWechatContentHtml(content: UnifiedArticleContent, options: WechatRenderOptions = {}) {
@@ -343,7 +352,11 @@ export function renderWechatContent(content: UnifiedArticleContent, options: Wec
     templateKey: template.key,
     title: content.title,
     html: renderWechatContentHtml(content, renderOptions),
-    blocks: content.blocks.map((block) => ({ ...block })),
+    blocks: content.blocks.map((block) => ({
+      ...block,
+      source: { ...block.source },
+      ...(block.type === "list" ? { items: [...block.items] } : {}),
+    })),
     imageNodes: collectWechatImageNodes(content.blocks, options.imageNodes),
     warnings: content.warnings.map((warning) => ({ ...warning, source: warning.source ? { ...warning.source } : undefined })),
   };
@@ -354,12 +367,14 @@ export function renderUnifiedWechatHtml(content: UnifiedArticleContent, template
 }
 
 export function collectWechatImageNodes(blocks: RenderableBlock[], imageNodes: WechatImageNode[] = []) {
+  let imageOrdinal = 0;
   return blocks.flatMap((block, index): WechatImageNode[] => {
     if (block.type !== "image") {
       return [];
     }
 
-    const explicitNode = findImageNode(block, index, imageNodes);
+    const explicitNode = findImageNode(block, index, imageNodes, imageOrdinal);
+    imageOrdinal += 1;
     const parsedImage = parseMarkdownImage(block);
     const src = explicitNode?.src ?? parsedImage?.src;
 

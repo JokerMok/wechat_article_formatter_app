@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseArticleContent } from "../../article-parser";
 import type { UnifiedArticleContent } from "../../content";
 import { styleTemplates } from "../../style-templates";
-import { renderWechatContentHtml } from "./index";
+import { renderWechatContent, renderWechatContentHtml } from "./index";
 
 describe("renderWechatContentHtml", () => {
   it("TEST-010 renders editable inline-compatible HTML without losing rich article blocks", () => {
@@ -49,6 +49,51 @@ const n = 1 < 2 ? 3 : 4;
     expect(html).toContain('alt="产品截图"');
     expect(html).toContain("max-width: 100%");
     expect(html).toContain("产品截图");
+  });
+
+  it("keeps supplied image nodes in image order after non-image blocks", () => {
+    const content = parseArticleContent(`前置说明
+
+![原始图片一](https://source.example/one.png)
+
+中间说明
+
+![原始图片二](https://source.example/two.png)`);
+
+    const imageNodes = [
+      { src: "https://cdn.example/first.png", alt: "第一张" },
+      { src: "https://cdn.example/second.png", alt: "第二张" },
+    ];
+    const options = {
+      template: styleTemplates.zhenyiKnowledgeMinimal,
+      imageNodes,
+    };
+    const html = renderWechatContentHtml(content, options);
+    const result = renderWechatContent(content, options);
+
+    expect(html).toContain('<img src="https://cdn.example/first.png" alt="第一张"');
+    expect(html).toContain('<img src="https://cdn.example/second.png" alt="第二张"');
+    expect(html.indexOf("https://cdn.example/first.png")).toBeLessThan(html.indexOf("https://cdn.example/second.png"));
+    expect(result.imageNodes.map((node) => node.src)).toEqual(imageNodes.map((node) => node.src));
+  });
+
+  it("deep-copies nested block fields in the render result", () => {
+    const content = parseArticleContent(`- 第一项
+- 第二项`);
+    const result = renderWechatContent(content, { template: styleTemplates.zhenyiKnowledgeMinimal });
+    const sourceList = content.blocks.find((block) => block.type === "list");
+    const resultList = result.blocks.find((block) => block.type === "list");
+
+    if (!sourceList || sourceList.type !== "list" || !resultList || resultList.type !== "list") {
+      throw new Error("expected list blocks");
+    }
+
+    const originalItems = [...sourceList.items];
+    resultList.items[0] = "已修改结果";
+    resultList.source.sourceText = "已修改来源";
+
+    expect(sourceList.items).toEqual(originalItems);
+    expect(sourceList.source.sourceText).not.toBe("已修改来源");
   });
 
   it("TEST-022 removes scripts, event attributes, dangerous URLs and forged markup", () => {
