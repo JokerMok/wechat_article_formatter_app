@@ -68,6 +68,7 @@ function createHighlights(blocks: UnifiedArticleBlock[]) {
 export function createWechatPlatformContent(content: UnifiedArticleContent, options: CreateWechatPlatformVersionOptions = {}): WechatPlatformContent {
   const template = options.template ?? styleTemplates.zhenyiKnowledgeMinimal;
   const renderOptions = { template, imageNodes: options.imageNodes };
+  let imageOrdinal = 0;
 
   return {
     schemaVersion: 1,
@@ -77,12 +78,19 @@ export function createWechatPlatformContent(content: UnifiedArticleContent, opti
     title: content.title,
     sourceFormat: content.sourceFormat,
     parseMode: content.parseMode,
-    blocks: content.blocks.map((block, index) => ({
-      id: block.id,
-      sourceType: block.type,
-      text: blockText(block),
-      html: renderWechatBlockHtml(block, template, index, renderOptions),
-    })),
+    blocks: content.blocks.map((block, index) => {
+      const currentImageOrdinal = imageOrdinal;
+      if (block.type === "image") {
+        imageOrdinal += 1;
+      }
+
+      return {
+        id: block.id,
+        sourceType: block.type,
+        text: blockText(block),
+        html: renderWechatBlockHtml(block, template, index, renderOptions, currentImageOrdinal),
+      };
+    }),
     html: renderWechatContentHtml(content, renderOptions),
     text: content.blocks.map(blockText).join("\n"),
     images: collectWechatImageNodes(content.blocks, options.imageNodes),

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseArticleContent } from "../../article-parser";
 import { styleTemplates } from "../../style-templates";
-import { createWechatPlatformVersion } from "./index";
+import { createWechatPlatformContent, createWechatPlatformVersion } from "./index";
 
 describe("createWechatPlatformVersion", () => {
   it("TEST-005 creates an independent stable WeChat platform version from unified content", () => {
@@ -36,5 +36,34 @@ describe("createWechatPlatformVersion", () => {
 
     version.content.blocks[1].text = "已编辑的公众号段落";
     expect(unified.blocks[1].text).toBe("正文第一段，包含 **重点**。");
+  });
+
+  it("keeps supplied image nodes aligned with image blocks in platform block HTML", () => {
+    const unified = parseArticleContent(`# 发布标题
+
+开场正文
+
+![原始图片一](https://source.example/one.png)
+
+后续正文
+
+![原始图片二](https://source.example/two.png)`, { mode: "knowledge" });
+
+    const content = createWechatPlatformContent(unified, {
+      template: styleTemplates.zhenyiKnowledgeMinimal,
+      imageNodes: [
+        { src: "https://cdn.example/first.png", alt: "第一张" },
+        { src: "https://cdn.example/second.png", alt: "第二张" },
+      ],
+    });
+    const imageBlocks = content.blocks.filter((block) => block.sourceType === "image");
+
+    expect(imageBlocks).toHaveLength(2);
+    expect(imageBlocks[0].html).toContain('<img src="https://cdn.example/first.png" alt="第一张"');
+    expect(imageBlocks[1].html).toContain('<img src="https://cdn.example/second.png" alt="第二张"');
+    expect(imageBlocks[0].html).not.toContain("https://source.example/one.png");
+    expect(imageBlocks[1].html).not.toContain("https://source.example/two.png");
+    expect(content.html).toContain('<img src="https://cdn.example/first.png" alt="第一张"');
+    expect(content.html).toContain('<img src="https://cdn.example/second.png" alt="第二张"');
   });
 });
