@@ -1,5 +1,5 @@
-import WechatArticleFormatterApp from "@/wechat_article_formatter_app";
+import UnifiedWorkspace from "@/components/workspace/unified-workspace";
 
 export default function Home() {
-  return <WechatArticleFormatterApp />;
+  return <UnifiedWorkspace />;
 }
