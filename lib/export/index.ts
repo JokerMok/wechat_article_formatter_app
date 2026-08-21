@@ -67,6 +67,7 @@ export type DouyinLongformExportManifest = {
   platform: "douyinLongform";
   exportedAt: string;
   title: string;
+  caption: string;
   textFile: string;
   tagsFile: string;
   source: unknown;
@@ -206,7 +207,8 @@ function buildDouyinImageCopy(output: DouyinImageOutput) {
 
 function buildDouyinLongformText(output: DouyinLongformOutput) {
   const highlights = output.highlights.length ? ["Highlights", ...output.highlights.map((item) => `- ${item}`)].join("\n") : "";
-  return [output.title, output.intro, output.body, highlights, output.ending, buildTagsText(output.tags)].filter(Boolean).join("\n\n");
+  const caption = output.caption ? ["Caption", output.caption].join("\n") : "";
+  return [output.title, output.intro, output.body, highlights, output.ending, caption, buildTagsText(output.tags)].filter(Boolean).join("\n\n");
 }
 
 function secretLikeKey(key: string) {
@@ -447,6 +449,7 @@ export function exportDouyinLongformText(input: {
     platform: "douyinLongform",
     exportedAt,
     title: output.title,
+    caption: output.caption,
     textFile: textFile.path,
     tagsFile: tagsFile.path,
     source: output.source,

@@ -355,7 +355,11 @@ describe("platform exports", () => {
 
     expect(result.text).toContain("Edited body text");
     expect(result.text).toContain("Edited highlight");
+    expect(result.text).toContain("Caption\nEdited caption");
     expect(result.textFile.path).toBe("edited-longform-20260102-030405-douyin-longform.txt");
+    await expect(result.textFile.blob.text()).resolves.toContain("Caption\nEdited caption");
+    expect(result.manifest.caption).toBe("Edited caption");
+    await expect(result.manifestFile.blob.text()).resolves.toContain('"caption": "Edited caption"');
   });
 });
 
