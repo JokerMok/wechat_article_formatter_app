@@ -9,6 +9,7 @@ import type { CardAspectRatio, CardLayoutPage, CardLayoutResult } from "../../li
 import { styleTemplates } from "../../lib/style-templates";
 import type {
   AiWorkspaceSettings,
+  DraftHistory,
   LayoutSettings,
   PlatformDraft,
   PlatformMeta,
@@ -16,6 +17,8 @@ import type {
   WorkspacePersistedState,
 } from "./types";
 
+export const AUTO_SAVE_DEBOUNCE_MS = 800;
+export const WORKSPACE_HISTORY_LIMIT = 50;
 export const WORKSPACE_PLATFORM_IDS = ["wechat", "xiaohongshu", "douyinImage", "douyinLongform"] as const satisfies readonly PlatformId[];
 
 export const WORKSPACE_PLATFORM_LABELS: Record<PlatformId, string> = {
@@ -181,6 +184,46 @@ export function platformVersionsFromDrafts(drafts: Record<PlatformId, PlatformDr
       ];
     }),
   ) as PlatformVersionMap;
+}
+
+export function pushDraftHistory(history: DraftHistory, previous: PlatformDraft): DraftHistory {
+  return {
+    past: [...history.past, previous].slice(-WORKSPACE_HISTORY_LIMIT),
+    future: [],
+  };
+}
+
+export function pushDraftRedoHistory(history: DraftHistory, current: PlatformDraft): DraftHistory {
+  return {
+    past: [...history.past, current].slice(-WORKSPACE_HISTORY_LIMIT),
+    future: history.future.slice(1),
+  };
+}
+
+export function resolveRegenerationPlatforms(
+  drafts: Record<PlatformId, PlatformDraft>,
+  requestedPlatforms: PlatformId[],
+  confirmEditedOverwrite: (editedPlatforms: PlatformId[]) => boolean,
+) {
+  const requested = WORKSPACE_PLATFORM_IDS.filter((platform) => requestedPlatforms.includes(platform));
+  const editedPlatforms = requested.filter((platform) => drafts[platform].status === "edited");
+
+  if (!editedPlatforms.length) {
+    return {
+      platforms: requested,
+      editedPlatforms,
+      skippedEditedPlatforms: [] as PlatformId[],
+      confirmedEditedOverwrite: undefined,
+    };
+  }
+
+  const confirmedEditedOverwrite = confirmEditedOverwrite(editedPlatforms);
+  return {
+    platforms: confirmedEditedOverwrite ? requested : requested.filter((platform) => !editedPlatforms.includes(platform)),
+    editedPlatforms,
+    skippedEditedPlatforms: confirmedEditedOverwrite ? ([] as PlatformId[]) : editedPlatforms,
+    confirmedEditedOverwrite,
+  };
 }
 
 export function updatePlatformBlock(draft: PlatformDraft, blockId: string, text: string): PlatformDraft {

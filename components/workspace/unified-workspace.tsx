@@ -31,7 +31,6 @@ import type { UnifiedArticleBlock, UnifiedArticleContent } from "@/lib/content";
 import type { PlatformId } from "@/lib/platforms/types";
 import {
   createApproximateTextMeasurer,
-  drawCardImagePage,
   layoutCardPages,
   lockCardImagePage,
   mergeAdjacentCardPages,
@@ -48,6 +47,7 @@ import { styleTemplates, templateList } from "@/lib/style-templates";
 import { cn } from "@/lib/utils";
 import {
   DEFAULT_SOURCE_MARKDOWN,
+  AUTO_SAVE_DEBOUNCE_MS,
   WORKSPACE_PLATFORM_IDS,
   WORKSPACE_PLATFORM_LABELS,
   applyManualPageOrder,
@@ -60,8 +60,11 @@ import {
   parseSourceMarkdown,
   platformDraftFromVersion,
   platformVersionsFromDrafts,
+  pushDraftHistory,
+  pushDraftRedoHistory,
   readPersistedWorkspace,
   regeneratePlatformDraft,
+  resolveRegenerationPlatforms,
   sanitizeWechatHtml,
   serializeWorkspace,
   updatePlatformBlock,
@@ -73,6 +76,7 @@ import {
   withManualCardPages,
   withWechatHtmlOverride,
 } from "./state";
+import { createCardPngFilename, renderCardPagePngBlob } from "./card-image-actions";
 import type { AssetPlaceholder, DraftHistory, LayoutSettings, PlatformDraft, RatioMode, WorkspaceMode, WorkspacePersistedState } from "./types";
 
 type ProjectListItem = {
@@ -251,7 +255,7 @@ export default function UnifiedWorkspace() {
     setSaveState("dirty");
     const timer = window.setTimeout(() => {
       void saveProject();
-    }, 700);
+    }, AUTO_SAVE_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace, projectTitle, assets]);
@@ -434,10 +438,7 @@ export default function UnifiedWorkspace() {
       const previous = current.platforms[nextDraft.platform];
       setHistory((histories) => ({
         ...histories,
-        [nextDraft.platform]: {
-          past: [...histories[nextDraft.platform].past, previous].slice(-30),
-          future: [],
-        },
+        [nextDraft.platform]: pushDraftHistory(histories[nextDraft.platform], previous),
       }));
       return {
         ...current,
@@ -456,9 +457,15 @@ export default function UnifiedWorkspace() {
 
   async function regeneratePlatforms(platforms: PlatformId[]) {
     if (workspace.ai.mode !== "assistant") {
-      applyDeterministicRegeneration(platforms);
+      const regeneration = confirmEditedRegeneration(platforms);
+      if (!regeneration.platforms.length) {
+        setAiRunState("idle");
+        setStatusMessage("已取消覆盖人工编辑稿，内容已保留");
+        return;
+      }
+      applyDeterministicRegeneration(regeneration.platforms);
       setAiRunState("idle");
-      setStatusMessage("已使用本地确定性生成");
+      setStatusMessage(regeneration.skippedEditedPlatforms.length ? "已使用本地确定性生成，人工编辑稿已保留" : "已使用本地确定性生成");
       return;
     }
 
@@ -467,6 +474,13 @@ export default function UnifiedWorkspace() {
       setWorkspace((current) => markAiConfigurationIncomplete(current, missingFields));
       setAiRunState("error");
       setStatusMessage(`AI 配置不完整：请填写 ${missingFields.join("、") || "Base URL、模型、Session API Key"}，或切回本地模式后重新生成。`);
+      return;
+    }
+
+    const regeneration = confirmEditedRegeneration(platforms);
+    if (!regeneration.platforms.length) {
+      setAiRunState("idle");
+      setStatusMessage("已取消覆盖人工编辑稿，内容已保留");
       return;
     }
 
@@ -487,7 +501,7 @@ export default function UnifiedWorkspace() {
       provider,
       source: sourceArticle,
       sourceVersionId: String(sourceArticle.sourceText.length),
-      platforms,
+      platforms: regeneration.platforms,
       existingVersions: platformVersionsFromDrafts(workspace.platforms),
       signal: controller.signal,
     });
@@ -498,10 +512,14 @@ export default function UnifiedWorkspace() {
       setWorkspace((current) => ({
         ...current,
         ai: { ...current.ai, lastFallbackReason: undefined },
-        platforms: mergeGeneratedVersions(current.platforms, result.versions, platforms),
+        platforms: mergeGeneratedVersions(current.platforms, result.versions, regeneration.platforms),
       }));
       setAiRunState("idle");
-      setStatusMessage(`AI 已生成 ${platforms.length} 个平台版本`);
+      setStatusMessage(
+        regeneration.skippedEditedPlatforms.length
+          ? `AI 已生成 ${regeneration.platforms.length} 个平台版本，人工编辑稿已保留`
+          : `AI 已生成 ${regeneration.platforms.length} 个平台版本`,
+      );
       return;
     }
 
@@ -514,6 +532,13 @@ export default function UnifiedWorkspace() {
     setWorkspace((current) => markAiGenerationFailure(current, result.error.message));
     setAiRunState("error");
     setStatusMessage(`${result.error.message} 已保留当前编辑稿`);
+  }
+
+  function confirmEditedRegeneration(platforms: PlatformId[]) {
+    return resolveRegenerationPlatforms(workspace.platforms, platforms, (editedPlatforms) => {
+      const labels = editedPlatforms.map((platform) => WORKSPACE_PLATFORM_LABELS[platform]).join("、");
+      return window.confirm(`重新生成会覆盖 ${labels} 的人工编辑稿。确定继续？`);
+    });
   }
 
   function applyDeterministicRegeneration(platforms: PlatformId[]) {
@@ -561,10 +586,7 @@ export default function UnifiedWorkspace() {
     if (!next) return;
     setHistory((histories) => ({
       ...histories,
-      [activePlatform]: {
-        past: [...histories[activePlatform].past, activeDraft],
-        future: histories[activePlatform].future.slice(1),
-      },
+      [activePlatform]: pushDraftRedoHistory(histories[activePlatform], activeDraft),
     }));
     setWorkspace((current) => ({ ...current, platforms: { ...current.platforms, [activePlatform]: next } }));
   }
@@ -619,35 +641,19 @@ export default function UnifiedWorkspace() {
   }
 
   async function exportCardPng(page: CardLayoutPage) {
-    const canvas = document.createElement("canvas");
-    canvas.width = page.canvas.width;
-    canvas.height = page.canvas.height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const images = await loadCardCanvasImages(page, createImageUrlByBlock(activeDraft.content, assets));
-    drawCardImagePage(ctx, page, { images });
-    canvas.toBlob((blob) => {
-      if (blob) downloadBlob(blob, `${activeDraft.title || activePlatform}-${page.pageNumber}.png`);
-    }, "image/png");
+    const blob = await renderCardPagePngBlob(page, createImageUrlByBlock(activeDraft.content, assets));
+    if (blob) downloadBlob(blob, createCardPngFilename(activeDraft.title, activePlatform, page.pageNumber));
   }
 
   async function copyCardPng(page: CardLayoutPage) {
-    const canvas = document.createElement("canvas");
-    canvas.width = page.canvas.width;
-    canvas.height = page.canvas.height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const images = await loadCardCanvasImages(page, createImageUrlByBlock(activeDraft.content, assets));
-    drawCardImagePage(ctx, page, { images });
-    canvas.toBlob(async (blob) => {
-      if (!blob) return;
-      try {
-        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-        setStatusMessage("PNG 已复制");
-      } catch {
-        setStatusMessage("图片剪贴板不可用，已保留下载入口");
-      }
-    }, "image/png");
+    const blob = await renderCardPagePngBlob(page, createImageUrlByBlock(activeDraft.content, assets));
+    if (!blob) return;
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      setStatusMessage("PNG 已复制");
+    } catch {
+      setStatusMessage("图片剪贴板不可用，已保留下载入口");
+    }
   }
 
   function updateLayout(patch: Partial<LayoutSettings>) {
@@ -1356,38 +1362,4 @@ function imagePlacementsFromPage(page: CardLayoutPage) {
       },
     ];
   });
-}
-
-async function loadCardCanvasImages(page: CardLayoutPage, imageUrlByBlock: Record<string, string>) {
-  const entries = await Promise.all(
-    page.nodes.flatMap((node) => {
-      if (node.kind !== "image") return [];
-      const url = imageUrlByBlock[node.blockId] ?? imageUrlByBlock[node.entryId];
-      if (!url) return [];
-      return [
-        loadImage(url)
-          .then((image) => [
-            [node.blockId, image],
-            [node.entryId, image],
-          ])
-          .catch(() => []),
-      ];
-    }),
-  );
-  return Object.fromEntries(entries.flat()) as Record<string, CanvasImageSource>;
-}
-
-async function loadImage(src: string): Promise<HTMLImageElement> {
-  const image = new Image();
-  image.decoding = "async";
-  image.src = src;
-  if (image.decode) {
-    await image.decode();
-  } else {
-    await new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
-      image.onerror = () => reject(new Error("image load failed"));
-    });
-  }
-  return image;
 }
