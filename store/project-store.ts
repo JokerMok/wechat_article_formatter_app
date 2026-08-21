@@ -37,6 +37,7 @@ function publicError(error: unknown) {
 export function createProjectStore(options: ProjectStoreOptions): StoreApi<ProjectStoreState> {
   const autosaveDelayMs = options.autosaveDelayMs ?? 800;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let revision = 0;
 
   const store = createStore<ProjectStoreState>((set, get) => {
     async function saveCurrentProject() {
@@ -45,11 +46,18 @@ export function createProjectStore(options: ProjectStoreOptions): StoreApi<Proje
         return;
       }
 
+      const saveRevision = revision;
       set({ saveStatus: "saving", lastError: undefined });
       try {
         await options.repository.saveProject(project);
+        if (saveRevision !== revision) {
+          return;
+        }
         set({ saveStatus: "saved", lastError: undefined });
       } catch (error) {
+        if (saveRevision !== revision) {
+          return;
+        }
         set({ saveStatus: "unsaved", lastError: publicError(error) });
       }
     }
@@ -69,26 +77,32 @@ export function createProjectStore(options: ProjectStoreOptions): StoreApi<Proje
       saveStatus: "idle",
 
       async load() {
+        revision += 1;
         set({ loadState: "loading", lastError: undefined });
-        const result = await options.repository.getLatestProject();
-        if (result.state === "empty") {
-          set({ loadState: "empty", project: undefined, unknownRawProject: undefined, saveStatus: "idle" });
-          return;
+        try {
+          const result = await options.repository.getLatestProject();
+          if (result.state === "empty") {
+            set({ loadState: "empty", project: undefined, unknownRawProject: undefined, saveStatus: "idle" });
+            return;
+          }
+          if (result.state === "unknownVersion") {
+            set({
+              loadState: "unknownVersion",
+              project: undefined,
+              unknownRawProject: result.rawData,
+              saveStatus: "idle",
+            });
+            return;
+          }
+          set({ loadState: "ready", project: result.project, unknownRawProject: undefined, saveStatus: "saved" });
+        } catch (error) {
+          set({ loadState: "error", lastError: publicError(error), saveStatus: get().project ? get().saveStatus : "idle" });
         }
-        if (result.state === "unknownVersion") {
-          set({
-            loadState: "unknownVersion",
-            project: undefined,
-            unknownRawProject: result.rawData,
-            saveStatus: "idle",
-          });
-          return;
-        }
-        set({ loadState: "ready", project: result.project, unknownRawProject: undefined, saveStatus: "saved" });
       },
 
       createProject(input = {}) {
         const project = createEmptyProject(input);
+        revision += 1;
         set({ loadState: "ready", project, saveStatus: "dirty", lastError: undefined });
         scheduleAutosave();
         return project;
@@ -99,6 +113,7 @@ export function createProjectStore(options: ProjectStoreOptions): StoreApi<Proje
         if (!current) {
           return;
         }
+        revision += 1;
         set({
           project: {
             ...current,
@@ -112,6 +127,7 @@ export function createProjectStore(options: ProjectStoreOptions): StoreApi<Proje
       },
 
       async deleteProject(id) {
+        revision += 1;
         if (timer) {
           clearTimeout(timer);
           timer = undefined;

@@ -5,21 +5,48 @@ function imageBlob(bytes: number[], type: string) {
   return new Blob([new Uint8Array(bytes)], { type });
 }
 
+function base64Bytes(value: string) {
+  return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+}
+
+const validPng = base64Bytes("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+const validJpeg = base64Bytes(
+  "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/AYf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/Aaf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/IV//2gAMAwEAAgADAAAAEP/EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8QH//EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8QH//EABQQAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAT8QH//Z"
+);
+const validWebp = base64Bytes("UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAgA0JaQAA3AA/vv9UAA=");
+
 describe("asset image validation", () => {
   it("accepts png, jpeg, and webp images by signature", async () => {
-    await expect(validateImageBlob(imageBlob([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], "image/png"))).resolves.toMatchObject({
+    await expect(validateImageBlob(new Blob([validPng], { type: "image/png" }))).resolves.toMatchObject({
       ok: true,
       value: { mimeType: "image/png" },
     });
-    await expect(validateImageBlob(imageBlob([0xff, 0xd8, 0xff, 0xe0], "image/jpeg"))).resolves.toMatchObject({
+    await expect(validateImageBlob(new Blob([validJpeg], { type: "image/jpeg" }))).resolves.toMatchObject({
       ok: true,
       value: { mimeType: "image/jpeg" },
     });
-    await expect(
-      validateImageBlob(imageBlob([0x52, 0x49, 0x46, 0x46, 1, 0, 0, 0, 0x57, 0x45, 0x42, 0x50], "image/webp"))
-    ).resolves.toMatchObject({
+    await expect(validateImageBlob(new Blob([validWebp], { type: "image/webp" }))).resolves.toMatchObject({
       ok: true,
       value: { mimeType: "image/webp" },
+    });
+  });
+
+  it("rejects truncated or structurally damaged image fixtures", async () => {
+    const truncatedPng = validPng.slice(0, -12);
+    const damagedJpeg = new Uint8Array(validJpeg.slice(0, -2));
+    const damagedWebp = validWebp.slice(0, -1);
+
+    await expect(validateImageBlob(new Blob([truncatedPng], { type: "image/png" }))).resolves.toMatchObject({
+      ok: false,
+      error: { code: "invalid_image_data" },
+    });
+    await expect(validateImageBlob(new Blob([damagedJpeg], { type: "image/jpeg" }))).resolves.toMatchObject({
+      ok: false,
+      error: { code: "invalid_image_data" },
+    });
+    await expect(validateImageBlob(new Blob([damagedWebp], { type: "image/webp" }))).resolves.toMatchObject({
+      ok: false,
+      error: { code: "invalid_image_data" },
     });
   });
 

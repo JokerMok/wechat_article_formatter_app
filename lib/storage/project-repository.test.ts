@@ -17,6 +17,11 @@ const article: UnifiedArticleContent = {
   warnings: [],
 };
 
+const validPng = Uint8Array.from(
+  atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="),
+  (character) => character.charCodeAt(0)
+);
+
 describe("project repository", () => {
   const dbNames: string[] = [];
 
@@ -59,7 +64,7 @@ describe("project repository", () => {
     const dbName = nextName();
     const repo = createProjectRepository({ dbName });
     const blobRepo = createAssetBlobRepository({ dbName });
-    const blob = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], { type: "image/png" });
+    const blob = new Blob([validPng], { type: "image/png" });
     const asset = await blobRepo.saveImageBlob({ projectId: "project-with-asset", blob, fileName: "cover.png" });
     const project = {
       ...createEmptyProject({ id: "project-with-asset", title: "项目 A", article }),
@@ -146,7 +151,7 @@ describe("asset blob repository", () => {
   it("validates and restores image blobs from IndexedDB", async () => {
     const dbName = nextName();
     const repo = createAssetBlobRepository({ dbName });
-    const blob = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], { type: "image/png" });
+    const blob = new Blob([validPng], { type: "image/png" });
 
     const saved = await repo.saveImageBlob({ projectId: "project-1", blob, fileName: "cover.png" });
     await repo.close();
