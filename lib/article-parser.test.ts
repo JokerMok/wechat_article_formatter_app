@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
+import type { Mock } from "@vitest/spy";
 import { articleContentToBlocks, parseArticle, parseArticleContent } from "./article-parser";
 import type { PlatformVersion } from "./platforms/types";
+
+declare module "@vitest/spy" {
+  function fn<TImplementation extends (...args: unknown[]) => unknown>(
+    originalImplementation: TImplementation
+  ): Mock<(...args: [unknown[], ...unknown[]]) => ReturnType<TImplementation>>;
+}
 
 describe("parseArticle", () => {
   it("parses markdown headings, paragraphs, lists, images, and CTA blocks", () => {
@@ -78,6 +85,18 @@ describe("parseArticle", () => {
 font-weight: 800;">你把逻辑解释清楚，不代表老板会觉得够。`);
 
     expect(blocks[1]).toEqual({ type: "paragraph", text: "你把逻辑解释清楚，不代表老板会觉得够。" });
+  });
+
+  it("strips encoded broken style markers before preserving regular angle brackets", () => {
+    const blocks = parseArticle(`文章主标题
+
+font-weight: 800;&quot;&gt;正文内容
+Promise<string>、Promise<s> 和 3 < 5 > 2 都要保留。`);
+
+    expect(blocks[1]).toEqual({
+      type: "paragraph",
+      text: "正文内容Promise<string>、Promise<s> 和 3 < 5 > 2 都要保留。",
+    });
   });
 
   it("drops empty quote markers", () => {

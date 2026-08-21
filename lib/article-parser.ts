@@ -36,9 +36,14 @@ const explicitHtmlTagNames =
 const explicitHtmlTagPattern = new RegExp(`</?(?:${explicitHtmlTagNames})(?:\\s+[^<>]*)?/?>`, "gi");
 const pairedSingleLetterHtmlTagPattern = /<([bisu])(?:\s+[^<>]*)?>([\s\S]*?)<\/\1>/gi;
 
+function decodeStyleMarkerEntities(text: string) {
+  return text.replace(/&quot;|&#34;|&#x22;/gi, '"').replace(/&gt;|&#62;|&#x3e;/gi, ">");
+}
+
 function normalizeInlineText(text: string): NormalizedText {
   const original = text;
   const normalized = text
+    .replace(/&quot;|&#34;|&#x22;|&gt;|&#62;|&#x3e;/gi, (entity) => decodeStyleMarkerEntities(entity))
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
     .replace(pairedSingleLetterHtmlTagPattern, "$2")
     .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
@@ -47,7 +52,6 @@ function normalizeInlineText(text: string): NormalizedText {
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
     .replace(explicitHtmlTagPattern, "")
     .replace(/(?:^|\s)(?:style\s*=\s*)?["“”']?[^<>]*(?:font-weight|font-size|line-height|text-align|color|background|margin|padding)\s*:[^>]*>/gi, "")
-    .replace(/&gt;/g, ">")
     .trim();
 
   return {
