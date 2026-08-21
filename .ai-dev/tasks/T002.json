@@ -4,7 +4,7 @@
   "wave": 2,
   "executor": "cloud",
   "risk": "medium",
-  "status": "pending",
+  "status": "completed",
   "verification_commands": [
     "npx vitest run lib/assets lib/storage store",
     "npx tsc --noEmit",

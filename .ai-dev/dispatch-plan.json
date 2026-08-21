@@ -6,9 +6,7 @@
   "errors": [],
   "cycles_or_blocked": [],
   "conflicts": [],
-  "completed": [],
-  "blocked": [],
-  "planned": [
+  "completed": [
     "T001",
     "T002",
     "T003",
@@ -19,6 +17,8 @@
     "T008",
     "T009"
   ],
+  "blocked": [],
+  "planned": [],
   "waves": [
     {
       "wave": 1,

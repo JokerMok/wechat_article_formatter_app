@@ -5,7 +5,7 @@
   "executor": "cloud",
   "recommended_model": "gpt-5.3-codex-spark",
   "risk": "medium",
-  "status": "pending",
+  "status": "completed",
   "verification_commands": [
     "npx vitest run lib/export lib/copy-rich-text.test.ts",
     "npx tsc --noEmit",
