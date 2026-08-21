@@ -1,7 +1,8 @@
-import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Download, type Page } from "@playwright/test";
 import { articleById, fixedArticles } from "../fixtures/content/articles";
 
 const onePixelPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 async function openWorkspace(page: Page) {
   await page.goto("/");
@@ -50,13 +51,30 @@ async function assertCardRatio(page: Page, expectedWidth: number, expectedHeight
   return card;
 }
 
-async function readDownload(downloadPromise: Promise<import("@playwright/test").Download>) {
-  const stream = await (await downloadPromise).createReadStream();
-  let text = "";
-  if (stream) {
-    for await (const chunk of stream) text += String(chunk);
+async function readDownloadBuffer(download: Download) {
+  const stream = await download.createReadStream();
+  if (!stream) throw new Error(`Download stream unavailable: ${download.suggestedFilename()}`);
+
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  return text;
+  return Buffer.concat(chunks);
+}
+
+async function readDownloadText(downloadPromise: Promise<Download>) {
+  const download = await downloadPromise;
+  const buffer = await readDownloadBuffer(download);
+  expect(buffer.byteLength, `text download:${download.suggestedFilename()}`).toBeGreaterThan(0);
+  return buffer.toString("utf8");
+}
+
+async function assertPngDownload(downloadPromise: Promise<Download>, expectedFilename: RegExp, label: string) {
+  const download = await downloadPromise;
+  expect(download.suggestedFilename(), label).toMatch(expectedFilename);
+  const buffer = await readDownloadBuffer(download);
+  expect(buffer.byteLength, `${label} byteLength`).toBeGreaterThan(pngSignature.length);
+  expect(buffer.subarray(0, pngSignature.length).equals(pngSignature), `${label} png signature`).toBe(true);
 }
 
 async function editActivePlatform(page: Page, platform: "公众号" | "小红书" | "抖音图文" | "抖音长文", marker: string) {
@@ -94,7 +112,7 @@ async function exportWechatPaths(page: Page, marker: string) {
   await selectPlatform(page, "公众号");
   const htmlDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "HTML" }).click();
-  const htmlText = await readDownload(htmlDownload);
+  const htmlText = await readDownloadText(htmlDownload);
   expect(htmlText, `wechat html:${marker}`).toContain(`公众号正文-${marker}`);
   expect(htmlText, `wechat html:${marker}`).not.toMatch(/<script|onerror|onclick/i);
 
@@ -108,7 +126,7 @@ async function exportCardPng(page: Page, platform: "小红书" | "抖音图文",
   await expect(page.getByText(platform === "抖音图文" ? /1080x1440|1080x1920/ : /1080x1440/).first()).toBeVisible();
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "PNG" }).first().click();
-  expect((await download).suggestedFilename(), `${platform} png:${marker}`).toMatch(expected);
+  await assertPngDownload(download, expected, `${platform} png:${marker}`);
 }
 
 async function grantClipboard(context: BrowserContext, baseURL?: string) {
@@ -179,11 +197,7 @@ test("TEST-010/011/018/019 WeChat preview editing, HTML export, image node, down
 
   const htmlDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "HTML" }).click();
-  const stream = await (await htmlDownload).createReadStream();
-  let htmlText = "";
-  if (stream) {
-    for await (const chunk of stream) htmlText += String(chunk);
-  }
+  const htmlText = await readDownloadText(htmlDownload);
   expect(htmlText).toContain("微信人工编辑正文");
   expect(htmlText).toContain("<img");
   expect(htmlText).not.toMatch(/<script|onerror|onclick/i);
@@ -252,7 +266,7 @@ test("TEST-016/018 project backup, image restore, PNG download and invalid file 
   await selectPlatform(page, "小红书");
   const pngDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "PNG" }).first().click();
-  expect((await pngDownload).suggestedFilename()).toMatch(/-1\.png$/);
+  await assertPngDownload(pngDownload, /-1\.png$/, "project png before image upload");
 
   await page.locator('input[type="file"][accept*="image/png"]').setInputFiles({
     name: "cover.png",
@@ -268,7 +282,14 @@ test("TEST-016/018 project backup, image restore, PNG download and invalid file 
 
   const backupDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出项目" }).click();
-  expect((await backupDownload).suggestedFilename()).toMatch(/backup\.json$/);
+  const backup = await backupDownload;
+  expect(backup.suggestedFilename()).toMatch(/backup\.json$/);
+  const backupPayload = JSON.parse((await readDownloadBuffer(backup)).toString("utf8"));
+  expect(backupPayload).toMatchObject({
+    schemaVersion: 1,
+    projects: [expect.objectContaining({ title: articleById("image-placeholder").title })],
+    assets: [expect.objectContaining({ fileName: "cover.png", mimeType: "image/png" })],
+  });
 
   await page.reload();
   await expect(page.getByRole("button", { name: "cover.png" })).toBeVisible();
