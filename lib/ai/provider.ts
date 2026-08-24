@@ -282,7 +282,7 @@ export class OpenAICompatibleProvider {
         {
           role: "system",
           content:
-            "Return only JSON with schemaVersion:1 and drafts[]. Each draft must include platform, title, summary, highlights, tags, optional cover, and content. content should be a UnifiedArticleContent object with schemaVersion, sourceText, sourceFormat, parseMode, blocks, and warnings; if producing that object is difficult, content may be plain article text and the server will parse it. Do not add facts that are not supported by the source article.",
+            `Return only JSON with schemaVersion:1 and drafts[]. Each draft must include platform, title, summary, highlights, tags, optional cover, and content. content must be a plain article text or Markdown string, never a nested JSON object; the server will parse it into the internal article structure. ${platformGenerationInstruction(platforms)} Do not add facts that are not supported by the source article.`,
         },
         {
           role: "user",
@@ -322,6 +322,23 @@ export class OpenAICompatibleProvider {
         errorCode: code,
       },
     });
+  }
+}
+
+function platformGenerationInstruction(platforms: PlatformId[]) {
+  if (platforms.length !== 1) {
+    return "Keep each draft concise and platform-specific.";
+  }
+
+  switch (platforms[0]) {
+    case "wechat":
+      return "For WeChat, preserve the source article's complete reasoning and necessary body paragraphs without repeating the source unnecessarily.";
+    case "xiaohongshu":
+      return "For Xiaohongshu, rewrite as a concise, readable post with a strong hook, key points, and practical takeaway; target roughly 600-1200 Chinese characters.";
+    case "douyinImage":
+      return "For Douyin image-text, write 5-9 short card-ready blocks separated by blank lines, with one clear point per block and roughly 40-90 Chinese characters per block.";
+    case "douyinLongform":
+      return "For Douyin longform, rewrite as a compact narrative with a hook, progression, and conclusion; target roughly 800-1600 Chinese characters.";
   }
 }
 
