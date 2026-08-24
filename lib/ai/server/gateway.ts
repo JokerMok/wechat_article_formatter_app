@@ -16,13 +16,34 @@ export async function generateWithServerAI(
   const createProvider = dependencies.createProvider ?? ((serverConfig, fetchImpl) => new OpenAICompatibleAdapter(serverConfig, fetchImpl));
   const provider = createProvider(config, dependencies.fetchImpl);
 
+  if (input.platforms.length > 1) {
+    const results = await Promise.all(
+      input.platforms.map((platform) => generateWithRetry(provider, { ...input, platforms: [platform] }, config.maxRetries)),
+    );
+    const first = results[0];
+    return {
+      response: {
+        schemaVersion: 1,
+        drafts: results.flatMap((result) => result.response.drafts),
+      },
+      diagnostics: {
+        ...first.diagnostics,
+        details: [...(first.diagnostics.details ?? []), `split_platform_requests:${results.length}`],
+      },
+    };
+  }
+
+  return generateWithRetry(provider, input, config.maxRetries);
+}
+
+async function generateWithRetry(provider: ServerAIProvider, input: ProviderGenerateOptions, maxRetries: number): Promise<ProviderGenerateResult> {
   let attempt = 0;
   while (true) {
     try {
       return await provider.generate(input);
     } catch (error) {
       const normalized = normalizeServerAIError(error);
-      if (!normalized.retryable || attempt >= config.maxRetries) {
+      if (!normalized.retryable || attempt >= maxRetries) {
         throw normalized;
       }
       attempt += 1;

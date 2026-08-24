@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseArticleContent } from "../../article-parser";
-import { AIProviderError } from "../provider";
+import { AIProviderError, type ProviderGenerateOptions } from "../provider";
 import { generateWithServerAI } from "./gateway";
 import { ServerAIError } from "./errors";
 
@@ -83,5 +83,29 @@ describe("generateWithServerAI", () => {
     expect(error).toMatchObject({ code: "AI_NOT_CONFIGURED", retryable: false });
     expect(String(error)).toContain("AI_MODEL");
     expect(provider.generate).toHaveBeenCalledOnce();
+  });
+
+  it("splits multi-platform server requests before calling the model", async () => {
+    const provider = {
+      model: "fixture-model",
+      generate: vi.fn(async (input: ProviderGenerateOptions) => {
+        void input;
+        return {
+          response: { schemaVersion: 1 as const, drafts: [] },
+          diagnostics: { provider: "openai-compatible" as const, model: "fixture-model" },
+        };
+      }),
+    };
+
+    await expect(
+      generateWithServerAI(
+        { source, sourceVersionId: "v1", platforms: ["wechat", "xiaohongshu", "douyinImage", "douyinLongform"] },
+        { env, createProvider: () => provider },
+      ),
+    ).resolves.toMatchObject({ diagnostics: { details: ["split_platform_requests:4"] } });
+
+    expect(provider.generate).toHaveBeenCalledTimes(4);
+    const calls = provider.generate.mock.calls as Array<[ProviderGenerateOptions]>;
+    expect(calls.map(([input]) => input.platforms)).toEqual([["wechat"], ["xiaohongshu"], ["douyinImage"], ["douyinLongform"]]);
   });
 });
