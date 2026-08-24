@@ -674,11 +674,15 @@ function sanitizeGeneratedDraft(value: unknown, parseMode: UnifiedArticleContent
   }
 
   const title = sanitizeTextValue(value.title);
+  const summary = sanitizeTextValue(value.summary);
+  const content = sanitizeArticleContent(value.content, parseMode, typeof title === "string" ? title : undefined);
+  const highlights = sanitizeTextArray(value.highlights);
+  const fallbackHighlights = contentTextValues(content).slice(0, 3);
   return {
     ...value,
     title,
-    summary: sanitizeTextValue(value.summary),
-    highlights: sanitizeTextArray(value.highlights),
+    summary,
+    highlights: highlights.length > 0 ? highlights : fallbackHighlights.length > 0 ? fallbackHighlights : typeof summary === "string" && summary ? [summary] : highlights,
     tags: sanitizeTextArray(value.tags),
     cover: isRecord(value.cover)
       ? {
@@ -688,7 +692,7 @@ function sanitizeGeneratedDraft(value: unknown, parseMode: UnifiedArticleContent
           subtitle: sanitizeTextValue(value.cover.subtitle),
         }
       : value.cover,
-    content: sanitizeArticleContent(value.content, parseMode, typeof title === "string" ? title : undefined),
+    content,
   };
 }
 
@@ -716,6 +720,23 @@ function parseGeneratedTextContent(text: string, parseMode: UnifiedArticleConten
   return parseArticleContent(sourceText, { mode: parseMode });
 }
 
+function contentTextValues(value: unknown) {
+  if (!isRecord(value) || !Array.isArray(value.blocks)) {
+    return [];
+  }
+  return value.blocks
+    .map((block) => {
+      if (!isRecord(block)) {
+        return "";
+      }
+      if (typeof block.plainText === "string") {
+        return block.plainText.trim();
+      }
+      return typeof block.text === "string" ? block.text.trim() : "";
+    })
+    .filter(Boolean);
+}
+
 function sanitizeUnknownStrings(value: unknown): unknown {
   if (typeof value === "string") {
     return sanitizeGeneratedText(value);
@@ -733,9 +754,9 @@ function sanitizeTextValue(value: unknown) {
   return typeof value === "string" ? sanitizeGeneratedText(value) : value;
 }
 
-function sanitizeTextArray(value: unknown) {
+function sanitizeTextArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
-    return value;
+    return [];
   }
   return value.map(sanitizeTextValue).filter((item): item is string => typeof item === "string" && item.length > 0);
 }
