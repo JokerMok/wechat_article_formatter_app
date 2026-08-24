@@ -61,4 +61,27 @@ describe("generateWithServerAI", () => {
     expect(error).toMatchObject({ code: "AI_UNAUTHORIZED_UPSTREAM", retryable: false });
     expect(String(error)).not.toContain("server-secret");
   });
+
+  it("maps a missing Volcengine model or endpoint to a configuration error", async () => {
+    const provider = {
+      model: "missing-model",
+      generate: vi.fn().mockRejectedValue(
+        new AIProviderError({
+          code: "transport",
+          message: "provider returned 404",
+          retryable: true,
+          diagnostics: { provider: "openai-compatible", model: "missing-model", status: 404, errorCode: "transport" },
+        }),
+      ),
+    };
+
+    const error = await generateWithServerAI(
+      { source, sourceVersionId: "v1", platforms: ["wechat"] },
+      { env, createProvider: () => provider },
+    ).catch((value) => value);
+
+    expect(error).toMatchObject({ code: "AI_NOT_CONFIGURED", retryable: false });
+    expect(String(error)).toContain("AI_MODEL");
+    expect(provider.generate).toHaveBeenCalledOnce();
+  });
 });

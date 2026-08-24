@@ -51,6 +51,9 @@ export function normalizeServerAIError(error: unknown): ServerAIError {
     if (error.code === "timeout") return new ServerAIError("AI_TIMEOUT", "AI 服务响应超时，请稍后重试。", true);
     if (error.code === "rate_limit") return new ServerAIError("AI_RATE_LIMITED", "AI 服务请求过于频繁，请稍后重试。", true, error.diagnostics.status);
     if (error.code === "schema") return new ServerAIError("AI_INVALID_RESPONSE", "AI 服务返回的数据格式无效。", false, error.diagnostics.status);
+    if (error.diagnostics.status === 404) {
+      return new ServerAIError("AI_NOT_CONFIGURED", "AI 模型或接入点不存在，请检查服务端 AI_MODEL 配置。", false, error.diagnostics.status);
+    }
     if (error.diagnostics.status === 401 || error.diagnostics.status === 403) {
       return new ServerAIError("AI_UNAUTHORIZED_UPSTREAM", "AI 服务认证失败，请检查服务端配置。", false, error.diagnostics.status);
     }

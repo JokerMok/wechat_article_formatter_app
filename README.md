@@ -24,7 +24,7 @@
 AI_PROVIDER=openai-compatible
 AI_API_KEY=你的服务端密钥
 AI_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
-AI_MODEL=你的模型接入点或模型名
+AI_MODEL=火山方舟接入点ID，例如 ep-xxxxxxxx
 AI_CHAT_COMPLETIONS_PATH=/chat/completions
 AI_TIMEOUT_MS=60000
 AI_MAX_RETRIES=1
