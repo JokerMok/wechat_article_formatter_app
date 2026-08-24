@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseArticleContent } from "../article-parser";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../content";
 import { unifiedArticleContentSchema } from "../content";
 import type { PlatformId, PlatformVersion, PlatformVersionMap } from "../platforms/types";
@@ -244,7 +245,7 @@ export class OpenAICompatibleProvider {
         throw this.schemaError(["Assistant content is not valid JSON."], responseDiagnostics);
       }
 
-      const sanitized = sanitizeGeneratedResponse(parsedContent.value);
+      const sanitized = sanitizeGeneratedResponse(parsedContent.value, options.source.parseMode);
       const generated = generatedResponseSchema.safeParse(sanitized);
       if (!generated.success) {
         throw this.schemaError(compactZodIssues(generated.error), responseDiagnostics);
@@ -281,7 +282,7 @@ export class OpenAICompatibleProvider {
         {
           role: "system",
           content:
-            "Return only JSON with schemaVersion:1 and drafts[]. Each draft must include platform, title, summary, highlights, tags, optional cover, and content. Do not add facts that are not supported by the source article.",
+            "Return only JSON with schemaVersion:1 and drafts[]. Each draft must include platform, title, summary, highlights, tags, optional cover, and content. content should be a UnifiedArticleContent object with schemaVersion, sourceText, sourceFormat, parseMode, blocks, and warnings; if producing that object is difficult, content may be plain article text and the server will parse it. Do not add facts that are not supported by the source article.",
         },
         {
           role: "user",
@@ -656,26 +657,26 @@ function parseAssistantJson(content: string) {
   }
 }
 
-function sanitizeGeneratedResponse(value: unknown): unknown {
-  const raw = generatedResponseSchema.partial({ drafts: true }).safeParse(value);
-  if (!raw.success || typeof value !== "object" || !value || !("drafts" in value) || !Array.isArray(value.drafts)) {
+function sanitizeGeneratedResponse(value: unknown, parseMode: UnifiedArticleContent["parseMode"]): unknown {
+  if (!isRecord(value) || !Array.isArray(value.drafts)) {
     return value;
   }
 
   return {
     ...value,
-    drafts: value.drafts.map(sanitizeGeneratedDraft),
+    drafts: value.drafts.map((draft) => sanitizeGeneratedDraft(draft, parseMode)),
   };
 }
 
-function sanitizeGeneratedDraft(value: unknown): unknown {
+function sanitizeGeneratedDraft(value: unknown, parseMode: UnifiedArticleContent["parseMode"]): unknown {
   if (!isRecord(value)) {
     return value;
   }
 
+  const title = sanitizeTextValue(value.title);
   return {
     ...value,
-    title: sanitizeTextValue(value.title),
+    title,
     summary: sanitizeTextValue(value.summary),
     highlights: sanitizeTextArray(value.highlights),
     tags: sanitizeTextArray(value.tags),
@@ -687,15 +688,32 @@ function sanitizeGeneratedDraft(value: unknown): unknown {
           subtitle: sanitizeTextValue(value.cover.subtitle),
         }
       : value.cover,
-    content: sanitizeArticleContent(value.content),
+    content: sanitizeArticleContent(value.content, parseMode, typeof title === "string" ? title : undefined),
   };
 }
 
-function sanitizeArticleContent(value: unknown): unknown {
+function sanitizeArticleContent(value: unknown, parseMode: UnifiedArticleContent["parseMode"], title?: string): unknown {
+  if (typeof value === "string") {
+    const text = sanitizeGeneratedText(value);
+    return parseGeneratedTextContent(text, parseMode, title);
+  }
   if (!isRecord(value)) {
     return value;
   }
-  return sanitizeUnknownStrings(value);
+  const sanitized = sanitizeUnknownStrings(value);
+  if (isRecord(sanitized) && Array.isArray(sanitized.blocks) && sanitized.blocks.length === 0) {
+    const sourceText = typeof sanitized.sourceText === "string" ? sanitized.sourceText.trim() : "";
+    return parseGeneratedTextContent(sourceText, parseMode, title);
+  }
+  return sanitized;
+}
+
+function parseGeneratedTextContent(text: string, parseMode: UnifiedArticleContent["parseMode"], title?: string) {
+  const firstLine = text.split("\n").find((line) => line.trim().length > 0)?.trim() ?? "";
+  const hasHeading = /^#{1,6}\s+\S/.test(firstLine);
+  const hasTitleLine = Boolean(title && firstLine === title.trim());
+  const sourceText = title && !hasHeading && !hasTitleLine ? `# ${title}\n\n${text}` : text || (title ? `# ${title}` : "");
+  return parseArticleContent(sourceText, { mode: parseMode });
 }
 
 function sanitizeUnknownStrings(value: unknown): unknown {

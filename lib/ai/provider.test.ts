@@ -526,4 +526,45 @@ describe("OpenAICompatibleProvider", () => {
     expect(version?.content.blocks[0]?.text).toBe("普通文字");
     expect(JSON.stringify(version)).not.toMatch(/script|onclick|javascript:|onerror|alert|evil/i);
   });
+
+  it("normalizes a plain-text draft content into the unified article structure", async () => {
+    const plainTextFixture = {
+      ...validFixture,
+      choices: [
+        {
+          ...validFixture.choices[0],
+          message: {
+            role: "assistant",
+            content: JSON.stringify({
+              schemaVersion: 1,
+              drafts: [
+                {
+                  platform: "wechat",
+                  title: "知识库重构的关键判断",
+                  summary: "先把散落资料整理成可复用知识库。",
+                  highlights: ["先做基础", "再做应用"],
+                  tags: ["知识库", "企业AI"],
+                  content: "先把散落资料整理成可复用知识库。\\n\\n再基于稳定资料接入业务应用。",
+                },
+              ],
+            }),
+          },
+        },
+      ],
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(plainTextFixture)));
+
+    const result = await generatePlatformVersions({
+      provider: new OpenAICompatibleProvider(baseProviderConfig),
+      source,
+      sourceVersionId: "source-v1",
+      platforms: ["wechat"],
+    });
+
+    expectOk(result);
+    expect(result.versions.wechat?.content.schemaVersion).toBe(1);
+    expect(result.versions.wechat?.content.title).toBe("知识库重构的关键判断");
+    expect(result.versions.wechat?.content.blocks[0]).toMatchObject({ type: "title", text: "知识库重构的关键判断" });
+    expect(result.versions.wechat?.content.blocks.some((block) => block.type === "paragraph" && block.text.includes("散落资料"))).toBe(true);
+  });
 });
