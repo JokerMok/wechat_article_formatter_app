@@ -41,7 +41,7 @@ import {
   type CardLayoutPage,
   type CardLayoutResult,
 } from "@/lib/renderers/cards";
-import { OpenAICompatibleProvider, generatePlatformVersions } from "@/lib/ai";
+import { HostedAIProvider, OpenAICompatibleProvider, generatePlatformVersions } from "@/lib/ai";
 import type { WechatImageNode } from "@/lib/renderers/wechat";
 import { renderWechatContentHtml } from "@/lib/renderers/wechat";
 import {
@@ -657,7 +657,7 @@ export default function UnifiedWorkspace() {
   }
 
   async function regeneratePlatforms(platforms: PlatformId[]) {
-    if (workspace.ai.mode !== "assistant") {
+    if (workspace.ai.mode === "deterministic") {
       const regeneration = confirmEditedRegeneration(platforms);
       if (!regeneration.platforms.length) {
         setAiRunState("idle");
@@ -692,12 +692,14 @@ export default function UnifiedWorkspace() {
     setAiRunState("generating");
     setStatusMessage("正在生成平台版本");
 
-    const provider = new OpenAICompatibleProvider({
-      baseUrl: workspace.ai.baseUrl.trim(),
-      model: workspace.ai.model.trim(),
-      apiKey: sessionApiKey.trim(),
-      timeoutMs: 30000,
-    });
+    const provider = workspace.ai.mode === "hosted"
+      ? new HostedAIProvider()
+      : new OpenAICompatibleProvider({
+          baseUrl: workspace.ai.baseUrl.trim(),
+          model: workspace.ai.model.trim(),
+          apiKey: sessionApiKey.trim(),
+          timeoutMs: 30000,
+        });
 
     const result = await generatePlatformVersions({
       provider,
@@ -1070,7 +1072,12 @@ export default function UnifiedWorkspace() {
                 ai: {
                   ...workspace.ai,
                   mode: modeValue,
-                  lastFallbackReason: modeValue === "assistant" ? "请填写 Base URL、模型和 Session API Key；缺失时不会覆盖当前编辑稿。" : "当前使用本地确定性转换。",
+                  lastFallbackReason:
+                    modeValue === "hosted"
+                      ? "服务端 AI：密钥和上游地址由部署环境管理。"
+                      : modeValue === "custom"
+                        ? "自定义接口密钥只保存在当前会话，不会写入项目。"
+                        : "当前使用本地确定性转换。",
                 },
               })
             }
@@ -1291,13 +1298,13 @@ function PreviewPanel(props: {
   onExportCard: (page: CardLayoutPage) => void;
   onCopyCard: (page: CardLayoutPage) => void;
   onExportPackage: () => void;
-  aiMode: "deterministic" | "assistant";
+  aiMode: "deterministic" | "hosted" | "custom";
   aiBaseUrl: string;
   aiModel: string;
   aiRunState: "idle" | "generating" | "error";
   aiFallbackReason?: string;
   sessionApiKey: string;
-  onAiModeChange: (mode: "deterministic" | "assistant") => void;
+  onAiModeChange: (mode: "deterministic" | "hosted" | "custom") => void;
   onAiBaseUrlChange: (value: string) => void;
   onAiModelChange: (value: string) => void;
   onSessionApiKeyChange: (value: string) => void;
@@ -1351,10 +1358,20 @@ function PreviewPanel(props: {
           <SettingRow label="生成模式">
             <div className="flex gap-2">
               <Toggle pressed={props.aiMode === "deterministic"} onPressedChange={() => props.onAiModeChange("deterministic")}>本地</Toggle>
-              <Toggle pressed={props.aiMode === "assistant"} onPressedChange={() => props.onAiModeChange("assistant")}>AI</Toggle>
+              <Toggle pressed={props.aiMode === "hosted"} onPressedChange={() => props.onAiModeChange("hosted")}>服务端 AI</Toggle>
+              <Toggle pressed={props.aiMode === "custom"} onPressedChange={() => props.onAiModeChange("custom")}>自定义接口</Toggle>
             </div>
           </SettingRow>
-          {props.aiMode === "assistant" && (
+          {props.aiMode === "hosted" && (
+            <div className="space-y-2 rounded-md border bg-white p-3 text-xs text-muted-foreground">
+              <p>密钥、模型和上游地址由服务端环境变量管理。</p>
+              <p>{props.aiRunState === "generating" ? "生成中" : props.aiFallbackReason ?? "首次生成时会检查服务端 AI 配置。"}</p>
+              <Button type="button" size="sm" variant="outline" onClick={props.onCancelAi} disabled={props.aiRunState !== "generating"}>
+                取消生成
+              </Button>
+            </div>
+          )}
+          {props.aiMode === "custom" && (
             <div className="space-y-2 rounded-md border bg-white p-3">
               <Input value={props.aiBaseUrl} onChange={(event) => props.onAiBaseUrlChange(event.target.value)} className="h-9 rounded-md" aria-label="AI Base URL" placeholder="Base URL" />
               <Input value={props.aiModel} onChange={(event) => props.onAiModelChange(event.target.value)} className="h-9 rounded-md" aria-label="AI 模型" placeholder="模型" />

@@ -464,11 +464,12 @@ export function markAiConfigurationIncomplete(state: WorkspacePersistedState, mi
 }
 
 export function isAiProviderConfigured(ai: AiWorkspaceSettings, sessionApiKey: string) {
-  return ai.mode === "assistant" && ai.baseUrl.trim().length > 0 && ai.model.trim().length > 0 && sessionApiKey.trim().length > 0;
+  if (ai.mode === "hosted") return true;
+  return ai.mode === "custom" && ai.baseUrl.trim().length > 0 && ai.model.trim().length > 0 && sessionApiKey.trim().length > 0;
 }
 
 export function getMissingAiProviderFields(ai: AiWorkspaceSettings, sessionApiKey: string): string[] {
-  if (ai.mode !== "assistant") return [];
+  if (ai.mode !== "custom") return [];
   return [
     ai.baseUrl.trim().length === 0 ? "Base URL" : undefined,
     ai.model.trim().length === 0 ? "模型" : undefined,
@@ -650,7 +651,7 @@ function readLayout(value: unknown, fallback: LayoutSettings): LayoutSettings {
 function readAi(value: unknown, fallback: AiWorkspaceSettings): AiWorkspaceSettings {
   if (!isRecord(value)) return fallback;
   return {
-    mode: value.mode === "assistant" ? "assistant" : "deterministic",
+    mode: value.mode === "hosted" ? "hosted" : value.mode === "custom" || value.mode === "assistant" ? "custom" : "deterministic",
     baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : fallback.baseUrl,
     model: typeof value.model === "string" ? value.model : fallback.model,
     lastFallbackReason: typeof value.lastFallbackReason === "string" ? value.lastFallbackReason : fallback.lastFallbackReason,

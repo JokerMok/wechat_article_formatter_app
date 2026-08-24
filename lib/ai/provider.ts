@@ -87,7 +87,7 @@ export type GeneratedPlatformDraft = z.infer<typeof generatedPlatformDraftSchema
 export type GeneratedPlatformResponse = z.infer<typeof generatedResponseSchema>;
 
 export type GeneratePlatformVersionsOptions = {
-  provider?: OpenAICompatibleProvider;
+  provider?: AIProvider;
   source: UnifiedArticleContent;
   sourceVersionId?: string;
   platforms?: PlatformId[];
@@ -115,22 +115,29 @@ export type OpenAICompatibleProviderConfig = {
   apiKey: string;
   model: string;
   timeoutMs?: number;
+  chatCompletionsPath?: string;
+  maxOutputTokens?: number;
   fetchImpl?: typeof fetch;
 };
 
-type ProviderGenerateOptions = {
+export type ProviderGenerateOptions = {
   source: UnifiedArticleContent;
   sourceVersionId?: string;
   platforms: PlatformId[];
   signal?: AbortSignal;
 };
 
-type ProviderGenerateResult = {
+export type ProviderGenerateResult = {
   response: GeneratedPlatformResponse;
   diagnostics: AIDiagnostics;
 };
 
-class AIProviderError extends Error {
+export interface AIProvider {
+  readonly model: string;
+  generate(options: ProviderGenerateOptions): Promise<ProviderGenerateResult>;
+}
+
+export class AIProviderError extends Error {
   readonly code: AIErrorCode;
   readonly retryable: boolean;
   readonly diagnostics: AIDiagnostics;
@@ -149,13 +156,15 @@ export class OpenAICompatibleProvider {
   private readonly apiKey: string;
   private readonly endpoint: string;
   private readonly timeoutMs: number;
+  private readonly maxOutputTokens?: number;
   private readonly fetchImpl: typeof fetch;
 
   constructor(config: OpenAICompatibleProviderConfig) {
     this.model = config.model;
     this.apiKey = config.apiKey;
-    this.endpoint = buildChatCompletionsUrl(config.baseUrl);
+    this.endpoint = buildChatCompletionsUrl(config.baseUrl, config.chatCompletionsPath);
     this.timeoutMs = config.timeoutMs ?? 30000;
+    this.maxOutputTokens = config.maxOutputTokens;
     this.fetchImpl = config.fetchImpl ?? fetch;
   }
 
@@ -266,6 +275,7 @@ export class OpenAICompatibleProvider {
     return {
       model: this.model,
       temperature: 0.2,
+      ...(this.maxOutputTokens ? { max_tokens: this.maxOutputTokens } : {}),
       response_format: { type: "json_object" },
       messages: [
         {
@@ -567,15 +577,16 @@ function sameValue(left: unknown, right: unknown) {
 }
 
 function normalizeAIError(error: unknown, model: string, sourceVersionId?: string): AIProviderErrorInfo {
-  if (error instanceof AIProviderError) {
+  if (error instanceof AIProviderError || isAIProviderErrorLike(error)) {
+    const providerError = error as Pick<AIProviderError, "code" | "message" | "retryable" | "diagnostics">;
     return {
-      code: error.code,
-      message: error.message,
-      retryable: error.retryable,
+      code: providerError.code,
+      message: providerError.message,
+      retryable: providerError.retryable,
       diagnostics: {
-        ...error.diagnostics,
-        model: error.diagnostics.model === "unknown" ? model : error.diagnostics.model,
-        sourceVersionId: error.diagnostics.sourceVersionId ?? sourceVersionId,
+        ...providerError.diagnostics,
+        model: providerError.diagnostics.model === "unknown" ? model : providerError.diagnostics.model,
+        sourceVersionId: providerError.diagnostics.sourceVersionId ?? sourceVersionId,
       },
     };
   }
@@ -593,9 +604,16 @@ function normalizeAIError(error: unknown, model: string, sourceVersionId?: strin
   };
 }
 
-function buildChatCompletionsUrl(baseUrl: string) {
+function isAIProviderErrorLike(error: unknown): error is Pick<AIProviderError, "code" | "message" | "retryable" | "diagnostics"> {
+  if (!error || typeof error !== "object") return false;
+  const value = error as Partial<AIProviderError>;
+  return Boolean(value.code && value.message && value.diagnostics && typeof value.retryable === "boolean");
+}
+
+export function buildChatCompletionsUrl(baseUrl: string, chatCompletionsPath = "/chat/completions") {
   const trimmed = baseUrl.replace(/\/+$/, "");
-  return trimmed.endsWith("/chat/completions") ? trimmed : `${trimmed}/chat/completions`;
+  const path = `/${chatCompletionsPath.replace(/^\/+/, "").replace(/\/+$/, "")}`;
+  return trimmed.endsWith(path) ? trimmed : `${trimmed}${path}`;
 }
 
 function endpointOrigin(endpoint: string) {

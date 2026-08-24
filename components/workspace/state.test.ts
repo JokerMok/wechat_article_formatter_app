@@ -279,7 +279,7 @@ describe("workspace state", () => {
       ...state,
       ai: {
         ...state.ai,
-        mode: "assistant" as const,
+        mode: "custom" as const,
         baseUrl: "https://api.example.test/v1",
         model: "fixture-model",
       },
@@ -450,7 +450,7 @@ AI 正文。
     const editedXiaohongshu = updatePlatformCaption(state.platforms.xiaohongshu, "小红书人工发布文案");
     const current = {
       ...state,
-      ai: { ...state.ai, mode: "assistant" as const, baseUrl: "", model: "" },
+      ai: { ...state.ai, mode: "custom" as const, baseUrl: "", model: "" },
       platforms: {
         ...state.platforms,
         wechat: editedWechat,

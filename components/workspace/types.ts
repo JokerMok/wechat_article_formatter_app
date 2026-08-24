@@ -57,7 +57,7 @@ export type PlatformDraft = {
 };
 
 export type AiWorkspaceSettings = {
-  mode: "deterministic" | "assistant";
+  mode: "deterministic" | "hosted" | "custom";
   baseUrl: string;
   model: string;
   lastFallbackReason?: string;

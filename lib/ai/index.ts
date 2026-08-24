@@ -1,4 +1,5 @@
 export {
+  AIProviderError,
   OpenAICompatibleProvider,
   aiPlatformIds,
   buildFallbackPlatformVersions,
@@ -8,8 +9,11 @@ export {
   validateGeneratedFacts,
 } from "./provider";
 
+export { HostedAIProvider } from "./hosted-provider";
+
 export type {
   AIDiagnostics,
+  AIProvider,
   AIChangeField,
   AIChangeKind,
   AIChangeMetadata,
@@ -21,4 +25,6 @@ export type {
   GeneratedPlatformDraft,
   GeneratedPlatformResponse,
   OpenAICompatibleProviderConfig,
+  ProviderGenerateOptions,
+  ProviderGenerateResult,
 } from "./provider";

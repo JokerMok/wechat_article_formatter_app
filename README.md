@@ -12,6 +12,28 @@
 - 图文页支持字号、行距、段距、边距调整，以及拆页、合页、排序、锁定、撤销和重做。
 - 图片保存在当前浏览器本地 IndexedDB。项目备份 JSON 会记录图片元数据，但不会把原始图片文件打包进 JSON。
 
+## AI 调用模式
+
+- `本地`：使用确定性生成，不请求外部模型。
+- `服务端 AI`：浏览器只请求本站 `/api/ai/generate`，上游地址、模型和密钥由服务端环境变量管理。
+- `自定义接口`：用于 Ollama、LM Studio 或其他本地 OpenAI-compatible 服务，密钥只保存在当前浏览器会话。
+
+服务端 AI 使用统一的 OpenAI-compatible 配置。复制 `.env.example` 为 `.env.local` 后填写：
+
+```bash
+AI_PROVIDER=openai-compatible
+AI_API_KEY=你的服务端密钥
+AI_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+AI_MODEL=你的模型接入点或模型名
+AI_CHAT_COMPLETIONS_PATH=/chat/completions
+AI_TIMEOUT_MS=60000
+AI_MAX_RETRIES=1
+```
+
+本地运行读取 `.env.local`。部署到 Vercel 时，在项目 `Settings > Environment Variables` 中配置同名变量，并分别勾选 `Preview` 和 `Production`；变量不使用 `NEXT_PUBLIC_` 前缀。当前代码不会自动修改 Vercel 环境变量，也不会自动部署。
+
+服务端路由不是通用代理：请求体不接受上游 URL、Provider、API Key 或 Authorization；服务端只根据部署环境选择固定 Provider，并对输入大小、超时、重试和错误响应做限制。
+
 ## 本地运行
 
 ```bash

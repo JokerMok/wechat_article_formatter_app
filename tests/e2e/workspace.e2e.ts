@@ -147,7 +147,7 @@ test("TEST-001/020 unified entry saves, refreshes, deletes with confirmation, an
 
   await selectPlatform(page, "公众号");
   await page.getByLabel("平台标题").fill("公众号独立修改");
-  await page.getByText("AI", { exact: true }).click();
+  await page.getByText("自定义接口", { exact: true }).click();
   await page.getByRole("button", { name: "生成", exact: true }).click();
   await expect(page.getByText(/AI 配置不完整/).first()).toBeVisible();
   await expect(page.getByLabel("平台标题")).toHaveValue("公众号独立修改");
