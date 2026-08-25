@@ -13,7 +13,8 @@ export class OpenAICompatibleAdapter implements ServerAIProvider {
       model: config.model,
       chatCompletionsPath: config.chatCompletionsPath,
       timeoutMs: config.timeoutMs,
-      maxOutputTokens: 12000,
+      maxOutputTokens: 8000,
+      reasoningEffort: config.reasoningEffort,
       fetchImpl,
     };
     this.provider = new OpenAICompatibleProvider(providerConfig);

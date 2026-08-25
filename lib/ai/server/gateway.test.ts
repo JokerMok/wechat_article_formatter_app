@@ -108,4 +108,22 @@ describe("generateWithServerAI", () => {
     const calls = provider.generate.mock.calls as Array<[ProviderGenerateOptions]>;
     expect(calls.map(([input]) => input.platforms)).toEqual([["wechat"], ["xiaohongshu"], ["douyinImage"], ["douyinLongform"]]);
   });
+
+  it("retries one invalid structured response", async () => {
+    const provider = {
+      model: "fixture-model",
+      generate: vi
+        .fn()
+        .mockRejectedValueOnce(new ServerAIError("AI_INVALID_RESPONSE", "invalid response", false))
+        .mockResolvedValue({ response: { schemaVersion: 1 as const, drafts: [] }, diagnostics: { provider: "openai-compatible" as const, model: "fixture-model" } }),
+    };
+
+    await expect(
+      generateWithServerAI(
+        { source, sourceVersionId: "v1", platforms: ["wechat"] },
+        { env, createProvider: () => provider },
+      ),
+    ).resolves.toMatchObject({ diagnostics: { model: "fixture-model" } });
+    expect(provider.generate).toHaveBeenCalledTimes(2);
+  });
 });

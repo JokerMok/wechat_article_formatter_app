@@ -731,10 +731,12 @@ export default function UnifiedWorkspace() {
       setHistory(merged.histories);
       setWorkspace(next);
       setAiRunState("idle");
+      const factCheckWarningCount = result.diagnostics.details?.filter((detail) => detail.includes(":fact_check_warning:")).length ?? 0;
+      const reviewNotice = factCheckWarningCount > 0 ? "，请复核其中的数字或引用" : "";
       setStatusMessage(
         regeneration.skippedEditedPlatforms.length || merged.skippedChangedPlatforms.length
-          ? `AI 已生成 ${merged.appliedPlatforms.length} 个平台版本，人工编辑稿已保留`
-          : `AI 已生成 ${merged.appliedPlatforms.length} 个平台版本`,
+          ? `AI 已生成 ${merged.appliedPlatforms.length} 个平台版本，人工编辑稿已保留${reviewNotice}`
+          : `AI 已生成 ${merged.appliedPlatforms.length} 个平台版本${reviewNotice}`,
       );
       return;
     }

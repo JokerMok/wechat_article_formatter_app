@@ -43,7 +43,8 @@ async function generateWithRetry(provider: ServerAIProvider, input: ProviderGene
       return await provider.generate(input);
     } catch (error) {
       const normalized = normalizeServerAIError(error);
-      if (!normalized.retryable || attempt >= maxRetries) {
+      const retryableSchemaResponse = normalized.code === "AI_INVALID_RESPONSE";
+      if ((!normalized.retryable && !retryableSchemaResponse) || normalized.code === "AI_TIMEOUT" || attempt >= maxRetries) {
         throw normalized;
       }
       attempt += 1;

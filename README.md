@@ -26,8 +26,9 @@ AI_API_KEY=你的服务端密钥
 AI_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
 AI_MODEL=火山方舟接入点ID，例如 ep-xxxxxxxx
 AI_CHAT_COMPLETIONS_PATH=/chat/completions
-AI_TIMEOUT_MS=60000
+AI_TIMEOUT_MS=120000
 AI_MAX_RETRIES=1
+AI_REASONING_EFFORT=minimal
 ```
 
 本地运行读取 `.env.local`。部署到 Vercel 时，在项目 `Settings > Environment Variables` 中配置同名变量，并分别勾选 `Preview` 和 `Production`；变量不使用 `NEXT_PUBLIC_` 前缀。当前代码不会自动修改 Vercel 环境变量，也不会自动部署。

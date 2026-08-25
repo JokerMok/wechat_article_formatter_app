@@ -118,6 +118,7 @@ export type OpenAICompatibleProviderConfig = {
   timeoutMs?: number;
   chatCompletionsPath?: string;
   maxOutputTokens?: number;
+  reasoningEffort?: "minimal" | "low" | "medium" | "high";
   fetchImpl?: typeof fetch;
 };
 
@@ -158,6 +159,7 @@ export class OpenAICompatibleProvider {
   private readonly endpoint: string;
   private readonly timeoutMs: number;
   private readonly maxOutputTokens?: number;
+  private readonly reasoningEffort?: OpenAICompatibleProviderConfig["reasoningEffort"];
   private readonly fetchImpl: typeof fetch;
 
   constructor(config: OpenAICompatibleProviderConfig) {
@@ -166,6 +168,7 @@ export class OpenAICompatibleProvider {
     this.endpoint = buildChatCompletionsUrl(config.baseUrl, config.chatCompletionsPath);
     this.timeoutMs = config.timeoutMs ?? 30000;
     this.maxOutputTokens = config.maxOutputTokens;
+    this.reasoningEffort = config.reasoningEffort;
     this.fetchImpl = config.fetchImpl ?? fetch;
   }
 
@@ -245,7 +248,7 @@ export class OpenAICompatibleProvider {
         throw this.schemaError(["Assistant content is not valid JSON."], responseDiagnostics);
       }
 
-      const sanitized = sanitizeGeneratedResponse(parsedContent.value, options.source.parseMode);
+      const sanitized = sanitizeGeneratedResponse(parsedContent.value, options.source.parseMode, options.source.title);
       const generated = generatedResponseSchema.safeParse(sanitized);
       if (!generated.success) {
         throw this.schemaError(compactZodIssues(generated.error), responseDiagnostics);
@@ -277,18 +280,19 @@ export class OpenAICompatibleProvider {
       model: this.model,
       temperature: 0.2,
       ...(this.maxOutputTokens ? { max_tokens: this.maxOutputTokens } : {}),
+      ...(this.reasoningEffort ? { reasoning_effort: this.reasoningEffort } : {}),
       response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
           content:
-            `Return only JSON with schemaVersion:1 and drafts[]. Each draft must include platform, title, summary, highlights, tags, optional cover, and content. content must be a plain article text or Markdown string, never a nested JSON object; the server will parse it into the internal article structure. ${platformGenerationInstruction(platforms)} Do not add facts that are not supported by the source article.`,
+            `Return only JSON with schemaVersion:1 and drafts[]. Each draft must include platform, title, summary, highlights, tags, optional cover, and content. content must be a plain article text or Markdown string, never a nested JSON object; the server will parse it into the internal article structure. ${platformGenerationInstruction(platforms, source.sourceText.length)} Do not add facts that are not supported by the source article.`,
         },
         {
           role: "user",
           content: JSON.stringify({
             platforms,
-            source,
+            source: buildModelSource(source),
           }),
         },
       ],
@@ -325,14 +329,25 @@ export class OpenAICompatibleProvider {
   }
 }
 
-function platformGenerationInstruction(platforms: PlatformId[]) {
+function buildModelSource(source: UnifiedArticleContent) {
+  return {
+    title: source.title,
+    parseMode: source.parseMode,
+    sourceFormat: source.sourceFormat,
+    sourceText: source.sourceText,
+  };
+}
+
+function platformGenerationInstruction(platforms: PlatformId[], sourceLength: number) {
   if (platforms.length !== 1) {
     return "Keep each draft concise and platform-specific.";
   }
 
   switch (platforms[0]) {
     case "wechat":
-      return "For WeChat, preserve the source article's complete reasoning and necessary body paragraphs without repeating the source unnecessarily.";
+      return sourceLength > 12000
+        ? "For WeChat, preserve the core reasoning but compress long source material to roughly 5000 Chinese characters; do not repeat the source unnecessarily."
+        : "For WeChat, preserve the source article's complete reasoning and necessary body paragraphs without repeating the source unnecessarily.";
     case "xiaohongshu":
       return "For Xiaohongshu, rewrite as a concise, readable post with a strong hook, key points, and practical takeaway; target roughly 600-1200 Chinese characters.";
     case "douyinImage":
@@ -374,7 +389,7 @@ export async function generatePlatformVersions(options: GeneratePlatformVersions
       platforms,
       signal: options.signal,
     });
-    const versions = buildGeneratedPlatformVersions(generated.response.drafts, platforms, options.source, now);
+    const generatedContent = buildGeneratedPlatformVersions(generated.response.drafts, platforms, options.source, now);
     const baselineVersions = platforms.reduce<PlatformVersionMap>((baseline, platform) => {
       baseline[platform] = currentVersions[platform] ?? fallbackVersions[platform];
       return baseline;
@@ -382,9 +397,12 @@ export async function generatePlatformVersions(options: GeneratePlatformVersions
 
     return {
       ok: true,
-      versions,
-      diagnostics: generated.diagnostics,
-      changes: buildPlatformChangeRecords(platforms, baselineVersions, versions),
+      versions: generatedContent.versions,
+      diagnostics: {
+        ...generated.diagnostics,
+        details: [...(generated.diagnostics.details ?? []), ...generatedContent.factCheckWarnings],
+      },
+      changes: buildPlatformChangeRecords(platforms, baselineVersions, generatedContent.versions),
     };
   } catch (error) {
     return {
@@ -469,9 +487,10 @@ function buildGeneratedPlatformVersions(
   platforms: PlatformId[],
   source: UnifiedArticleContent,
   updatedAt: string
-): PlatformVersionMap {
+): { versions: PlatformVersionMap; factCheckWarnings: string[] } {
   const byPlatform = new Map(drafts.map((draft) => [draft.platform, draft]));
   const versions: PlatformVersionMap = {};
+  const factCheckWarnings: string[] = [];
 
   for (const platform of platforms) {
     const draft = byPlatform.get(platform);
@@ -491,22 +510,12 @@ function buildGeneratedPlatformVersions(
 
     const factCheck = validateGeneratedFacts(generatedFactText(draft), source);
     if (!factCheck.ok) {
-      const details = [
-        factCheck.unsupportedNumbers.length > 0 ? `unsupported_number_count:${factCheck.unsupportedNumbers.length}` : undefined,
-        factCheck.unsupportedQuotes.length > 0 ? `unsupported_quote_count:${factCheck.unsupportedQuotes.length}` : undefined,
-      ].filter((detail): detail is string => Boolean(detail));
-
-      throw new AIProviderError({
-        code: "schema",
-        message: "AI provider response contains unsupported factual details.",
-        retryable: false,
-        diagnostics: {
-          provider: "openai-compatible",
-          model: "unknown",
-          errorCode: "schema",
-          details,
-        },
-      });
+      if (factCheck.unsupportedNumbers.length > 0) {
+        factCheckWarnings.push(`${platform}:fact_check_warning:unsupported_number_count:${factCheck.unsupportedNumbers.length}`);
+      }
+      if (factCheck.unsupportedQuotes.length > 0) {
+        factCheckWarnings.push(`${platform}:fact_check_warning:unsupported_quote_count:${factCheck.unsupportedQuotes.length}`);
+      }
     }
 
     versions[platform] = {
@@ -522,7 +531,7 @@ function buildGeneratedPlatformVersions(
     };
   }
 
-  return versions;
+  return { versions, factCheckWarnings };
 }
 
 type PlatformVersionValue = PlatformVersion<unknown>;
@@ -674,25 +683,28 @@ function parseAssistantJson(content: string) {
   }
 }
 
-function sanitizeGeneratedResponse(value: unknown, parseMode: UnifiedArticleContent["parseMode"]): unknown {
+function sanitizeGeneratedResponse(value: unknown, parseMode: UnifiedArticleContent["parseMode"], fallbackTitle?: string): unknown {
   if (!isRecord(value) || !Array.isArray(value.drafts)) {
     return value;
   }
 
   return {
     ...value,
-    drafts: value.drafts.map((draft) => sanitizeGeneratedDraft(draft, parseMode)),
+    drafts: value.drafts.map((draft) => sanitizeGeneratedDraft(draft, parseMode, fallbackTitle)),
   };
 }
 
-function sanitizeGeneratedDraft(value: unknown, parseMode: UnifiedArticleContent["parseMode"]): unknown {
+function sanitizeGeneratedDraft(value: unknown, parseMode: UnifiedArticleContent["parseMode"], fallbackTitle?: string): unknown {
   if (!isRecord(value)) {
     return value;
   }
 
-  const title = sanitizeTextValue(value.title);
-  const summary = sanitizeTextValue(value.summary);
-  const content = sanitizeArticleContent(value.content, parseMode, typeof title === "string" ? title : undefined);
+  const rawTitle = sanitizeTextValue(value.title);
+  const content = sanitizeArticleContent(value.content, parseMode, typeof rawTitle === "string" ? rawTitle : fallbackTitle);
+  const contentTexts = contentTextValues(content);
+  const title = typeof rawTitle === "string" && rawTitle ? rawTitle : fallbackTitle || contentTexts[0] || "未命名文章";
+  const rawSummary = sanitizeTextValue(value.summary);
+  const summary = typeof rawSummary === "string" && rawSummary ? rawSummary : contentTexts.find((text) => text !== title) || title;
   const highlights = sanitizeTextArray(value.highlights);
   const fallbackHighlights = contentTextValues(content).slice(0, 3);
   return {

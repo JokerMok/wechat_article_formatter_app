@@ -5,6 +5,7 @@ import { assertServerAIRequest, generateWithServerAI } from "../../../../lib/ai/
 import { normalizeServerAIError, publicAIError, ServerAIError } from "../../../../lib/ai/server/errors";
 
 export const runtime = "nodejs";
+export const maxDuration = 120;
 
 const requestSchema = z.strictObject({
   task: z.literal("generate-platform-variant"),

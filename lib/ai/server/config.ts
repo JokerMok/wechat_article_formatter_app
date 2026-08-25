@@ -1,4 +1,5 @@
 import { ServerAIError } from "./errors";
+import type { OpenAICompatibleProviderConfig } from "../provider";
 
 export type ServerAIConfig = {
   provider: "openai-compatible";
@@ -8,6 +9,7 @@ export type ServerAIConfig = {
   chatCompletionsPath: string;
   timeoutMs: number;
   maxRetries: number;
+  reasoningEffort?: OpenAICompatibleProviderConfig["reasoningEffort"];
 };
 
 export type ServerAIEnv = Record<string, string | undefined>;
@@ -28,8 +30,9 @@ export function readServerAIConfig(env: ServerAIEnv = process.env): ServerAIConf
   const chatCompletionsPath = normalizePath(env.AI_CHAT_COMPLETIONS_PATH || "/chat/completions");
   const timeoutMs = readInteger(env.AI_TIMEOUT_MS, 60000, 1000, 120000);
   const maxRetries = readInteger(env.AI_MAX_RETRIES, 1, 0, 2);
+  const reasoningEffort = readReasoningEffort(env.AI_REASONING_EFFORT);
 
-  return { provider, apiKey, baseUrl, model, chatCompletionsPath, timeoutMs, maxRetries };
+  return { provider, apiKey, baseUrl, model, chatCompletionsPath, timeoutMs, maxRetries, ...(reasoningEffort ? { reasoningEffort } : {}) };
 }
 
 function normalizePath(value: string) {
@@ -47,4 +50,13 @@ function readInteger(value: string | undefined, fallback: number, min: number, m
     throw new ServerAIError("AI_NOT_CONFIGURED", "服务端 AI 数值配置无效。", false);
   }
   return parsed;
+}
+
+function readReasoningEffort(value: string | undefined): OpenAICompatibleProviderConfig["reasoningEffort"] {
+  const normalized = value?.trim();
+  if (!normalized) return undefined;
+  if (normalized !== "minimal" && normalized !== "low" && normalized !== "medium" && normalized !== "high") {
+    throw new ServerAIError("AI_NOT_CONFIGURED", "服务端 AI 推理程度配置无效。", false);
+  }
+  return normalized;
 }
