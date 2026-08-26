@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { parseArticle } from "./article-parser";
+import type { Mock } from "@vitest/spy";
+import { articleContentToBlocks, parseArticle, parseArticleContent } from "./article-parser";
+import type { PlatformVersion } from "./platforms/types";
+
+declare module "@vitest/spy" {
+  function fn<TImplementation extends (...args: unknown[]) => unknown>(
+    originalImplementation: TImplementation
+  ): Mock<(...args: [unknown[], ...unknown[]]) => ReturnType<TImplementation>>;
+}
 
 describe("parseArticle", () => {
   it("parses markdown headings, paragraphs, lists, images, and CTA blocks", () => {
@@ -79,6 +87,18 @@ font-weight: 800;">你把逻辑解释清楚，不代表老板会觉得够。`);
     expect(blocks[1]).toEqual({ type: "paragraph", text: "你把逻辑解释清楚，不代表老板会觉得够。" });
   });
 
+  it("strips encoded broken style markers before preserving regular angle brackets", () => {
+    const blocks = parseArticle(`文章主标题
+
+font-weight: 800;&quot;&gt;正文内容
+Promise<string>、Promise<s> 和 3 < 5 > 2 都要保留。`);
+
+    expect(blocks[1]).toEqual({
+      type: "paragraph",
+      text: "正文内容Promise<string>、Promise<s> 和 3 < 5 > 2 都要保留。",
+    });
+  });
+
   it("drops empty quote markers", () => {
     const blocks = parseArticle(`文章主标题
 
@@ -93,5 +113,121 @@ font-weight: 800;">你把逻辑解释清楚，不代表老板会觉得够。`);
       { type: "title", text: "文章主标题" },
       { type: "paragraph", text: "正文内容" },
     ]);
+  });
+
+  it("creates unified content with source positions and compatible ArticleBlock conversion", () => {
+    const raw = `# 主标题
+
+## 一、核心变化
+
+正文第一行
+正文第二行
+
+---
+
+<!-- pagebreak -->
+
+> 关键判断：排版应该服务阅读。`;
+
+    const content = parseArticleContent(raw);
+
+    expect(content.sourceFormat).toBe("markdown");
+    expect(content.blocks.map((block) => block.type)).toEqual(["title", "section", "paragraph", "divider", "pageBreak", "quote"]);
+    expect(content.blocks[2]).toMatchObject({
+      type: "paragraph",
+      text: "正文第一行正文第二行",
+      plainText: "正文第一行正文第二行",
+      markdown: "正文第一行\n正文第二行",
+      source: {
+        startLine: 5,
+        endLine: 6,
+      },
+    });
+    expect(articleContentToBlocks(content)).toEqual(parseArticle(raw));
+  });
+
+  it("normalizes damaged rich text without dropping valid body text", () => {
+    const content = parseArticleContent(
+      [
+        "文章主标题",
+        "",
+        "##   ",
+        ">",
+        '<span style="font-weight: 800;" onclick="evil()">有效文字</span>',
+        '<script>alert("x")</script>普通文字',
+      ].join("\n")
+    );
+
+    expect(content.blocks.map((block) => block.type)).toEqual(["title", "paragraph"]);
+    expect(content.blocks[1]).toMatchObject({
+      type: "paragraph",
+      text: "有效文字普通文字",
+    });
+    expect(content.sourceText).toContain("onclick");
+    expect(content.blocks[1]?.text).not.toMatch(/onclick|script|font-weight|evil|alert/);
+  });
+
+  it("keeps plain text source format and platform version type contract", () => {
+    const content = parseArticleContent(`普通文章标题
+
+第一段正文，不应该丢失。`);
+    const platformVersion: PlatformVersion = {
+      platform: "wechat",
+      status: "draft",
+      title: "普通文章标题",
+      content,
+      updatedAt: "2026-08-21T00:00:00.000Z",
+    };
+
+    expect(content.sourceFormat).toBe("plainText");
+    expect(content.blocks[1]).toMatchObject({
+      type: "paragraph",
+      source: {
+        startLine: 3,
+        endLine: 3,
+      },
+    });
+    expect(platformVersion.platform).toBe("wechat");
+  });
+
+  it("does not strip generic types or comparison expressions as HTML tags", () => {
+    const content = parseArticleContent(`技术文章标题
+
+Promise<string> 表示异步字符串，表达式 3 < 5 > 2 不应该被删除。
+Promise<s> 这种短泛型参数也要保留。
+<span style="font-weight: 800;" onclick="evil()">真实 HTML 只保留正文</span>`);
+
+    expect(content.blocks[1]).toMatchObject({
+      type: "paragraph",
+      text: "Promise<string> 表示异步字符串，表达式 3 < 5 > 2 不应该被删除。Promise<s> 这种短泛型参数也要保留。真实 HTML 只保留正文",
+    });
+    expect(content.blocks[1]?.text).not.toMatch(/onclick|font-weight|evil/);
+  });
+
+  it("preserves fenced code blocks in unified content and compatible blocks", () => {
+    const raw = `技术文章标题
+
+\`\`\`ts
+const value: Promise<string> = fetchText();
+if (3 < 5 && 5 > 2) return value;
+\`\`\`
+
+正文继续。`;
+    const content = parseArticleContent(raw);
+
+    expect(content.blocks.map((block) => block.type)).toEqual(["title", "code", "paragraph"]);
+    expect(content.blocks[1]).toMatchObject({
+      type: "code",
+      text: "const value: Promise<string> = fetchText();\nif (3 < 5 && 5 > 2) return value;",
+      language: "ts",
+      source: {
+        startLine: 3,
+        endLine: 6,
+      },
+    });
+    expect(articleContentToBlocks(content)[1]).toEqual({
+      type: "paragraph",
+      text: "const value: Promise<string> = fetchText();\nif (3 < 5 && 5 > 2) return value;",
+    });
   });
 });

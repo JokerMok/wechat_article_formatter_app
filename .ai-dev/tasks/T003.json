@@ -1,0 +1,25 @@
+{
+  "id": "T003",
+  "dependencies": ["T001"],
+  "wave": 2,
+  "executor": "cloud",
+  "risk": "medium",
+  "status": "completed",
+  "verification_commands": [
+    "npx vitest run lib/platforms/wechat lib/renderers/wechat lib/style-templates.test.ts",
+    "npx tsc --noEmit",
+    "npm run lint -- lib/platforms/wechat lib/renderers/wechat lib/wechat-renderer.ts lib/style-templates.ts"
+  ],
+  "allowed_paths": [
+    "lib/platforms/wechat/",
+    "lib/renderers/wechat/",
+    "lib/wechat-renderer.ts",
+    "lib/style-templates.ts",
+    "lib/style-templates.test.ts"
+  ],
+  "excluded_snapshot_paths": [
+    "node_modules/",
+    ".next/",
+    "coverage/"
+  ]
+}

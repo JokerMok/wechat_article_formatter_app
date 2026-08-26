@@ -1,0 +1,21 @@
+{
+  "id": "T004",
+  "dependencies": ["T001"],
+  "wave": 2,
+  "executor": "cloud",
+  "risk": "high",
+  "status": "completed",
+  "verification_commands": [
+    "npx vitest run lib/renderers/cards",
+    "npx tsc --noEmit",
+    "npm run lint -- lib/renderers/cards"
+  ],
+  "allowed_paths": [
+    "lib/renderers/cards/"
+  ],
+  "excluded_snapshot_paths": [
+    "node_modules/",
+    ".next/",
+    "coverage/"
+  ]
+}

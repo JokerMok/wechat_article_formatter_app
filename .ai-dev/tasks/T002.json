@@ -1,0 +1,23 @@
+{
+  "id": "T002",
+  "dependencies": ["T001"],
+  "wave": 2,
+  "executor": "cloud",
+  "risk": "medium",
+  "status": "completed",
+  "verification_commands": [
+    "npx vitest run lib/assets lib/storage store",
+    "npx tsc --noEmit",
+    "npm run lint -- lib/assets lib/storage store"
+  ],
+  "allowed_paths": [
+    "lib/assets/",
+    "lib/storage/",
+    "store/"
+  ],
+  "excluded_snapshot_paths": [
+    "node_modules/",
+    ".next/",
+    "coverage/"
+  ]
+}

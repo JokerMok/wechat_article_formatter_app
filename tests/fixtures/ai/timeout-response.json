@@ -1,0 +1,4 @@
+{
+  "scenario": "timeout",
+  "description": "The provider request does not settle before timeoutMs."
+}

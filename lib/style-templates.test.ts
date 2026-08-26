@@ -46,6 +46,21 @@ describe("styleTemplates", () => {
     expect(html).not.toContain('<strong style="font-weight: 800;">重点内容</strong>');
   });
 
+  it("TEST-024 keeps renderWechatHtml compatible while sanitizing unsafe legacy blocks", () => {
+    const html = renderWechatHtml(
+      [
+        { type: "title", text: "旧入口标题" },
+        { type: "paragraph", text: '正常内容<script>alert(1)</script><span onclick="evil()">保留文字</span>' },
+      ],
+      styleTemplates.zhenyiKnowledgeMinimal
+    );
+
+    expect(html).toContain("旧入口标题");
+    expect(html).toContain("正常内容");
+    expect(html).toContain("保留文字");
+    expect(html).not.toMatch(/<script|<\/script|onclick|alert\(1\)/i);
+  });
+
   it("keeps blockquotes as quotes in business visual templates", () => {
     const blocks = parseArticle(`文章标题
 

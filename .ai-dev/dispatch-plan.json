@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "planner": "orchestrate-hybrid-development.scheduler",
+  "project_root": "/Users/jokermok/Documents/Trae/wechat_article_formatter_app",
+  "valid": true,
+  "errors": [],
+  "cycles_or_blocked": [],
+  "conflicts": [],
+  "completed": [
+    "T001",
+    "T002",
+    "T003",
+    "T004",
+    "T005",
+    "T006",
+    "T007",
+    "T008",
+    "T009"
+  ],
+  "blocked": [],
+  "planned": [],
+  "waves": [
+    {
+      "wave": 1,
+      "tasks": [
+        "T001"
+      ],
+      "dispatches": [
+        {
+          "task_id": "T001",
+          "concurrency_group": "wave-1-group-1",
+          "executor": "cloud",
+          "risk": "high",
+          "depends_on": [],
+          "allowed_paths": [
+            "package.json",
+            "package-lock.json",
+            "lib/article-types.ts",
+            "lib/article-parser.ts",
+            "lib/article-parser.test.ts",
+            "lib/content/",
+            "lib/platforms/types.ts"
+          ],
+          "context_ref": ".ai-dev/context/T001.json",
+          "serialized_after": []
+        }
+      ]
+    },
+    {
+      "wave": 2,
+      "tasks": [
+        "T002",
+        "T003",
+        "T004",
+        "T005",
+        "T006"
+      ],
+      "dispatches": [
+        {
+          "task_id": "T002",
+          "concurrency_group": "wave-2-group-1",
+          "executor": "cloud",
+          "risk": "medium",
+          "depends_on": [
+            "T001"
+          ],
+          "allowed_paths": [
+            "lib/assets/",
+            "lib/storage/",
+            "store/"
+          ],
+          "context_ref": ".ai-dev/context/T002.json",
+          "serialized_after": []
+        },
+        {
+          "task_id": "T003",
+          "concurrency_group": "wave-2-group-1",
+          "executor": "cloud",
+          "risk": "medium",
+          "depends_on": [
+            "T001"
+          ],
+          "allowed_paths": [
+            "lib/platforms/wechat/",
+            "lib/renderers/wechat/",
+            "lib/wechat-renderer.ts",
+            "lib/style-templates.ts",
+            "lib/style-templates.test.ts"
+          ],
+          "context_ref": ".ai-dev/context/T003.json",
+          "serialized_after": []
+        },
+        {
+          "task_id": "T004",
+          "concurrency_group": "wave-2-group-1",
+          "executor": "cloud",
+          "risk": "high",
+          "depends_on": [
+            "T001"
+          ],
+          "allowed_paths": [
+            "lib/renderers/cards/"
+          ],
+          "context_ref": ".ai-dev/context/T004.json",
+          "serialized_after": []
+        },
+        {
+          "task_id": "T005",
+          "concurrency_group": "wave-2-group-1",
+          "executor": "cloud",
+          "risk": "high",
+          "depends_on": [
+            "T001"
+          ],
+          "allowed_paths": [
+            "lib/platforms/platform-profiles.ts",
+            "lib/platforms/xiaohongshu/",
+            "lib/platforms/douyin/"
+          ],
+          "context_ref": ".ai-dev/context/T005.json",
+          "serialized_after": []
+        },
+        {
+          "task_id": "T006",
+          "concurrency_group": "wave-2-group-1",
+          "executor": "cloud",
+          "risk": "high",
+          "depends_on": [
+            "T001"
+          ],
+          "allowed_paths": [
+            "lib/ai/",
+            "tests/fixtures/ai/"
+          ],
+          "context_ref": ".ai-dev/context/T006.json",
+          "serialized_after": []
+        }
+      ]
+    },
+    {
+      "wave": 3,
+      "tasks": [
+        "T007",
+        "T008"
+      ],
+      "dispatches": [
+        {
+          "task_id": "T007",
+          "concurrency_group": "wave-3-group-1",
+          "executor": "cloud",
+          "risk": "medium",
+          "depends_on": [
+            "T002",
+            "T003",
+            "T004",
+            "T005"
+          ],
+          "allowed_paths": [
+            "lib/export/",
+            "lib/copy-rich-text.ts",
+            "lib/copy-rich-text.test.ts"
+          ],
+          "context_ref": ".ai-dev/context/T007.json",
+          "serialized_after": []
+        },
+        {
+          "task_id": "T008",
+          "concurrency_group": "wave-3-group-1",
+          "executor": "cloud",
+          "risk": "high",
+          "depends_on": [
+            "T002",
+            "T003",
+            "T004",
+            "T005",
+            "T006"
+          ],
+          "allowed_paths": [
+            "app/page.tsx",
+            "app/layout.tsx",
+            "app/globals.css",
+            "components/workspace/",
+            "components/ui/dialog.tsx",
+            "components/ui/slider.tsx",
+            "components/ui/toggle.tsx",
+            "components/ui/tooltip.tsx"
+          ],
+          "context_ref": ".ai-dev/context/T008.json",
+          "serialized_after": []
+        }
+      ]
+    },
+    {
+      "wave": 4,
+      "tasks": [
+        "T009"
+      ],
+      "dispatches": [
+        {
+          "task_id": "T009",
+          "concurrency_group": "wave-4-group-1",
+          "executor": "cloud",
+          "risk": "high",
+          "depends_on": [
+            "T007",
+            "T008"
+          ],
+          "allowed_paths": [
+            "playwright.config.ts",
+            "tests/e2e/",
+            "tests/fixtures/content/",
+            "README.md",
+            "wechat_article_formatter_app.tsx"
+          ],
+          "context_ref": ".ai-dev/context/T009.json",
+          "serialized_after": []
+        }
+      ]
+    }
+  ],
+  "dispatch_policy": "仅输出计划；由主协调器在门禁、上下文包和独立 worktree 准备后派发"
+}

@@ -1,0 +1,28 @@
+{
+  "id": "T009",
+  "dependencies": ["T007", "T008"],
+  "wave": 4,
+  "executor": "cloud",
+  "risk": "high",
+  "status": "completed",
+  "verification_commands": [
+    "npm test",
+    "npm run lint",
+    "npm run build",
+    "npx playwright test"
+  ],
+  "allowed_paths": [
+    "playwright.config.ts",
+    "tests/e2e/",
+    "tests/fixtures/content/",
+    "README.md",
+    "wechat_article_formatter_app.tsx"
+  ],
+  "excluded_snapshot_paths": [
+    "node_modules/",
+    ".next/",
+    "coverage/",
+    "playwright-report/",
+    "test-results/"
+  ]
+}

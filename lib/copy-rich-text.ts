@@ -1,20 +1,41 @@
-export async function copyRichText(html: string) {
-  if (typeof window === "undefined" || typeof navigator === "undefined") return;
+export type CopyRichTextResult = {
+  ok: boolean;
+  method: "clipboard-write" | "selection" | "noop";
+};
+
+function htmlToPlainText(html: string) {
+  return html
+    .replace(/<img\b[^>]*\balt=(["'])(.*?)\1[^>]*>/gi, "$2")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(?:p|section|div|h[1-6]|li)>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+export async function copyRichText(html: string): Promise<CopyRichTextResult> {
+  if (typeof window === "undefined" || typeof navigator === "undefined") {
+    return { ok: false, method: "noop" };
+  }
 
   if ("ClipboardItem" in window && navigator.clipboard?.write) {
     try {
       const htmlBlob = new Blob([html], { type: "text/html" });
-      const textBlob = new Blob([html.replace(/<[^>]+>/g, "")], { type: "text/plain" });
+      const textBlob = new Blob([htmlToPlainText(html)], { type: "text/plain" });
       await navigator.clipboard.write([
         new ClipboardItem({
           "text/html": htmlBlob,
           "text/plain": textBlob,
         }),
       ]);
-      return;
+      return { ok: true, method: "clipboard-write" };
     } catch {
       // Fall through to selection copy for browser or permission edge cases.
     }
+  }
+
+  if (typeof document === "undefined") {
+    return { ok: false, method: "noop" };
   }
 
   const container = document.createElement("div");
@@ -30,7 +51,8 @@ export async function copyRichText(html: string) {
   range.selectNodeContents(container);
   selection?.removeAllRanges();
   selection?.addRange(range);
-  document.execCommand("copy");
+  const copied = document.execCommand("copy");
   selection?.removeAllRanges();
   container.remove();
+  return { ok: copied, method: "selection" };
 }

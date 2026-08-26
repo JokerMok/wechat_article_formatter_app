@@ -1,0 +1,24 @@
+{
+  "id": "T005",
+  "dependencies": ["T001"],
+  "wave": 2,
+  "executor": "cloud",
+  "recommended_model": "gpt-5.3-codex-spark",
+  "risk": "high",
+  "status": "completed",
+  "verification_commands": [
+    "npx vitest run lib/platforms/xiaohongshu lib/platforms/douyin",
+    "npx tsc --noEmit",
+    "npm run lint -- lib/platforms/platform-profiles.ts lib/platforms/xiaohongshu lib/platforms/douyin"
+  ],
+  "allowed_paths": [
+    "lib/platforms/platform-profiles.ts",
+    "lib/platforms/xiaohongshu/",
+    "lib/platforms/douyin/"
+  ],
+  "excluded_snapshot_paths": [
+    "node_modules/",
+    ".next/",
+    "coverage/"
+  ]
+}

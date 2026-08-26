@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "skill_version": 1,
+  "status": "approved",
+  "approved_by": "user",
+  "approved_at": "2026-08-21T05:57:50.226132+00:00",
+  "git_common_dir": "d8827703db1fab10f659de623e749ecc57adb933d2c3bb214bd86926fa00f925",
+  "base_sha": "a530f4bef3821f4acbe6cb28091778cfb6ad3aa4",
+  "target_branch": "main",
+  "artifacts": {
+    "prd.md": "0bab4b11313323ba7a1c6785667bc87ce12d67bbcc1585a8636e46b38603710d",
+    "test-plan.md": "42f8bddb08d055443e56b566a0e67036efb2b26cc01d8b06870caa43f02e4c7d",
+    "development-plan.md": "7d31be418fc02d53127282f6c4ff0f5c6ee8eb1d36e7defa51d1708c54774967",
+    "tasks/T001.md": "6fe440e05704f6bd8a3c814cb3a631103b2a6e78b345403afc09bb6b4dbb844e",
+    "tasks/T002.md": "822d93be9bf5c0125e8caa8908dc1e6d075a72b79fad033001efb5aaadf8a8d3",
+    "tasks/T003.md": "eb6b9b0898b6c306ce43ec752e83ae66317a0876f3e62bdc5cc8765e16691f78",
+    "tasks/T004.md": "ccd479626cf90119df9e502db4e4a086cb5635c4c2af36e2282cf5e870dc5dd1",
+    "tasks/T005.md": "c1607129774e0882d14a12ac0d9cd53e72844cc13f335008e54390c779ac6ec6",
+    "tasks/T006.md": "38ea45cab885afb850fc19ece8807443d8a2893ff2246038117eebd1383c3a2b",
+    "tasks/T007.md": "d574284cdf7c645020550d5af4effa93de7ee65739b2e1404b7ff6070ccff456",
+    "tasks/T008.md": "5b02dca0e801485b79a8bc5d18edfb7a02a4613550d560780cdbb413c390b30f",
+    "tasks/T009.md": "3c80fd30baf6e11c1fe9de2025a70c979b651065619a9d02fdf58f106e8b17a8",
+    "tasks/T001.json": "a57e77b78fda6ee7fa09735c686e3d71e038654a189cbab20bf2ca6f8f2895f9",
+    "tasks/T002.json": "efe2f6c21afd66714b545661afaf9801916ac5ba704ae7062da3f625dea205aa",
+    "tasks/T003.json": "879b134823cefeeca80dc9d4ebbaab642cace27b1df5cb55beaa2102f750434f",
+    "tasks/T004.json": "bdb1e67a77ca6e7a8d293e5ac3a294c640aff5bed92910689f23ade2c86bb61c",
+    "tasks/T005.json": "3800887d279cd0173e7bbdea56d5972299daa10a2cec2fb410dadd998da4e4ab",
+    "tasks/T006.json": "7d583175dd2914af0e3b2d51f1a91fd01b9471c3968c390bb6190dfc283c7d1e",
+    "tasks/T007.json": "9a6e9840486a29cb3a6ef0369c76de8c9c022d1b550ea645f37a488ecf11a7e6",
+    "tasks/T008.json": "1d2b74f865262d3e68aedafe0f9afdfc83e532df4bd5ebec63bbabd2898f259a",
+    "tasks/T009.json": "806e01f3e29edad62312e08ff4fbd456dbb5f6cf7d701420e83e27ed710dee76"
+  }
+}
