@@ -701,55 +701,80 @@ export default function UnifiedWorkspace() {
           timeoutMs: 30000,
         });
 
-    const result = await generatePlatformVersions({
-      provider,
-      source: sourceArticle,
-      sourceVersionId: String(sourceArticle.sourceText.length),
-      platforms: regeneration.platforms,
-      existingVersions: platformVersionsFromDrafts(workspace.platforms),
-      signal: controller.signal,
-    });
+    const completedPlatforms: PlatformId[] = [];
+    const skippedChangedPlatforms: PlatformId[] = [];
+    const failedPlatforms: Array<{ platform: PlatformId; message: string }> = [];
+    let factCheckWarningCount = 0;
+    let cancelled = false;
+
+    for (const [index, platform] of regeneration.platforms.entries()) {
+      setStatusMessage(`正在生成${WORKSPACE_PLATFORM_LABELS[platform]}（${index + 1}/${regeneration.platforms.length}）`);
+      const result = await generatePlatformVersions({
+        provider,
+        source: sourceArticle,
+        sourceVersionId: String(sourceArticle.sourceText.length),
+        platforms: [platform],
+        existingVersions: platformVersionsFromDrafts(workspaceRef.current.platforms),
+        signal: controller.signal,
+      });
+
+      if (result.ok) {
+        completedPlatforms.push(platform);
+        factCheckWarningCount += result.diagnostics.details?.filter((detail) => detail.includes(":fact_check_warning:")).length ?? 0;
+        const current = workspaceRef.current;
+        const replacements = createGeneratedDraftReplacements(current.platforms, result.versions, [platform]);
+        const merged = applyPlatformDraftReplacements({
+          drafts: current.platforms,
+          histories: historyRef.current,
+          replacements,
+          changedSince: requestDraftSignatures,
+        });
+        const next = {
+          ...current,
+          ai: { ...current.ai, lastFallbackReason: undefined },
+          platforms: merged.drafts,
+        };
+        workspaceRef.current = next;
+        historyRef.current = merged.histories;
+        setHistory(merged.histories);
+        setWorkspace(next);
+        skippedChangedPlatforms.push(...merged.skippedChangedPlatforms);
+        continue;
+      }
+
+      if (result.error.code === "cancelled") {
+        cancelled = true;
+        break;
+      }
+
+      failedPlatforms.push({ platform, message: result.error.message });
+    }
 
     if (aiAbortRef.current === controller) aiAbortRef.current = undefined;
 
-    if (result.ok) {
-      const current = workspaceRef.current;
-      const replacements = createGeneratedDraftReplacements(current.platforms, result.versions, regeneration.platforms);
-      const merged = applyPlatformDraftReplacements({
-        drafts: current.platforms,
-        histories: historyRef.current,
-        replacements,
-        changedSince: requestDraftSignatures,
-      });
-      const next = {
-        ...current,
-        ai: { ...current.ai, lastFallbackReason: undefined },
-        platforms: merged.drafts,
-      };
-      workspaceRef.current = next;
-      historyRef.current = merged.histories;
-      setHistory(merged.histories);
-      setWorkspace(next);
+    if (cancelled) {
       setAiRunState("idle");
-      const factCheckWarningCount = result.diagnostics.details?.filter((detail) => detail.includes(":fact_check_warning:")).length ?? 0;
-      const reviewNotice = factCheckWarningCount > 0 ? "，请复核其中的数字或引用" : "";
-      setStatusMessage(
-        regeneration.skippedEditedPlatforms.length || merged.skippedChangedPlatforms.length
-          ? `AI 已生成 ${merged.appliedPlatforms.length} 个平台版本，人工编辑稿已保留${reviewNotice}`
-          : `AI 已生成 ${merged.appliedPlatforms.length} 个平台版本${reviewNotice}`,
-      );
+      setStatusMessage(completedPlatforms.length ? `已取消生成，已保留 ${completedPlatforms.length} 个已完成平台版本` : "AI 生成已取消");
       return;
     }
 
-    if (result.error.code === "cancelled") {
+    const reviewNotice = factCheckWarningCount > 0 ? "，请复核其中的数字或引用" : "";
+    const editedNotice =
+      regeneration.skippedEditedPlatforms.length || skippedChangedPlatforms.length ? "，人工编辑稿已保留" : "";
+    const failedNotice = failedPlatforms.length
+      ? `，${failedPlatforms.map(({ platform }) => `${WORKSPACE_PLATFORM_LABELS[platform]}生成失败`).join("、")}`
+      : "";
+
+    if (completedPlatforms.length > 0) {
       setAiRunState("idle");
-      setStatusMessage("AI 生成已取消");
+      setStatusMessage(`AI 已完成 ${completedPlatforms.length} 个平台版本${failedNotice}${editedNotice}${reviewNotice}`);
       return;
     }
 
-    replaceWorkspace(markAiGenerationFailure(workspaceRef.current, result.error.message));
+    const failureMessage = failedPlatforms[0]?.message ?? "AI 生成失败";
+    replaceWorkspace(markAiGenerationFailure(workspaceRef.current, failureMessage));
     setAiRunState("error");
-    setStatusMessage(`${result.error.message} 已保留当前编辑稿`);
+    setStatusMessage(`${failureMessage} 已保留当前编辑稿`);
   }
 
   function confirmEditedRegeneration(platforms: PlatformId[]) {

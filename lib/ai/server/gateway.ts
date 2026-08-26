@@ -17,9 +17,10 @@ export async function generateWithServerAI(
   const provider = createProvider(config, dependencies.fetchImpl);
 
   if (input.platforms.length > 1) {
-    const results = await Promise.all(
-      input.platforms.map((platform) => generateWithRetry(provider, { ...input, platforms: [platform] }, config.maxRetries)),
-    );
+    const results: ProviderGenerateResult[] = [];
+    for (const platform of input.platforms) {
+      results.push(await generateWithRetry(provider, { ...input, platforms: [platform] }, config.maxRetries));
+    }
     const first = results[0];
     return {
       response: {

@@ -86,10 +86,16 @@ describe("generateWithServerAI", () => {
   });
 
   it("splits multi-platform server requests before calling the model", async () => {
+    let activeRequests = 0;
+    let maxActiveRequests = 0;
     const provider = {
       model: "fixture-model",
       generate: vi.fn(async (input: ProviderGenerateOptions) => {
+        activeRequests += 1;
+        maxActiveRequests = Math.max(maxActiveRequests, activeRequests);
         void input;
+        await Promise.resolve();
+        activeRequests -= 1;
         return {
           response: { schemaVersion: 1 as const, drafts: [] },
           diagnostics: { provider: "openai-compatible" as const, model: "fixture-model" },
@@ -105,6 +111,7 @@ describe("generateWithServerAI", () => {
     ).resolves.toMatchObject({ diagnostics: { details: ["split_platform_requests:4"] } });
 
     expect(provider.generate).toHaveBeenCalledTimes(4);
+    expect(maxActiveRequests).toBe(1);
     const calls = provider.generate.mock.calls as Array<[ProviderGenerateOptions]>;
     expect(calls.map(([input]) => input.platforms)).toEqual([["wechat"], ["xiaohongshu"], ["douyinImage"], ["douyinLongform"]]);
   });
