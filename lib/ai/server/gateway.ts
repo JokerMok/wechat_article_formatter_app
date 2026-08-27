@@ -58,6 +58,6 @@ export function assertServerAIRequest(input: ProviderGenerateOptions) {
     throw new ServerAIError("AI_INVALID_REQUEST", "AI 请求内容无效。", false);
   }
   if (input.source.sourceText.length > 120000) {
-    throw new ServerAIError("AI_INVALID_REQUEST", "文章内容过长，请拆分后再生成。", false);
+    throw new ServerAIError("AI_INVALID_REQUEST", "文章内容过长，请拆分后再生成。", false, 413);
   }
 }

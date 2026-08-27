@@ -5,6 +5,7 @@ import JSZip from "jszip";
 import {
   Download,
   FilePlus2,
+  LayoutTemplate,
   ImagePlus,
   Lock,
   LockOpen,
@@ -16,9 +17,16 @@ import {
   RefreshCw,
   Save,
   Settings2,
+  Sparkles,
   Trash2,
   Undo2,
   Upload,
+  AlertCircle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -262,12 +270,14 @@ export default function UnifiedWorkspace() {
   const [assets, setAssets] = React.useState<AssetPlaceholder[]>([]);
   const [activePlatform, setActivePlatform] = React.useState<PlatformId>("wechat");
   const [mode, setMode] = React.useState<WorkspaceMode>("editor");
+  const [stylePanelOpen, setStylePanelOpen] = React.useState(false);
   const [saveState, setSaveState] = React.useState<"loading" | "dirty" | "saving" | "saved" | "error">("loading");
   const [statusMessage, setStatusMessage] = React.useState("正在恢复本地项目");
   const [history, setHistory] = React.useState<Record<PlatformId, DraftHistory>>(() => createEmptyHistories());
   const historyRef = React.useRef<Record<PlatformId, DraftHistory>>(createEmptyHistories());
   const [sessionApiKey, setSessionApiKey] = React.useState("");
   const [aiRunState, setAiRunState] = React.useState<"idle" | "generating" | "error">("idle");
+  const [aiStatusMessage, setAiStatusMessage] = React.useState<string | undefined>();
   const repoRef = React.useRef<ReturnType<typeof createProjectRepository> | undefined>(undefined);
   const assetRepoRef = React.useRef<ReturnType<typeof createAssetBlobRepository> | undefined>(undefined);
   const hydratedRef = React.useRef(false);
@@ -652,11 +662,12 @@ export default function UnifiedWorkspace() {
     await regeneratePlatforms([activePlatform]);
   }
 
-  async function regenerateAllPlatforms() {
-    await regeneratePlatforms([...WORKSPACE_PLATFORM_IDS]);
-  }
-
   async function regeneratePlatforms(platforms: PlatformId[]) {
+    if (!hydratedRef.current) {
+      setStatusMessage("本地项目仍在恢复，请稍候再重试；当前编辑稿未改变");
+      return;
+    }
+
     if (workspace.ai.mode === "deterministic") {
       const regeneration = confirmEditedRegeneration(platforms);
       if (!regeneration.platforms.length) {
@@ -674,7 +685,9 @@ export default function UnifiedWorkspace() {
     if (!isAiProviderConfigured(workspace.ai, sessionApiKey)) {
       replaceWorkspace(markAiConfigurationIncomplete(workspaceRef.current, missingFields));
       setAiRunState("error");
-      setStatusMessage(`AI 配置不完整：请填写 ${missingFields.join("、") || "Base URL、模型、Session API Key"}，或切回本地模式后重新生成。`);
+      const message = `AI 配置不完整：请填写 ${missingFields.join("、") || "Base URL、模型、Session API Key"}，或切回本地模式后重新生成。`;
+      setAiStatusMessage(message);
+      setStatusMessage(message);
       return;
     }
 
@@ -690,6 +703,7 @@ export default function UnifiedWorkspace() {
     aiAbortRef.current = controller;
     const requestDraftSignatures = createPlatformDraftSignatureMap(workspaceRef.current.platforms, regeneration.platforms);
     setAiRunState("generating");
+    setAiStatusMessage("正在生成平台版本");
     setStatusMessage("正在生成平台版本");
 
     const provider = workspace.ai.mode === "hosted"
@@ -708,7 +722,9 @@ export default function UnifiedWorkspace() {
     let cancelled = false;
 
     for (const [index, platform] of regeneration.platforms.entries()) {
-      setStatusMessage(`正在生成${WORKSPACE_PLATFORM_LABELS[platform]}（${index + 1}/${regeneration.platforms.length}）`);
+      const progressMessage = `正在生成${WORKSPACE_PLATFORM_LABELS[platform]}（${index + 1}/${regeneration.platforms.length}）`;
+      setAiStatusMessage(progressMessage);
+      setStatusMessage(progressMessage);
       const result = await generatePlatformVersions({
         provider,
         source: sourceArticle,
@@ -754,7 +770,9 @@ export default function UnifiedWorkspace() {
 
     if (cancelled) {
       setAiRunState("idle");
-      setStatusMessage(completedPlatforms.length ? `已取消生成，已保留 ${completedPlatforms.length} 个已完成平台版本` : "AI 生成已取消");
+      const message = completedPlatforms.length ? `已取消生成，已保留 ${completedPlatforms.length} 个已完成平台版本` : "AI 生成已取消";
+      setAiStatusMessage(message);
+      setStatusMessage(message);
       return;
     }
 
@@ -767,14 +785,42 @@ export default function UnifiedWorkspace() {
 
     if (completedPlatforms.length > 0) {
       setAiRunState("idle");
-      setStatusMessage(`AI 已完成 ${completedPlatforms.length} 个平台版本${failedNotice}${editedNotice}${reviewNotice}`);
+      const message = `AI 已完成 ${completedPlatforms.length} 个平台版本${failedNotice}${editedNotice}${reviewNotice}`;
+      setAiStatusMessage(message);
+      setStatusMessage(message);
       return;
     }
 
     const failureMessage = failedPlatforms[0]?.message ?? "AI 生成失败";
     replaceWorkspace(markAiGenerationFailure(workspaceRef.current, failureMessage));
     setAiRunState("error");
-    setStatusMessage(`${failureMessage} 已保留当前编辑稿`);
+    const message = `${failureMessage} 已保留当前编辑稿`;
+    setAiStatusMessage(message);
+    setStatusMessage(message);
+  }
+
+  function reparseCurrentPlatform() {
+    if (!hydratedRef.current) {
+      setStatusMessage("本地项目仍在恢复，请稍候再试；当前编辑稿未改变");
+      return;
+    }
+
+    const regeneration = confirmEditedRegeneration([activePlatform]);
+    if (!regeneration.platforms.length) {
+      setStatusMessage("已取消解析，当前平台编辑稿已保留");
+      return;
+    }
+
+    const current = workspaceRef.current;
+    const parsedArticle = parseSourceMarkdown(current.sourceMarkdown);
+    const nextDraft = regeneratePlatformDraft(current.platforms[activePlatform], parsedArticle, {
+      ...current.ai,
+      mode: "deterministic",
+    });
+    applyPlatformReplacements({ [activePlatform]: nextDraft });
+    setAiRunState("idle");
+    setAiStatusMessage(undefined);
+    setStatusMessage(`已解析源文并更新${WORKSPACE_PLATFORM_LABELS[activePlatform]}版本`);
   }
 
   function confirmEditedRegeneration(platforms: PlatformId[]) {
@@ -965,96 +1011,131 @@ export default function UnifiedWorkspace() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f7f7f4] text-[#20201d]">
-      <header className="sticky top-0 z-30 border-b bg-white/95 px-4 py-3 backdrop-blur">
-        <div className="flex flex-wrap items-center gap-3">
-          <Input value={projectTitle} onChange={(event) => setProjectTitle(event.target.value)} className="h-9 w-56 rounded-md" aria-label="项目名称" />
-          <Select value={projectId} onValueChange={openProject}>
-            <SelectTrigger className="h-9 w-52 rounded-md">
-              <SelectValue placeholder="打开项目" />
-            </SelectTrigger>
-            <SelectContent>
-              {projects.map((project) => (
-                <SelectItem key={project.id} value={project.id}>
-                  {project.title}
-                </SelectItem>
+    <main data-workspace-shell className="flex min-h-screen flex-col bg-[#edf2ef] text-[#17231f] lg:h-screen lg:overflow-hidden">
+      <header className="shrink-0 border-b border-[#31443b] bg-[#1d2b25] text-white lg:z-30">
+        <div className="mx-auto max-w-[1680px] px-4 py-4 lg:px-6">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#d9f4e4] text-[#17633d] shadow-sm">
+                <LayoutTemplate className="h-5 w-5" aria-hidden="true" />
+              </div>
+              <div>
+                <h1 className="text-lg font-semibold tracking-tight">自媒体内容排版器</h1>
+                <p className="mt-0.5 text-xs text-[#c0d0c7]">一篇源文，逐端生成可编辑成稿</p>
+              </div>
+            </div>
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <Input
+                value={projectTitle}
+                onChange={(event) => setProjectTitle(event.target.value)}
+                className="h-9 w-52 border-white/20 bg-white/10 text-white placeholder:text-white/50 focus-visible:ring-[#d9f4e4]"
+                aria-label="项目名称"
+              />
+              <Select value={projectId} onValueChange={openProject}>
+                <SelectTrigger className="h-9 w-48 border-white/20 bg-white/10 text-white hover:bg-white/15">
+                  <SelectValue placeholder="打开项目" />
+                </SelectTrigger>
+                <SelectContent>
+                  {projects.map((project) => (
+                    <SelectItem key={project.id} value={project.id}>
+                      {project.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div className="flex max-w-full flex-wrap items-center gap-1 rounded-lg border border-white/10 bg-white/5 p-1">
+                <Button type="button" size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" onClick={() => void createNewProject()}>
+                  <FilePlus2 className="h-4 w-4" />
+                  新建
+                </Button>
+                <Button type="button" size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" onClick={() => void saveProject()}>
+                  <Save className="h-4 w-4" />
+                  保存
+                </Button>
+                <Button type="button" size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" onClick={() => void exportCurrentProjectBackup()}>
+                  <Download className="h-4 w-4" />
+                  导出项目
+                </Button>
+                <Button type="button" size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" onClick={() => backupInputRef.current?.click()}>
+                  <Upload className="h-4 w-4" />
+                  导入
+                </Button>
+                <Button type="button" size="sm" variant="ghost" className="text-[#f4b6ab] hover:bg-[#8f3c33]/30 hover:text-[#ffd7d0]" onClick={() => void deleteCurrentProject()}>
+                  <Trash2 className="h-4 w-4" />
+                  删除
+                </Button>
+              </div>
+              <div className="flex max-w-full items-center gap-2 text-xs text-[#c0d0c7]" title={statusMessage}>
+                <span className={cn("rounded-full border px-2 py-1", saveState === "error" ? "border-[#f4b6ab]/60 bg-[#8f3c33]/30 text-[#ffd7d0]" : "border-white/15 bg-white/10")}>
+                  {saveStateLabel(saveState)}
+                </span>
+                <span className="max-w-[230px] truncate">{statusMessage}</span>
+              </div>
+            </div>
+          </div>
+          <div className="mt-5 flex flex-col gap-3 border-t border-white/10 pt-3 sm:flex-row sm:items-end sm:justify-between">
+            <nav className="flex min-w-0 flex-wrap items-end gap-1" aria-label="目标平台">
+              <span className="mr-2 pb-2 text-xs font-medium uppercase tracking-[0.12em] text-[#91aaa0]">平台工作区</span>
+              {WORKSPACE_PLATFORM_IDS.map((platform) => (
+                <button
+                  key={platform}
+                  type="button"
+                  aria-current={activePlatform === platform ? "page" : undefined}
+                  className={cn(
+                    "group flex items-center gap-2 rounded-none border-0 border-b-2 px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#d9f4e4] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1d2b25]",
+                    activePlatform === platform ? "border-[#d9f4e4] text-white" : "border-transparent text-[#9fb1a8] hover:border-[#6d897b] hover:text-white",
+                  )}
+                  onClick={() => setActivePlatform(platform)}
+                >
+                  <span className={cn("h-1.5 w-1.5 rounded-full", activePlatform === platform ? "bg-[#d9f4e4]" : "bg-[#6d897b]")} aria-hidden="true" />
+                  {WORKSPACE_PLATFORM_LABELS[platform]}
+                  <span className="text-[10px] text-[#9fb1a8]/70">{draftStatusLabel(workspace.platforms[platform].status)}</span>
+                </button>
               ))}
-            </SelectContent>
-          </Select>
-          <Button type="button" size="sm" variant="outline" onClick={() => void createNewProject()}>
-            <FilePlus2 className="h-4 w-4" />
-            新建
-          </Button>
-          <Button type="button" size="sm" variant="outline" onClick={() => void saveProject()}>
-            <Save className="h-4 w-4" />
-            保存
-          </Button>
-          <Button type="button" size="sm" variant="outline" onClick={() => void exportCurrentProjectBackup()}>
-            <Download className="h-4 w-4" />
-            导出项目
-          </Button>
-          <Button type="button" size="sm" variant="outline" onClick={() => backupInputRef.current?.click()}>
-            <Upload className="h-4 w-4" />
-            导入项目
-          </Button>
-          <Button type="button" size="sm" variant="outline" onClick={() => void deleteCurrentProject()}>
-            <Trash2 className="h-4 w-4" />
-            删除
-          </Button>
-          <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-            <span className={cn(saveState === "error" && "text-red-600")}>{saveStateLabel(saveState)}</span>
-            <span>{statusMessage}</span>
+            </nav>
+            <div className="flex gap-1 rounded-lg border border-white/10 bg-white/5 p-1 lg:hidden" aria-label="移动端视图">
+              {(["source", "editor", "preview"] as WorkspaceMode[]).map((view) => (
+                <button
+                  key={view}
+                  type="button"
+                  className={cn("rounded-md px-3 py-1.5 text-sm text-[#b9c9c1] transition-colors", mode === view ? "bg-white text-[#1d2b25]" : "hover:bg-white/10 hover:text-white")}
+                  onClick={() => setMode(view)}
+                >
+                  {view === "source" ? "素材" : view === "editor" ? "编辑" : "预览"}
+                </button>
+              ))}
+            </div>
           </div>
+          <p className="mt-3 text-xs text-[#91aaa0]">{PROJECT_BACKUP_IMAGE_NOTICE}</p>
         </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          {WORKSPACE_PLATFORM_IDS.map((platform) => (
-            <button
-              key={platform}
-              type="button"
-              className={cn(
-                "rounded-md border px-3 py-1.5 text-sm font-medium",
-                activePlatform === platform ? "border-[#20201d] bg-[#20201d] text-white" : "border-[#dedbd2] bg-white text-[#20201d]",
-              )}
-              onClick={() => setActivePlatform(platform)}
-            >
-              {WORKSPACE_PLATFORM_LABELS[platform]}
-            </button>
-          ))}
-          <div className="ml-auto flex gap-1 lg:hidden">
-            {(["source", "editor", "preview"] as WorkspaceMode[]).map((view) => (
-              <button
-                key={view}
-                type="button"
-                className={cn("rounded-md border px-3 py-1.5 text-sm", mode === view ? "border-[#20201d] bg-white" : "border-transparent")}
-                onClick={() => setMode(view)}
-              >
-                {view === "source" ? "素材" : view === "editor" ? "编辑" : "预览"}
-              </button>
-            ))}
-          </div>
-        </div>
-        <p className="mt-2 text-xs text-muted-foreground">{PROJECT_BACKUP_IMAGE_NOTICE}</p>
       </header>
 
-      <div className="grid min-h-[calc(100vh-108px)] grid-cols-1 gap-0 lg:grid-cols-[320px_minmax(420px,1fr)_420px]">
-        <aside className={cn("border-r bg-white", panelVisible(mode, "source"))}>
+      <StyleToolbar
+        open={stylePanelOpen}
+        onToggle={() => setStylePanelOpen((value) => !value)}
+        activePlatform={activePlatform}
+        draft={activeDraft}
+        layout={workspace.layout}
+        onLayoutChange={updateLayout}
+        onTemplateChange={(templateKey) => commitPlatform({ ...activeDraft, templateKey, editedWechatHtml: undefined, updatedAt: nowIso() })}
+        onRatioChange={(ratio) => commitPlatform(updatePlatformRatio(activeDraft, ratio))}
+      />
+
+      <div className="mx-auto grid w-full max-w-[1680px] grid-cols-1 gap-3 p-3 lg:min-h-0 lg:flex-1 lg:grid-cols-[300px_minmax(420px,1fr)_390px] lg:overflow-hidden lg:p-4">
+        <aside className={cn("overflow-hidden rounded-lg border border-[#d8e1dc] bg-white shadow-[0_2px_10px_rgba(31,52,42,0.04)] lg:min-h-0", panelVisible(mode, "source"))}>
           <SourcePanel
             sourceMarkdown={workspace.sourceMarkdown}
             article={sourceArticle}
             assets={assets}
             onSourceChange={(sourceMarkdown) => updateWorkspace({ sourceMarkdown })}
-            onReparse={() => {
-              updateWorkspace({ sourceMarkdown: workspace.sourceMarkdown });
-              setStatusMessage(`已解析 ${sourceArticle.blocks.length} 个内容块`);
-            }}
-            onRegenerateAll={regenerateAllPlatforms}
+            onReparse={reparseCurrentPlatform}
             onPickImages={() => fileInputRef.current?.click()}
             onUpload={uploadAssets}
             onInsertAsset={insertAsset}
           />
         </aside>
 
-        <section className={cn("min-w-0 border-r bg-[#fbfbf8]", panelVisible(mode, "editor"))}>
+        <section className={cn("min-w-0 overflow-hidden rounded-lg border border-[#d8e1dc] bg-white shadow-[0_2px_10px_rgba(31,52,42,0.04)] lg:min-h-0", panelVisible(mode, "editor"))}>
           <PlatformEditor
             draft={activeDraft}
             history={history[activePlatform]}
@@ -1066,17 +1147,13 @@ export default function UnifiedWorkspace() {
           />
         </section>
 
-        <aside className={cn("bg-white", panelVisible(mode, "preview"))}>
+        <aside className={cn("overflow-hidden rounded-lg border border-[#d8e1dc] bg-white shadow-[0_2px_10px_rgba(31,52,42,0.04)] lg:min-h-0", panelVisible(mode, "preview"))}>
           <PreviewPanel
             activePlatform={activePlatform}
             draft={activeDraft}
-            layout={workspace.layout}
             wechatHtml={wechatHtml}
             cardLayout={cardLayout}
             imageUrlByBlock={createImageUrlByBlock(activeDraft.content, assets)}
-            onLayoutChange={updateLayout}
-            onTemplateChange={(templateKey) => commitPlatform({ ...activeDraft, templateKey, editedWechatHtml: undefined, updatedAt: nowIso() })}
-            onRatioChange={(ratio) => commitPlatform(updatePlatformRatio(activeDraft, ratio))}
             onWechatPreviewBlur={(html) => commitPlatform(withWechatHtmlOverride(activeDraft, html))}
             onCopyWechat={copyWechat}
             onExportWechat={downloadWechatHtml}
@@ -1093,8 +1170,11 @@ export default function UnifiedWorkspace() {
             aiModel={workspace.ai.model}
             aiRunState={aiRunState}
             aiFallbackReason={workspace.ai.lastFallbackReason}
+            aiStatusMessage={aiStatusMessage}
+            statusMessage={statusMessage}
             sessionApiKey={sessionApiKey}
-            onAiModeChange={(modeValue) =>
+            onAiModeChange={(modeValue) => {
+              setAiStatusMessage(undefined);
               updateWorkspace({
                 ai: {
                   ...workspace.ai,
@@ -1106,12 +1186,13 @@ export default function UnifiedWorkspace() {
                         ? "自定义接口密钥只保存在当前会话，不会写入项目。"
                         : "当前使用本地确定性转换。",
                 },
-              })
-            }
+              });
+            }}
             onAiBaseUrlChange={(baseUrl) => updateWorkspace({ ai: { ...workspace.ai, baseUrl } })}
             onAiModelChange={(model) => updateWorkspace({ ai: { ...workspace.ai, model } })}
             onSessionApiKeyChange={setSessionApiKey}
             onCancelAi={cancelAiGeneration}
+            onRetryAi={() => void regenerateCurrentPlatform()}
           />
         </aside>
       </div>
@@ -1148,7 +1229,6 @@ function SourcePanel(props: {
   assets: AssetPlaceholder[];
   onSourceChange: (value: string) => void;
   onReparse: () => void;
-  onRegenerateAll: () => Promise<void>;
   onPickImages: () => void;
   onUpload: (files: FileList | File[]) => Promise<void>;
   onInsertAsset: (asset: AssetPlaceholder) => void;
@@ -1162,12 +1242,15 @@ function SourcePanel(props: {
         void props.onUpload(event.dataTransfer.files);
       }}
     >
-      <div className="border-b p-4">
+      <div className="border-b border-[#e3e9e5] bg-[#fbfcfb] p-4">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold">源文与素材</h2>
+          <div>
+            <h2 className="text-sm font-semibold">源文与素材</h2>
+            <p className="mt-1 text-xs text-muted-foreground">编辑源文，解析并应用到当前平台</p>
+          </div>
           <Button type="button" size="sm" variant="outline" onClick={props.onReparse}>
             <RefreshCw className="h-4 w-4" />
-            解析
+            解析并应用
           </Button>
         </div>
         <div className="grid grid-cols-3 gap-2 text-xs">
@@ -1176,33 +1259,29 @@ function SourcePanel(props: {
           <Metric label="告警" value={props.article.warnings.length} />
         </div>
       </div>
-      <div className="flex min-h-0 flex-1 flex-col p-4">
+      <div className="flex min-h-0 flex-1 flex-col p-4 lg:overflow-hidden">
         <Textarea
           value={props.sourceMarkdown}
           onChange={(event) => props.onSourceChange(event.target.value)}
-          className="min-h-[360px] flex-1 resize-none rounded-md font-mono text-sm leading-6"
+          className="min-h-[260px] flex-1 resize-none overflow-y-auto rounded-lg border-[#d8e1dc] bg-[#fbfcfb] font-mono text-sm leading-6 shadow-none focus-visible:ring-[#8fc8a8] lg:min-h-0"
           spellCheck={false}
           aria-label="源文 Markdown"
         />
-        <div className="mt-3 flex gap-2">
-          <Button type="button" size="sm" onClick={() => void props.onRegenerateAll()}>
-            <RefreshCw className="h-4 w-4" />
-            生成四端
-          </Button>
+        <div className="mt-3 flex flex-wrap gap-2">
           <Button type="button" size="sm" variant="outline" onClick={props.onPickImages}>
             <ImagePlus className="h-4 w-4" />
             上传图片
           </Button>
         </div>
       </div>
-      <div className="border-t p-4">
-        <h3 className="mb-2 text-xs font-semibold text-muted-foreground">素材</h3>
+      <div className="max-h-48 overflow-y-auto border-t border-[#e3e9e5] bg-[#fbfcfb] p-4 lg:max-h-44">
+        <h3 className="mb-2 text-xs font-semibold text-[#4c6659]">素材</h3>
         <div className="grid grid-cols-2 gap-2">
           {props.assets.map((asset) => (
             <button
               key={asset.id}
               type="button"
-              className="overflow-hidden rounded-md border bg-white text-left"
+              className="overflow-hidden rounded-lg border border-[#d8e1dc] bg-white text-left transition-shadow hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8fc8a8]"
               onClick={() => props.onInsertAsset(asset)}
             >
               {asset.objectUrl ? (
@@ -1214,7 +1293,7 @@ function SourcePanel(props: {
               <span className="block truncate px-2 py-1 text-xs">{asset.fileName}</span>
             </button>
           ))}
-          {!props.assets.length && <div className="col-span-2 rounded-md border border-dashed p-4 text-center text-xs text-muted-foreground">拖入或上传 PNG/JPEG/WebP</div>}
+          {!props.assets.length && <div className="col-span-2 rounded-lg border border-dashed border-[#b8c9bf] p-4 text-center text-xs text-muted-foreground">拖入或上传 PNG/JPEG/WebP</div>}
         </div>
       </div>
     </div>
@@ -1234,7 +1313,7 @@ function PlatformEditor(props: {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="border-b bg-white p-4">
+      <div className="border-b border-[#e3e9e5] bg-white p-4">
         <div className="flex flex-wrap items-center gap-2">
           <div>
             <div className="text-xs text-muted-foreground">{WORKSPACE_PLATFORM_LABELS[props.draft.platform]}</div>
@@ -1249,7 +1328,7 @@ function PlatformEditor(props: {
             </Button>
             <Button type="button" size="sm" onClick={() => void props.onRegenerate()}>
               <RefreshCw className="h-4 w-4" />
-              生成
+              生成当前平台
             </Button>
           </div>
         </div>
@@ -1273,21 +1352,21 @@ function PlatformEditor(props: {
           />
         )}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto p-4">
-        <div className="space-y-3">
+      <div data-editor-scroll className="min-h-0 flex-1 overflow-y-auto bg-[#f5f8f6] p-4">
+        <div className="mx-auto max-w-[860px] overflow-hidden rounded-lg border border-[#d8e1dc] bg-white shadow-[0_2px_8px_rgba(31,52,42,0.04)]">
           {props.draft.content.blocks.map((block) => {
             const editable = block.type !== "divider" && block.type !== "pageBreak";
             return (
-              <div key={block.id} className="rounded-md border bg-white p-3">
+              <div key={block.id} className="border-b border-[#edf1ee] p-4 last:border-b-0">
                 <div className="mb-2 flex items-center justify-between gap-2">
-                  <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">{blockLabel(block)}</span>
+                  <span className="rounded-full bg-[#edf2ef] px-2 py-0.5 text-xs text-[#4c6659]">{blockLabel(block)}</span>
                   <span className="truncate text-xs text-muted-foreground">Line {block.source.startLine}</span>
                 </div>
                 <Textarea
                   value={blockText(block)}
                   disabled={!editable}
                   onChange={(event) => props.onDraftChange(updatePlatformBlock(props.draft, block.id, event.target.value))}
-                  className="min-h-24 resize-y rounded-md"
+                  className="min-h-24 resize-y rounded-md border-[#e3e9e5] bg-[#fbfcfb] shadow-none focus-visible:ring-[#8fc8a8]"
                   aria-label={`${blockLabel(block)}内容`}
                 />
               </div>
@@ -1295,7 +1374,7 @@ function PlatformEditor(props: {
           })}
         </div>
       </div>
-      <div className="border-t bg-white p-3">
+      <div className="border-t border-[#e3e9e5] bg-white p-3">
         <Button type="button" size="sm" variant="outline" onClick={() => void props.onCopyText(socialText || props.draft.title, "文案已复制")}>
           复制文案
         </Button>
@@ -1304,16 +1383,103 @@ function PlatformEditor(props: {
   );
 }
 
-function PreviewPanel(props: {
+function StyleToolbar(props: {
+  open: boolean;
+  onToggle: () => void;
   activePlatform: PlatformId;
   draft: PlatformDraft;
   layout: LayoutSettings;
-  wechatHtml: string;
-  cardLayout?: CardLayoutResult;
-  imageUrlByBlock: Record<string, string>;
   onLayoutChange: (patch: Partial<LayoutSettings>) => void;
   onTemplateChange: (templateKey: TemplateKey) => void;
   onRatioChange: (ratio: RatioMode) => void;
+}) {
+  const currentTemplate = templateList.find((template) => template.key === props.draft.templateKey);
+  const isCardPlatform = props.activePlatform !== "wechat" && props.activePlatform !== "douyinLongform";
+
+  return (
+    <section className="border-b border-[#d8e1dc] bg-white">
+      <div className="mx-auto max-w-[1680px] px-4 py-2.5 lg:px-6">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[#e5f3eb] text-[#17633d]">
+              <Settings2 className="h-4 w-4" aria-hidden="true" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-sm font-semibold">样式与画布</h2>
+                <span className="rounded-full bg-[#edf2ef] px-2 py-0.5 text-[11px] text-[#4c6659]">{WORKSPACE_PLATFORM_LABELS[props.activePlatform]}</span>
+              </div>
+              <p className="truncate text-xs text-muted-foreground">
+                {props.activePlatform === "wechat"
+                  ? `公众号样式：${currentTemplate?.name ?? "未选择"}`
+                  : props.activePlatform === "douyinImage"
+                    ? `图文比例：${props.draft.ratio}`
+                    : isCardPlatform
+                      ? "图文画布：可调边距、字号和间距"
+                      : "长文使用当前平台的内容结构"
+                }
+              </p>
+            </div>
+          </div>
+          <Button type="button" size="sm" variant="outline" className="shrink-0" onClick={props.onToggle} aria-expanded={props.open} aria-controls="style-toolbar-controls">
+            {props.open ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            {props.open ? "收起" : "调整样式"}
+          </Button>
+        </div>
+        {props.open && (
+          <div id="style-toolbar-controls" className="mt-3 grid gap-3 border-t border-[#e3e9e5] pt-3 md:grid-cols-2 xl:grid-cols-4">
+            {props.activePlatform === "wechat" && (
+              <SettingRow label="公众号样式">
+                <Select value={props.draft.templateKey} onValueChange={(value) => props.onTemplateChange(value as TemplateKey)}>
+                  <SelectTrigger className="h-9 rounded-md">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {templateList.map((template) => (
+                      <SelectItem key={template.key} value={template.key}>
+                        {template.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </SettingRow>
+            )}
+            {props.activePlatform === "douyinImage" && (
+              <SettingRow label="图片比例">
+                <div className="grid grid-cols-2 gap-2" role="group" aria-label="图片比例">
+                  <Toggle className="w-full" pressed={props.draft.ratio === "3:4"} onPressedChange={() => props.onRatioChange("3:4")}>3:4</Toggle>
+                  <Toggle className="w-full" pressed={props.draft.ratio === "9:16"} onPressedChange={() => props.onRatioChange("9:16")}>9:16</Toggle>
+                </div>
+              </SettingRow>
+            )}
+            {isCardPlatform && (
+              <>
+                <Range label="边距" value={props.layout.margin} min={48} max={140} step={2} onChange={(margin) => props.onLayoutChange({ margin })} />
+                <Range label="标题" value={props.layout.titleFontSize} min={56} max={92} onChange={(titleFontSize) => props.onLayoutChange({ titleFontSize })} />
+                <Range label="正文" value={props.layout.bodyFontSize} min={28} max={44} onChange={(bodyFontSize) => props.onLayoutChange({ bodyFontSize })} />
+                <Range label="行距" value={props.layout.lineSpacing} min={1.1} max={1.8} step={0.05} onChange={(lineSpacing) => props.onLayoutChange({ lineSpacing })} />
+                <Range label="段距" value={props.layout.paragraphSpacing} min={18} max={64} onChange={(paragraphSpacing) => props.onLayoutChange({ paragraphSpacing })} />
+              </>
+            )}
+            {props.activePlatform === "douyinLongform" && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground md:col-span-2 xl:col-span-4">
+                <Sparkles className="h-4 w-4" aria-hidden="true" />
+                当前平台为抖音长文，标题、正文、重点和结尾会在右侧预览中同步更新。
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function PreviewPanel(props: {
+  activePlatform: PlatformId;
+  draft: PlatformDraft;
+  wechatHtml: string;
+  cardLayout?: CardLayoutResult;
+  imageUrlByBlock: Record<string, string>;
   onWechatPreviewBlur: (html: string) => void;
   onCopyWechat: () => Promise<void>;
   onExportWechat: () => void;
@@ -1330,76 +1496,82 @@ function PreviewPanel(props: {
   aiModel: string;
   aiRunState: "idle" | "generating" | "error";
   aiFallbackReason?: string;
+  aiStatusMessage?: string;
+  statusMessage: string;
   sessionApiKey: string;
   onAiModeChange: (mode: "deterministic" | "hosted" | "custom") => void;
   onAiBaseUrlChange: (value: string) => void;
   onAiModelChange: (value: string) => void;
   onSessionApiKeyChange: (value: string) => void;
   onCancelAi: () => void;
+  onRetryAi: () => void;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="border-b p-4">
-        <div className="mb-3 flex items-center gap-2">
-          <Settings2 className="h-4 w-4" />
-          <h2 className="text-sm font-semibold">预览与设置</h2>
+      <div className="border-b bg-white p-4">
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4" aria-hidden="true" />
+          <div>
+            <h2 className="text-sm font-semibold">生成与预览</h2>
+            <p className="text-xs text-muted-foreground">{WORKSPACE_PLATFORM_LABELS[props.activePlatform]} · 只生成当前平台</p>
+          </div>
         </div>
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          <Metric label="状态" value={props.draft.status} />
-          <Metric label="页面" value={props.cardLayout?.pages.length ?? "HTML"} />
-        </div>
-        <div className="mt-4 space-y-3">
-          {props.activePlatform === "wechat" && (
-            <SettingRow label="公众号样式">
-              <Select value={props.draft.templateKey} onValueChange={(value) => props.onTemplateChange(value as TemplateKey)}>
-                <SelectTrigger className="h-9 rounded-md">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {templateList.map((template) => (
-                    <SelectItem key={template.key} value={template.key}>
-                      {template.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </SettingRow>
-          )}
-          {props.activePlatform === "douyinImage" && (
-            <SettingRow label="比例">
-              <div className="flex gap-2">
-                <Toggle pressed={props.draft.ratio === "3:4"} onPressedChange={() => props.onRatioChange("3:4")}>3:4</Toggle>
-                <Toggle pressed={props.draft.ratio === "9:16"} onPressedChange={() => props.onRatioChange("9:16")}>9:16</Toggle>
-              </div>
-            </SettingRow>
-          )}
-          {props.activePlatform !== "wechat" && props.activePlatform !== "douyinLongform" && (
-            <>
-              <Range label="边距" value={props.layout.margin} min={48} max={140} step={2} onChange={(margin) => props.onLayoutChange({ margin })} />
-              <Range label="标题" value={props.layout.titleFontSize} min={56} max={92} onChange={(titleFontSize) => props.onLayoutChange({ titleFontSize })} />
-              <Range label="正文" value={props.layout.bodyFontSize} min={28} max={44} onChange={(bodyFontSize) => props.onLayoutChange({ bodyFontSize })} />
-              <Range label="行距" value={props.layout.lineSpacing} min={1.1} max={1.8} step={0.05} onChange={(lineSpacing) => props.onLayoutChange({ lineSpacing })} />
-              <Range label="段距" value={props.layout.paragraphSpacing} min={18} max={64} onChange={(paragraphSpacing) => props.onLayoutChange({ paragraphSpacing })} />
-            </>
-          )}
+
+        <div className="mt-3 rounded-md border bg-[#fafaf8] p-3">
           <SettingRow label="生成模式">
-            <div className="flex gap-2">
-              <Toggle pressed={props.aiMode === "deterministic"} onPressedChange={() => props.onAiModeChange("deterministic")}>本地</Toggle>
-              <Toggle pressed={props.aiMode === "hosted"} onPressedChange={() => props.onAiModeChange("hosted")}>服务端 AI</Toggle>
-              <Toggle pressed={props.aiMode === "custom"} onPressedChange={() => props.onAiModeChange("custom")}>自定义接口</Toggle>
+            <div className="grid grid-cols-3 gap-1 rounded-md bg-[#eceeea] p-1" role="group" aria-label="生成模式">
+              <Toggle className="w-full px-2 text-xs" pressed={props.aiMode === "deterministic"} onPressedChange={() => props.onAiModeChange("deterministic")}>
+                本地
+              </Toggle>
+              <Toggle className="w-full px-2 text-xs" pressed={props.aiMode === "hosted"} onPressedChange={() => props.onAiModeChange("hosted")}>
+                服务端 AI
+              </Toggle>
+              <Toggle className="w-full px-2 text-xs" pressed={props.aiMode === "custom"} onPressedChange={() => props.onAiModeChange("custom")}>
+                自定义接口
+              </Toggle>
             </div>
           </SettingRow>
           {props.aiMode === "hosted" && (
-            <div className="space-y-2 rounded-md border bg-white p-3 text-xs text-muted-foreground">
-              <p>密钥、模型和上游地址由服务端环境变量管理。</p>
-              <p>{props.aiRunState === "generating" ? "生成中" : props.aiFallbackReason ?? "首次生成时会检查服务端 AI 配置。"}</p>
-              <Button type="button" size="sm" variant="outline" onClick={props.onCancelAi} disabled={props.aiRunState !== "generating"}>
-                取消生成
-              </Button>
+            <div
+              className={cn(
+                "mt-3 space-y-2 rounded-md border p-3 text-xs",
+                props.aiRunState === "error" ? "border-red-200 bg-red-50 text-red-800" : props.aiRunState === "generating" ? "border-[#c8d8cf] bg-[#f1f7f3] text-[#28553d]" : "border-[#dfe4df] bg-white text-muted-foreground",
+              )}
+              role={props.aiRunState === "error" ? "alert" : "status"}
+              aria-live="polite"
+            >
+              <div className="flex items-center gap-2 font-medium">
+                {props.aiRunState === "generating" ? <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" /> : props.aiRunState === "error" ? <AlertCircle className="h-4 w-4" aria-hidden="true" /> : <CheckCircle2 className="h-4 w-4" aria-hidden="true" />}
+                <span>{props.aiRunState === "generating" ? "正在请求服务端 AI" : props.aiRunState === "error" ? "服务端 AI 生成失败" : "服务端 AI 已就绪"}</span>
+              </div>
+              <p>
+                {props.aiRunState === "generating"
+                  ? props.aiStatusMessage ?? props.statusMessage
+                  : props.aiRunState === "error"
+                    ? props.aiStatusMessage ?? props.aiFallbackReason ?? "请求失败，当前编辑稿已保留。"
+                    : props.aiStatusMessage ?? (props.statusMessage.startsWith("AI 已完成") ? props.statusMessage : undefined)
+                      ?? "密钥、模型和上游地址由服务端环境变量管理；点击中间栏“生成”只更新当前平台。"
+                }
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={props.onCancelAi} disabled={props.aiRunState !== "generating"}>
+                  取消生成
+                </Button>
+                {props.aiRunState === "error" && (
+                  <>
+                    <Button type="button" size="sm" onClick={props.onRetryAi}>
+                      重试服务端 AI
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => props.onAiModeChange("deterministic")}>
+                      切换本地模式
+                    </Button>
+                  </>
+                )}
+              </div>
             </div>
           )}
           {props.aiMode === "custom" && (
-            <div className="space-y-2 rounded-md border bg-white p-3">
+            <div className="mt-3 space-y-2 rounded-md border bg-white p-3">
               <Input value={props.aiBaseUrl} onChange={(event) => props.onAiBaseUrlChange(event.target.value)} className="h-9 rounded-md" aria-label="AI Base URL" placeholder="Base URL" />
               <Input value={props.aiModel} onChange={(event) => props.onAiModelChange(event.target.value)} className="h-9 rounded-md" aria-label="AI 模型" placeholder="模型" />
               <Input
@@ -1420,14 +1592,21 @@ function PreviewPanel(props: {
             </div>
           )}
         </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+          <Metric label="当前稿件" value={props.draft.status} />
+          <Metric label="预览页面" value={props.cardLayout?.pages.length ?? "HTML"} />
+        </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto bg-[#efeee8] p-4">
+      <div data-preview-scroll className="min-h-0 flex-1 overflow-y-auto bg-[#efeee8] p-4">
         {props.activePlatform === "wechat" ? (
           <WechatPreview html={props.wechatHtml} onBlur={props.onWechatPreviewBlur} onCopy={props.onCopyWechat} onExport={props.onExportWechat} />
         ) : props.activePlatform === "douyinLongform" ? (
           <LongformPreview draft={props.draft} />
         ) : (
           <CardPreview
+            key={props.activePlatform}
+            activePlatform={props.activePlatform}
             layout={props.cardLayout}
             imageUrlByBlock={props.imageUrlByBlock}
             onTogglePageLock={props.onTogglePageLock}
@@ -1489,6 +1668,7 @@ function LongformPreview({ draft }: { draft: PlatformDraft }) {
 }
 
 function CardPreview(props: {
+  activePlatform: PlatformId;
   layout?: CardLayoutResult;
   imageUrlByBlock: Record<string, string>;
   onTogglePageLock: (page: CardLayoutPage) => void;
@@ -1500,112 +1680,142 @@ function CardPreview(props: {
   onCopyCard: (page: CardLayoutPage) => void;
   onExportPackage: () => void;
 }) {
-  if (!props.layout) return null;
-  const hasManualPages = props.layout.pages.some((page) => page.manual || page.locked);
+  const pages = props.layout?.pages ?? [];
+  const [activePageIndex, setActivePageIndex] = React.useState(0);
+
+  if (!props.layout || pages.length === 0) return null;
+  const currentPageIndex = Math.min(activePageIndex, pages.length - 1);
+  const page = pages[currentPageIndex] ?? pages[0];
+  if (!page) return null;
+
+  const hasManualPages = pages.some((candidate) => candidate.manual || candidate.locked);
+  const previewWidth = 340;
   return (
-    <div className="space-y-5">
-      <div className="mx-auto flex w-[270px] items-center justify-between rounded-md border bg-white p-2 text-xs text-muted-foreground">
-        <span>当前平台全部页面</span>
+    <div className="space-y-4">
+      <div className="mx-auto flex w-full max-w-[340px] items-center justify-between rounded-md border bg-white p-2 text-xs text-muted-foreground">
+        <span>轮播图预览 · {page.pageNumber}/{page.totalPages}</span>
         <Button type="button" size="sm" variant="outline" onClick={props.onExportPackage}>
           <Download className="h-4 w-4" />
           下载 ZIP
         </Button>
       </div>
       {hasManualPages && (
-        <div className="mx-auto flex w-[270px] items-center justify-between rounded-md border bg-white p-2 text-xs text-muted-foreground">
+        <div className="mx-auto flex w-full max-w-[340px] items-center justify-between rounded-md border bg-white p-2 text-xs text-muted-foreground">
           <span>已启用手动页</span>
           <Button type="button" size="sm" variant="outline" onClick={props.onClearManualPages}>
             清除
           </Button>
         </div>
       )}
-      {props.layout.pages.map((page) => (
-        <div key={page.id} className="mx-auto w-[270px]">
-          <div className="mb-2 space-y-2 text-xs text-muted-foreground">
-            <span>
-              {page.canvas.width}x{page.canvas.height} · {page.pageNumber}/{page.totalPages}
-              {page.manual ? " · 手动" : ""}
-              {page.locked ? " · 锁定" : ""}
-            </span>
-            <div className="flex flex-wrap gap-1">
-              <Button type="button" size="sm" variant="outline" onClick={() => props.onTogglePageLock(page)} aria-label={page.locked ? "解锁页面" : "锁定页面"}>
-                {page.locked ? <Lock className="h-4 w-4" /> : <LockOpen className="h-4 w-4" />}
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => props.onSplitPage(page, page.nodes[Math.max(0, Math.floor(page.nodes.length / 2) - 1)]?.id ?? "")}
-                disabled={page.nodes.length < 2}
-                aria-label="拆分页面"
-              >
-                <Scissors className="h-4 w-4" />
-              </Button>
-              <Button type="button" size="sm" variant="outline" onClick={() => props.onMergePage(page)} disabled={page.pageNumber >= page.totalPages || page.locked} aria-label="合并下一页">
-                <Merge className="h-4 w-4" />
-              </Button>
-              <Button type="button" size="sm" variant="outline" onClick={() => props.onMovePage(page, -1)} disabled={page.pageNumber <= 1} aria-label="上移页面">
-                <MoveUp className="h-4 w-4" />
-              </Button>
-              <Button type="button" size="sm" variant="outline" onClick={() => props.onMovePage(page, 1)} disabled={page.pageNumber >= page.totalPages} aria-label="下移页面">
-                <MoveDown className="h-4 w-4" />
-              </Button>
-              <Button type="button" size="sm" variant="outline" onClick={() => props.onCopyCard(page)}>
-                复制
-              </Button>
-              <Button type="button" size="sm" variant="outline" onClick={() => props.onExportCard(page)}>
-                PNG
-              </Button>
-            </div>
-          </div>
-          <div className="overflow-hidden rounded-md border bg-[#fffbf6] shadow-sm" style={{ width: 270, height: Math.round((270 * page.canvas.height) / page.canvas.width) }}>
-            <div style={{ width: page.canvas.width, height: page.canvas.height, transform: `scale(${270 / page.canvas.width})`, transformOrigin: "top left", position: "relative" }}>
-              <div className="absolute bg-[#d8c5b1]" style={{ left: page.safeArea.x, top: page.safeArea.y - 36, width: page.safeArea.width, height: 4 }} />
-              {page.nodes.map((node) => {
-                const imageUrl = props.imageUrlByBlock[node.blockId];
-                if (node.kind === "image") {
-                  return imageUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      key={node.id}
-                      src={imageUrl}
-                      alt=""
-                      className="absolute object-cover"
-                      style={{
-                        left: node.image?.x ?? node.x,
-                        top: node.image?.y ?? node.y,
-                        width: node.image?.width ?? node.width,
-                        height: node.image?.height ?? node.height,
-                      }}
-                    />
-                  ) : (
-                    <div key={node.id} className="absolute bg-[#f1e7dc]" style={{ left: node.x, top: node.y, width: node.width, height: node.height }} />
-                  );
-                }
-                return (
-                  <div
-                    key={node.id}
-                    className={cn("absolute whitespace-pre-wrap break-words", node.kind === "focus" && "rounded-lg bg-[#f1e7dc] px-4 py-3")}
-                    style={{
-                      left: node.x,
-                      top: node.y,
-                      width: node.width,
-                      fontFamily: node.style?.fontFamily,
-                      fontSize: node.style?.fontSize,
-                      lineHeight: node.style?.lineHeight,
-                      fontWeight: node.style?.fontWeight,
-                      color: node.kind === "body" ? "#6b3a16" : "#8a430e",
-                    }}
-                  >
-                    {node.lines.map((line) => line.text).join("\n")}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-          {!!page.overflow.length && <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">当前页有溢出，调整字号或边距后会重新计算。</div>}
+      <div className="mx-auto flex w-full max-w-[340px] items-center gap-2 rounded-md border bg-white p-2">
+        <Button type="button" size="icon" variant="outline" onClick={() => setActivePageIndex(Math.max(0, currentPageIndex - 1))} disabled={currentPageIndex === 0} aria-label="上一页">
+          <ChevronLeft className="h-4 w-4" />
+        </Button>
+        <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto" role="tablist" aria-label="轮播页导航">
+          {pages.map((candidate, index) => (
+            <button
+              key={candidate.id}
+              type="button"
+              role="tab"
+              aria-selected={index === currentPageIndex}
+              aria-label={`第${index + 1}页`}
+              className={cn("h-8 min-w-8 rounded-md border px-2 text-xs font-medium text-muted-foreground", index === currentPageIndex ? "border-[#17633d] bg-[#e5f3eb] text-[#17633d]" : "border-[#d8e1dc] bg-white hover:bg-[#f1f7f3]")}
+              onClick={() => setActivePageIndex(index)}
+            >
+              {String(index + 1).padStart(2, "0")}
+            </button>
+          ))}
         </div>
-      ))}
+        <Button type="button" size="icon" variant="outline" onClick={() => setActivePageIndex(Math.min(pages.length - 1, currentPageIndex + 1))} disabled={currentPageIndex >= pages.length - 1} aria-label="下一页">
+          <ChevronRight className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="mx-auto w-full max-w-[340px] space-y-2 text-xs text-muted-foreground">
+        <div className="flex items-center justify-between">
+          <span>
+            {page.canvas.width}x{page.canvas.height} · {page.pageNumber}/{page.totalPages}
+            {page.manual ? " · 手动" : ""}
+            {page.locked ? " · 锁定" : ""}
+          </span>
+          <span>{page.nodes.length} 个内容块</span>
+        </div>
+        <div className="flex flex-wrap gap-1">
+          <Button type="button" size="sm" variant="outline" onClick={() => props.onTogglePageLock(page)} aria-label={page.locked ? "解锁页面" : "锁定页面"}>
+            {page.locked ? <Lock className="h-4 w-4" /> : <LockOpen className="h-4 w-4" />}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => props.onSplitPage(page, page.nodes[Math.max(0, Math.floor(page.nodes.length / 2) - 1)]?.id ?? "")}
+            disabled={page.nodes.length < 2}
+            aria-label="拆分页面"
+          >
+            <Scissors className="h-4 w-4" />
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => props.onMergePage(page)} disabled={page.pageNumber >= page.totalPages || page.locked} aria-label="合并下一页">
+            <Merge className="h-4 w-4" />
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => props.onMovePage(page, -1)} disabled={page.pageNumber <= 1} aria-label="上移页面">
+            <MoveUp className="h-4 w-4" />
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => props.onMovePage(page, 1)} disabled={page.pageNumber >= page.totalPages} aria-label="下移页面">
+            <MoveDown className="h-4 w-4" />
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => props.onCopyCard(page)}>
+            复制
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => props.onExportCard(page)}>
+            PNG
+          </Button>
+        </div>
+      </div>
+      <div data-card-preview className="mx-auto overflow-hidden rounded-md border bg-[#fffbf6] shadow-sm" style={{ width: previewWidth, height: Math.round((previewWidth * page.canvas.height) / page.canvas.width) }}>
+        <div style={{ width: page.canvas.width, height: page.canvas.height, transform: `scale(${previewWidth / page.canvas.width})`, transformOrigin: "top left", position: "relative" }}>
+          <div className="absolute bg-[#d8c5b1]" style={{ left: page.safeArea.x, top: page.safeArea.y - 36, width: page.safeArea.width, height: 4 }} />
+          {page.nodes.map((node) => {
+            const imageUrl = props.imageUrlByBlock[node.blockId];
+            if (node.kind === "image") {
+              return imageUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  key={node.id}
+                  src={imageUrl}
+                  alt=""
+                  className="absolute object-cover"
+                  style={{
+                    left: node.image?.x ?? node.x,
+                    top: node.image?.y ?? node.y,
+                    width: node.image?.width ?? node.width,
+                    height: node.image?.height ?? node.height,
+                  }}
+                />
+              ) : (
+                <div key={node.id} className="absolute bg-[#f1e7dc]" style={{ left: node.x, top: node.y, width: node.width, height: node.height }} />
+              );
+            }
+            return (
+              <div
+                key={node.id}
+                className={cn("absolute whitespace-pre-wrap break-words", node.kind === "focus" && "rounded-lg bg-[#f1e7dc] px-4 py-3")}
+                  style={{
+                    left: node.x,
+                    top: node.y,
+                    width: node.width,
+                    fontFamily: node.style?.fontFamily,
+                    fontSize: node.style?.fontSize,
+                    lineHeight: node.style?.lineHeight ? `${node.style.lineHeight}px` : undefined,
+                    fontWeight: node.style?.fontWeight,
+                    color: node.kind === "body" ? "#6b3a16" : "#8a430e",
+                  }}
+              >
+                {node.lines.map((line) => line.text).join("\n")}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      {!!page.overflow.length && <div className="mx-auto mt-2 w-full max-w-[340px] rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">当前页有溢出，调整字号或边距后会重新计算。</div>}
     </div>
   );
 }
@@ -1648,6 +1858,21 @@ function saveStateLabel(state: "loading" | "dirty" | "saving" | "saved" | "error
       return "已保存";
     case "error":
       return "保存失败";
+  }
+}
+
+function draftStatusLabel(status: PlatformDraft["status"]) {
+  switch (status) {
+    case "edited":
+      return "已编辑";
+    case "generated":
+      return "已生成";
+    case "error":
+      return "有错误";
+    case "locked":
+      return "已锁定";
+    default:
+      return "草稿";
   }
 }
 

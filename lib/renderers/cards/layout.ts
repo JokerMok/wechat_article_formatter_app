@@ -672,7 +672,10 @@ function gapForEntry(kind: FlowEntry["kind"], typography: CardTypography) {
 }
 
 function textColumnWidth(safeWidth: number) {
-  return Math.min(safeWidth, 330);
+  // The card canvas is already the output surface. Narrowing the text column to
+  // 330px creates artificial line breaks and turns ordinary articles into many
+  // undersized pages.
+  return Math.max(1, safeWidth);
 }
 
 function wrapText(text: string, maxWidth: number, style: TextStyle, measurer: TextMeasurer): string[] {

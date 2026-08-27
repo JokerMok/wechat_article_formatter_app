@@ -10,6 +10,7 @@ export const serverAIErrorCodes = [
   "AI_INVALID_RESPONSE",
   "AI_ABORTED",
   "AI_INTERNAL_ERROR",
+  "AI_FORBIDDEN",
 ] as const;
 
 export type ServerAIErrorCode = (typeof serverAIErrorCodes)[number];
@@ -51,6 +52,11 @@ export function normalizeServerAIError(error: unknown): ServerAIError {
     if (error.code === "timeout") return new ServerAIError("AI_TIMEOUT", "AI 服务响应超时，请稍后重试。", true);
     if (error.code === "rate_limit") return new ServerAIError("AI_RATE_LIMITED", "AI 服务请求过于频繁，请稍后重试。", true, error.diagnostics.status);
     if (error.code === "schema") return new ServerAIError("AI_INVALID_RESPONSE", "AI 服务返回的数据格式无效。", false, error.diagnostics.status);
+    if (error.code === "not_configured") return new ServerAIError("AI_NOT_CONFIGURED", "服务端 AI 尚未配置完整。", false, error.diagnostics.status);
+    if (error.code === "invalid_request") return new ServerAIError("AI_INVALID_REQUEST", "AI 请求内容无效。", false, error.diagnostics.status);
+    if (error.code === "unauthorized") return new ServerAIError("AI_UNAUTHORIZED_UPSTREAM", "AI 服务认证失败，请检查服务端配置。", false, error.diagnostics.status);
+    if (error.code === "upstream") return new ServerAIError("AI_UPSTREAM_ERROR", "AI 上游服务暂时不可用，请稍后重试。", error.retryable, error.diagnostics.status);
+    if (error.code === "internal") return new ServerAIError("AI_INTERNAL_ERROR", "AI 服务内部处理失败，请稍后重试。", true, error.diagnostics.status);
     if (error.diagnostics.status === 404) {
       return new ServerAIError("AI_NOT_CONFIGURED", "AI 模型或接入点不存在，请检查服务端 AI_MODEL 配置。", false, error.diagnostics.status);
     }

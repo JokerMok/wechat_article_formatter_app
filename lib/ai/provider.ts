@@ -43,7 +43,17 @@ const openAIChatCompletionSchema = z.object({
     .min(1),
 });
 
-export type AIErrorCode = "timeout" | "rate_limit" | "cancelled" | "transport" | "schema";
+export type AIErrorCode =
+  | "timeout"
+  | "rate_limit"
+  | "cancelled"
+  | "transport"
+  | "schema"
+  | "not_configured"
+  | "invalid_request"
+  | "unauthorized"
+  | "upstream"
+  | "internal";
 
 export type AIDiagnostics = {
   provider: "openai-compatible";
@@ -713,15 +723,27 @@ function sanitizeGeneratedDraft(value: unknown, parseMode: UnifiedArticleContent
     summary,
     highlights: highlights.length > 0 ? highlights : fallbackHighlights.length > 0 ? fallbackHighlights : typeof summary === "string" && summary ? [summary] : highlights,
     tags: sanitizeTextArray(value.tags),
-    cover: isRecord(value.cover)
-      ? {
-          ...value.cover,
-          imageId: sanitizeTextValue(value.cover.imageId),
-          title: sanitizeTextValue(value.cover.title),
-          subtitle: sanitizeTextValue(value.cover.subtitle),
-        }
-      : value.cover,
+    cover: sanitizeGeneratedCover(value.cover),
     content,
+  };
+}
+
+function sanitizeGeneratedCover(value: unknown) {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    const subtitle = sanitizeTextValue(value);
+    return subtitle ? { subtitle } : undefined;
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return {
+    ...value,
+    imageId: sanitizeTextValue(value.imageId),
+    title: sanitizeTextValue(value.title),
+    subtitle: sanitizeTextValue(value.subtitle),
   };
 }
 

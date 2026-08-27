@@ -14,18 +14,26 @@ async function setSource(page: Page, id: Parameters<typeof articleById>[0], opti
   const article = articleById(id);
   await page.getByLabel("项目名称").fill(article.title);
   await page.getByLabel("源文 Markdown").fill(article.source);
-  if (options?.acceptEditedOverwrite) {
-    page.once("dialog", async (dialog) => {
-      expect(dialog.message()).toContain("重新生成会覆盖");
-      await dialog.accept();
-    });
+  const acceptEditedDialog = options?.acceptEditedOverwrite
+    ? async (dialog: import("@playwright/test").Dialog) => {
+        expect(dialog.message()).toContain("重新生成会覆盖");
+        await dialog.accept();
+      }
+    : undefined;
+  if (acceptEditedDialog) page.on("dialog", acceptEditedDialog);
+  try {
+    for (const platform of ["公众号", "小红书", "抖音图文", "抖音长文"] as const) {
+      await selectPlatform(page, platform);
+      await page.getByRole("button", { name: "生成当前平台" }).click();
+    }
+  } finally {
+    if (acceptEditedDialog) page.off("dialog", acceptEditedDialog);
   }
-  await page.getByRole("button", { name: "生成四端" }).click();
   await expect(page.getByText(/已使用本地确定性生成|已保存到浏览器本地|已解析/)).toBeVisible();
 }
 
 async function selectPlatform(page: Page, label: "公众号" | "小红书" | "抖音图文" | "抖音长文") {
-  await page.getByRole("button", { name: label }).click();
+  await page.getByRole("navigation", { name: "目标平台" }).getByRole("button", { name: new RegExp(`^${label}(?:\\s|$)`) }).click();
 }
 
 async function assertNoHorizontalOverflow(page: Page) {
@@ -37,19 +45,43 @@ async function assertNoHorizontalOverflow(page: Page) {
 }
 
 async function assertPlatformSurfaceClean(page: Page, label: string) {
-  const visibleText = `${await page.locator("section").innerText()}\n${await page.locator("main aside").last().innerText()}`;
+  const visibleText = `${await page.locator("section").filter({ hasText: "平台版本编辑" }).innerText()}\n${await page.locator("main aside").last().innerText()}`;
   expect(visibleText, label).not.toMatch(/<script|<\/script|onclick|onerror|font-weight/i);
   expect(visibleText, label).not.toMatch(/^\s*>\s*$/m);
 }
 
 async function assertCardRatio(page: Page, expectedWidth: number, expectedHeight: number) {
-  const card = page.locator('[style*="width: 270px"][style*="height"]').filter({ has: page.locator('[style*="transform: scale"]') }).first();
+  const card = page.locator("[data-card-preview]").first();
   await expect(card).toBeVisible();
   const box = await card.boundingBox();
   expect(box).not.toBeNull();
   expect(box!.width / box!.height).toBeCloseTo(expectedWidth / expectedHeight, 2);
+  const firstTextNode = card.locator(":scope > div > div").nth(1);
+  await expect(firstTextNode).toBeVisible();
+  const lineHeight = await firstTextNode.evaluate((element) => Number.parseFloat(getComputedStyle(element).lineHeight));
+  expect(lineHeight).toBeLessThan(120);
   await expect(page.locator("text=当前页有溢出")).toHaveCount(0);
   return card;
+}
+
+async function expectCardScreenshot(card: import("@playwright/test").Locator, snapshot: string) {
+  const originalStyle = await card.getAttribute("style");
+  await card.evaluate((element) => {
+    const node = element as HTMLElement;
+    node.style.position = "fixed";
+    node.style.left = "0px";
+    node.style.top = "0px";
+    node.style.margin = "0px";
+    node.style.zIndex = "9999";
+  });
+  try {
+    await expect(card).toHaveScreenshot(snapshot, { maxDiffPixels: 10 });
+  } finally {
+    await card.evaluate((element, style) => {
+      if (style === null) element.removeAttribute("style");
+      else element.setAttribute("style", style);
+    }, originalStyle);
+  }
 }
 
 async function readDownloadBuffer(download: Download) {
@@ -148,7 +180,7 @@ test("TEST-001/020 unified entry saves, refreshes, deletes with confirmation, an
   await selectPlatform(page, "公众号");
   await page.getByLabel("平台标题").fill("公众号独立修改");
   await page.getByText("自定义接口", { exact: true }).click();
-  await page.getByRole("button", { name: "生成", exact: true }).click();
+  await page.getByRole("button", { name: "生成当前平台", exact: true }).click();
   await expect(page.getByText(/AI 配置不完整/).first()).toBeVisible();
   await expect(page.getByLabel("平台标题")).toHaveValue("公众号独立修改");
   await page.getByText("本地", { exact: true }).click();
@@ -179,6 +211,48 @@ test("TEST-001/020 unified entry saves, refreshes, deletes with confirmation, an
   await expect(page.getByLabel("项目名称")).toHaveValue("未命名项目");
 });
 
+test("解析并应用 updates the selected draft without changing other platforms", async ({ page }) => {
+  await openWorkspace(page);
+  const source = "# 解析后的平台标题\n\n这段内容应该进入当前选中的小红书稿件。";
+  const originalWechatTitle = await page.getByLabel("平台标题").inputValue();
+
+  await page.getByLabel("源文 Markdown").fill(source);
+  await selectPlatform(page, "小红书");
+  await page.getByRole("button", { name: "解析并应用" }).click();
+
+  await expect(page.getByText("已解析源文并更新小红书版本")).toBeVisible();
+  await expect(page.getByLabel("平台标题")).toHaveValue("解析后的平台标题");
+  await expect(page.getByLabel("正文内容").first()).toHaveValue("这段内容应该进入当前选中的小红书稿件。");
+
+  await selectPlatform(page, "公众号");
+  await expect(page.getByLabel("平台标题")).toHaveValue(originalWechatTitle);
+});
+
+test("desktop workspace keeps the viewport fixed and scrolls the editor content area", async ({ page }) => {
+  await openWorkspace(page);
+  await setSource(page, "long-article");
+  await selectPlatform(page, "小红书");
+
+  const metrics = await page.evaluate(() => {
+    const editor = document.querySelector<HTMLElement>("[data-editor-scroll]");
+    const preview = document.querySelector<HTMLElement>("[data-preview-scroll]");
+    return {
+      viewportHeight: window.innerHeight,
+      bodyScrollHeight: document.body.scrollHeight,
+      editorClientHeight: editor?.clientHeight ?? 0,
+      editorScrollHeight: editor?.scrollHeight ?? 0,
+      previewClientHeight: preview?.clientHeight ?? 0,
+      previewScrollHeight: preview?.scrollHeight ?? 0,
+    };
+  });
+
+  expect(metrics.bodyScrollHeight).toBeLessThanOrEqual(metrics.viewportHeight + 1);
+  expect(metrics.editorClientHeight).toBeGreaterThan(0);
+  expect(metrics.editorScrollHeight).toBeGreaterThan(metrics.editorClientHeight);
+  expect(metrics.previewClientHeight).toBeGreaterThan(0);
+  expect(metrics.previewScrollHeight).toBeGreaterThan(metrics.previewClientHeight);
+});
+
 test("TEST-010/011/018/019 WeChat preview editing, HTML export, image node, download and copy fallback paths", async ({ page, browserName }) => {
   await openWorkspace(page);
   await setSource(page, "image-placeholder");
@@ -190,7 +264,8 @@ test("TEST-010/011/018/019 WeChat preview editing, HTML export, image node, down
   });
   await expect(page.getByText("已上传 1 张图片")).toBeVisible();
   await page.getByRole("button", { name: "cover.png" }).click();
-  await page.getByRole("button", { name: "生成四端" }).click();
+  await selectPlatform(page, "公众号");
+  await page.getByRole("button", { name: "生成当前平台" }).click();
 
   await selectPlatform(page, "公众号");
   const editor = page.locator(".preview-editor");
@@ -236,7 +311,13 @@ test("TEST-012/013/014/015 card previews keep real ratios, reflow after layout e
 
   await expect(page.getByText(/1080x1440/).first()).toBeVisible();
   const desktopCard = await assertCardRatio(page, 1080, 1440);
-  await expect(desktopCard).toHaveScreenshot("desktop-xiaohongshu-3x4-card.png");
+  await expectCardScreenshot(desktopCard, "desktop-xiaohongshu-3x4-card.png");
+  await expect(page.locator("[data-card-preview]")).toHaveCount(1);
+  const pageTabs = page.getByRole("tab", { name: /第\d+页/ });
+  expect(await pageTabs.count()).toBeGreaterThan(1);
+  await pageTabs.nth(1).click();
+  await expect(page.getByText(/轮播图预览 · 2\//)).toBeVisible();
+  await pageTabs.nth(0).click();
   const xhsPackageDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "下载 ZIP" }).click();
   const { download: xhsPackage, zip: xhsZip } = await readDownloadZip(xhsPackageDownload);
@@ -244,6 +325,7 @@ test("TEST-012/013/014/015 card previews keep real ratios, reflow after layout e
   expect(xhsZip.file("manifest.json")).not.toBeNull();
   expect(xhsZip.file("copy.txt")).not.toBeNull();
   expect(xhsZip.file("tags.txt")).not.toBeNull();
+  await page.getByRole("button", { name: "调整样式" }).click();
   await page.getByText(/^正文 /).locator("..").getByRole("slider").press("ArrowRight");
   await expect(page.getByText(/1080x1440 · 1\//).first()).toBeVisible();
   await expect(page.locator("text=当前页有溢出")).toHaveCount(0);
@@ -290,7 +372,8 @@ test("TEST-016/018 project backup, image restore, PNG download and invalid file 
   });
   await expect(page.getByText("已上传 1 张图片")).toBeVisible();
   await page.getByRole("button", { name: "cover.png" }).click();
-  await page.getByRole("button", { name: "生成四端" }).click();
+  await selectPlatform(page, "小红书");
+  await page.getByRole("button", { name: "生成当前平台" }).click();
 
   await selectPlatform(page, "小红书");
   await expect(page.locator("img").first()).toBeVisible();

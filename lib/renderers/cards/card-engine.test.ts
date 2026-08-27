@@ -109,6 +109,22 @@ describe("card image layout engine", () => {
     expect(second.overflow).toEqual([]);
   });
 
+  it("keeps normal article paragraphs in a readable column instead of creating artificial pages", () => {
+    const blocks = [
+      textBlock("title", "title", "普通文章不应该被拆成很多张图"),
+      ...Array.from({ length: 5 }, (_, index) =>
+        textBlock(`p${index}`, "paragraph", `第${index + 1}段内容用于验证连续排版。文字应该使用画布的可读宽度自然换行，而不是被限制在狭窄列中。`),
+      ),
+    ];
+
+    const result = layoutCardPages(article(blocks), createApproximateTextMeasurer(), { aspectRatio: "3:4" });
+    const body = result.pages[0]?.nodes.find((node) => node.kind === "body");
+
+    expect(result.pages).toHaveLength(1);
+    expect(body?.width).toBe(result.pages[0]?.safeArea.width);
+    expect(collectLayoutText(result)).toBe(expectedText(blocks));
+  });
+
   it("TEST-014 preserves manual page order, locked page layout, and image placement metadata", () => {
     const blocks = [
       textBlock("p1", "paragraph", "第一页自动内容。"),
@@ -203,9 +219,9 @@ describe("card image layout engine", () => {
   });
 
   it("preserves text once when a locked page reserves a middle fragment of a split paragraph", () => {
-    const lead = "前段内容必须保留在锁定片段之前。".repeat(36);
-    const middle = "【锁定中段唯一片段】中间这一页来自长段落，重排后不能复制，也不能丢失。".repeat(28);
-    const tail = "后段内容必须继续流入锁定片段之后。".repeat(36);
+    const lead = "前段内容必须保留在锁定片段之前。".repeat(60);
+    const middle = "【锁定中段唯一片段】中间这一页来自长段落，重排后不能复制，也不能丢失。".repeat(42);
+    const tail = "后段内容必须继续流入锁定片段之后。".repeat(60);
     const text = `${lead}${middle}${tail}`;
     const content = article([textBlock("long-middle", "paragraph", text)]);
     const initial = layoutCardPages(content, createApproximateTextMeasurer(), {

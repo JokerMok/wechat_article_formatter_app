@@ -203,6 +203,92 @@ describe("OpenAICompatibleProvider", () => {
     });
   });
 
+  it("accepts Volcengine's null value for the optional cover field", async () => {
+    const response = {
+      id: "chatcmpl-xiaohongshu-null-cover",
+      object: "chat.completion",
+      model: "fixture-model",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: JSON.stringify({
+              schemaVersion: 1,
+              drafts: [
+                {
+                  platform: "xiaohongshu",
+                  title: "资料太散？先搭一个知识库",
+                  summary: "把散落资料整理成可复用内容。",
+                  highlights: ["先整理资料"],
+                  tags: ["知识库"],
+                  cover: null,
+                  content: "把散落资料整理成可复用内容。",
+                },
+              ],
+            }),
+          },
+        },
+      ],
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(response)));
+
+    const result = await generatePlatformVersions({
+      provider: new OpenAICompatibleProvider(baseProviderConfig),
+      source,
+      sourceVersionId: "source-v1",
+      platforms: ["xiaohongshu"],
+    });
+
+    expectOk(result);
+    expect(result.versions.xiaohongshu).toMatchObject({
+      platform: "xiaohongshu",
+      title: "资料太散？先搭一个知识库",
+      cover: undefined,
+    });
+  });
+
+  it("normalizes a string cover description into supported cover metadata", async () => {
+    const response = {
+      id: "chatcmpl-xiaohongshu-string-cover",
+      object: "chat.completion",
+      model: "fixture-model",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: JSON.stringify({
+              schemaVersion: 1,
+              drafts: [
+                {
+                  platform: "xiaohongshu",
+                  title: "资料太散？先搭一个知识库",
+                  summary: "把散落资料整理成可复用内容。",
+                  highlights: ["先整理资料"],
+                  tags: ["知识库"],
+                  cover: "封面突出资料散落和整理方法",
+                  content: "把散落资料整理成可复用内容。",
+                },
+              ],
+            }),
+          },
+        },
+      ],
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(response)));
+
+    const result = await generatePlatformVersions({
+      provider: new OpenAICompatibleProvider(baseProviderConfig),
+      source,
+      sourceVersionId: "source-v1",
+      platforms: ["xiaohongshu"],
+    });
+
+    expectOk(result);
+    expect(result.versions.xiaohongshu?.cover).toEqual({ subtitle: "封面突出资料散落和整理方法" });
+  });
+
   it("TEST-008 classifies 429 responses without retrying", async () => {
     const fetchMock = vi.fn(async () => jsonResponse(rateLimitFixture, { status: 429, statusText: "Too Many Requests" }));
     vi.stubGlobal("fetch", fetchMock);
