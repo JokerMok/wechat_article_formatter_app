@@ -2,6 +2,8 @@ import type { TemplateKey } from "../../lib/article-types";
 import { parseArticleContent } from "../../lib/article-parser";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../../lib/content";
 import { unifiedArticleContentSchema } from "../../lib/content/schemas";
+import { analyzeArticleDesign, buildPlatformArticle, designPlanSchema, type DesignPlan } from "../../lib/design-plan";
+import { DESIGN_SCHEMES, DESIGN_SCHEME_IDS, type DesignSchemeId } from "../../lib/design-schemes";
 import { toDouyinImageText, toDouyinLongform } from "../../lib/platforms/douyin";
 import type { PlatformId, PlatformVersion, PlatformVersionMap } from "../../lib/platforms/types";
 import { createWechatPlatformVersion } from "../../lib/platforms/wechat";
@@ -88,16 +90,20 @@ export function cloneArticleContent(content: UnifiedArticleContent): UnifiedArti
 export function createPlatformDraft(
   platform: PlatformId,
   article: UnifiedArticleContent,
-  options: Partial<Pick<PlatformDraft, "templateKey" | "ratio" | "lockedPageIds" | "manualPages">> = {},
+  options: Partial<Pick<PlatformDraft, "templateKey" | "ratio" | "lockedPageIds" | "manualPages" | "sourceRevision" | "schemeId">> & { designPlan?: DesignPlan } = {},
 ): PlatformDraft {
+  const designPlan = options.designPlan ?? analyzeArticleDesign(article);
   const ratio = options.ratio ?? defaultRatioForPlatform(platform);
-  const templateKey = options.templateKey ?? "zhenyiKnowledgeMinimal";
-  const content = cloneArticleContent(article);
+  const schemeId = options.schemeId ?? designPlan.recommendedScheme;
+  const templateKey = options.templateKey ?? DESIGN_SCHEMES[schemeId].templateKey;
+  const content = buildPlatformArticle(article, platform, designPlan);
   const meta = createPlatformMeta(platform, content, ratio);
 
   return {
     platform,
     status: "generated",
+    sourceRevision: options.sourceRevision ?? designPlan.sourceRevision,
+    schemeId,
     title: metaTitle(platform, content, meta),
     content,
     templateKey,
@@ -111,12 +117,22 @@ export function createPlatformDraft(
 
 export function createWorkspaceState(sourceMarkdown = DEFAULT_SOURCE_MARKDOWN): WorkspacePersistedState {
   const article = parseSourceMarkdown(sourceMarkdown);
+  const designPlan = analyzeArticleDesign(article);
   return {
     schemaVersion: 1,
     sourceMarkdown,
+    sourceRevision: designPlan.sourceRevision,
+    designPlan,
+    favoriteSchemeIds: [],
+    recentSchemeIds: [designPlan.recommendedScheme],
     layout: { ...DEFAULT_LAYOUT_SETTINGS },
     ai: { ...DEFAULT_AI_SETTINGS },
-    platforms: Object.fromEntries(WORKSPACE_PLATFORM_IDS.map((platform) => [platform, createPlatformDraft(platform, article)])) as Record<
+    platforms: Object.fromEntries(WORKSPACE_PLATFORM_IDS.map((platform) => [platform, createPlatformDraft(platform, article, {
+      sourceRevision: designPlan.sourceRevision,
+      schemeId: designPlan.recommendedScheme,
+      templateKey: DESIGN_SCHEMES[designPlan.recommendedScheme].templateKey,
+      designPlan,
+    })])) as Record<
       PlatformId,
       PlatformDraft
     >,
@@ -127,9 +143,13 @@ export function regeneratePlatformDraft(
   current: PlatformDraft,
   article: UnifiedArticleContent,
   ai: AiWorkspaceSettings = DEFAULT_AI_SETTINGS,
+  designPlan: DesignPlan = analyzeArticleDesign(article),
 ): PlatformDraft {
   const regenerated = createPlatformDraft(current.platform, article, {
     templateKey: current.templateKey,
+    schemeId: current.schemeId,
+    sourceRevision: designPlan.sourceRevision,
+    designPlan,
     ratio: current.ratio,
     lockedPageIds: current.lockedPageIds,
     manualPages: current.manualPages,
@@ -145,9 +165,12 @@ export function regeneratePlatformDraft(
   };
 }
 
-export function platformDraftFromVersion(current: PlatformDraft, version: PlatformVersion): PlatformDraft {
+export function platformDraftFromVersion(current: PlatformDraft, version: PlatformVersion, sourceRevision = current.sourceRevision): PlatformDraft {
   const fallback = createPlatformDraft(current.platform, version.content, {
     templateKey: current.templateKey,
+    schemeId: current.schemeId,
+    sourceRevision,
+    designPlan: analyzeArticleDesign(version.content),
     ratio: current.ratio,
     lockedPageIds: current.lockedPageIds,
     manualPages: current.manualPages,
@@ -211,6 +234,8 @@ export function createPlatformDraftSignature(draft: PlatformDraft): string {
   return JSON.stringify({
     updatedAt: draft.updatedAt,
     status: draft.status,
+    sourceRevision: draft.sourceRevision,
+    schemeId: draft.schemeId,
     title: draft.title,
     content: draft.content,
     meta: draft.meta,
@@ -463,6 +488,29 @@ export function markAiConfigurationIncomplete(state: WorkspacePersistedState, mi
   };
 }
 
+export function updateWorkspaceSource(state: WorkspacePersistedState, sourceMarkdown: string): WorkspacePersistedState {
+  const article = parseSourceMarkdown(sourceMarkdown);
+  const designPlan = analyzeArticleDesign(article);
+  return {
+    ...state,
+    sourceMarkdown,
+    sourceRevision: designPlan.sourceRevision,
+    designPlan,
+  };
+}
+
+export function applyDesignSchemeToDraft(draft: PlatformDraft, schemeId: DesignSchemeId): PlatformDraft {
+  const scheme = DESIGN_SCHEMES[schemeId];
+  return {
+    ...draft,
+    schemeId,
+    templateKey: scheme.templateKey,
+    status: "edited",
+    editedWechatHtml: undefined,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 export function isAiProviderConfigured(ai: AiWorkspaceSettings, sessionApiKey: string) {
   if (ai.mode === "hosted") return true;
   return ai.mode === "custom" && ai.baseUrl.trim().length > 0 && ai.model.trim().length > 0 && sessionApiKey.trim().length > 0;
@@ -494,6 +542,8 @@ export function readPersistedWorkspace(value: unknown): WorkspacePersistedState 
   }
 
   const fallback = createWorkspaceState(raw.sourceMarkdown);
+  const designPlanResult = designPlanSchema.safeParse(raw.designPlan);
+  const designPlan = designPlanResult.success ? designPlanResult.data : fallback.designPlan;
   const rawPlatforms = raw.platforms;
   const platforms = readPlatformDrafts(rawPlatforms, fallback);
   if (!platforms) return undefined;
@@ -501,6 +551,10 @@ export function readPersistedWorkspace(value: unknown): WorkspacePersistedState 
   return {
     schemaVersion: 1,
     sourceMarkdown: raw.sourceMarkdown,
+    sourceRevision: typeof raw.sourceRevision === "string" ? raw.sourceRevision : designPlan.sourceRevision,
+    designPlan,
+    favoriteSchemeIds: readDesignSchemeIds(raw.favoriteSchemeIds),
+    recentSchemeIds: readDesignSchemeIds(raw.recentSchemeIds).length ? readDesignSchemeIds(raw.recentSchemeIds) : [designPlan.recommendedScheme],
     layout: readLayout(raw.layout, fallback.layout),
     ai: readAi(raw.ai, fallback.ai),
     platforms,
@@ -684,6 +738,8 @@ function readPlatformDraft(value: unknown, platform: PlatformId, fallback: Platf
     ...fallback,
     platform,
     status: readPlatformDraftStatus(value.status, fallback.status),
+    sourceRevision: typeof value.sourceRevision === "string" ? value.sourceRevision : fallback.sourceRevision,
+    schemeId: isDesignSchemeId(value.schemeId) ? value.schemeId : fallback.schemeId,
     title: typeof value.title === "string" ? value.title : fallback.title,
     content,
     templateKey: typeof value.templateKey === "string" && value.templateKey in styleTemplates ? (value.templateKey as TemplateKey) : fallback.templateKey,
@@ -698,6 +754,14 @@ function readPlatformDraft(value: unknown, platform: PlatformId, fallback: Platf
 
 function readPlatformDraftStatus(value: unknown, fallback: PlatformDraft["status"]): PlatformDraft["status"] {
   return value === "draft" || value === "generated" || value === "edited" || value === "locked" || value === "error" ? value : fallback;
+}
+
+function isDesignSchemeId(value: unknown): value is DesignSchemeId {
+  return typeof value === "string" && (DESIGN_SCHEME_IDS as readonly string[]).includes(value);
+}
+
+function readDesignSchemeIds(value: unknown): DesignSchemeId[] {
+  return Array.isArray(value) ? value.filter(isDesignSchemeId) : [];
 }
 
 function readPlatformMeta(value: unknown, fallback: PlatformMeta): PlatformMeta {

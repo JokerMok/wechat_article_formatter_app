@@ -4,8 +4,6 @@ import * as React from "react";
 import JSZip from "jszip";
 import {
   Download,
-  FilePlus2,
-  LayoutTemplate,
   ImagePlus,
   Lock,
   LockOpen,
@@ -15,33 +13,25 @@ import {
   Scissors,
   Redo2,
   RefreshCw,
-  Save,
   Settings2,
   Sparkles,
-  Trash2,
   Undo2,
-  Upload,
   AlertCircle,
-  CheckCircle2,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  ChevronUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import { Toggle } from "@/components/ui/toggle";
 import { copyRichText } from "@/lib/copy-rich-text";
-import type { TemplateKey } from "@/lib/article-types";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "@/lib/content";
+import type { DesignPlan } from "@/lib/design-plan";
+import { cardPresetForScheme, DESIGN_SCHEMES, type DesignSchemeId } from "@/lib/design-schemes";
 import type { PlatformId } from "@/lib/platforms/types";
 import {
   createApproximateTextMeasurer,
-  layoutCardPages,
+  layoutCardPagesToTarget,
   lockCardImagePage,
   mergeAdjacentCardPages,
   moveCardImagePage,
@@ -63,7 +53,7 @@ import {
   type StoredAssetRecord,
 } from "@/lib/storage";
 import { exportDouyinImagePackage, exportProjectBackupPackage, exportXiaohongshuPackage } from "@/lib/export";
-import { styleTemplates, templateList } from "@/lib/style-templates";
+import { styleTemplates } from "@/lib/style-templates";
 import { cn } from "@/lib/utils";
 import {
   DEFAULT_SOURCE_MARKDOWN,
@@ -71,6 +61,7 @@ import {
   WORKSPACE_PLATFORM_IDS,
   WORKSPACE_PLATFORM_LABELS,
   applyPlatformDraftReplacements,
+  applyDesignSchemeToDraft,
   applyManualPageOrder,
   clearManualCardPages,
   createPlatformDraftSignatureMap,
@@ -91,19 +82,22 @@ import {
   sanitizeWechatHtml,
   serializeWorkspace,
   selectRestorableBackupProject,
-  PROJECT_BACKUP_IMAGE_NOTICE,
   updatePlatformBlock,
   updatePlatformCaption,
   updatePlatformRatio,
   updatePlatformTags,
   updatePlatformTitle,
+  updateWorkspaceSource,
   withLockedCardPage,
   withManualCardPages,
   withWechatHtmlOverride,
 } from "./state";
 import { createCardPngFilename, loadCardCanvasImages, renderCardPagePngBlob } from "./card-image-actions";
 import { createInitialProjectId, describeAssetUploadStatus, type AssetUploadFailure } from "./client-state";
-import type { AssetPlaceholder, DraftHistory, LayoutSettings, PlatformDraft, RatioMode, WorkspaceMode, WorkspacePersistedState } from "./types";
+import { DesignPlanDrawer, type SchemeApplyMode } from "./design-plan-drawer";
+import { RegenerationDialog } from "./regeneration-dialog";
+import { WorkspaceHeader, type WorkspaceFocusMode } from "./workspace-header";
+import type { AssetPlaceholder, DraftHistory, LayoutSettings, PlatformDraft, WorkspaceMode, WorkspacePersistedState } from "./types";
 
 type ProjectListItem = {
   id: string;
@@ -270,6 +264,13 @@ export default function UnifiedWorkspace() {
   const [assets, setAssets] = React.useState<AssetPlaceholder[]>([]);
   const [activePlatform, setActivePlatform] = React.useState<PlatformId>("wechat");
   const [mode, setMode] = React.useState<WorkspaceMode>("editor");
+  const [focusMode, setFocusMode] = React.useState<WorkspaceFocusMode>("all");
+  const [sourcePaneWidth, setSourcePaneWidth] = React.useState(304);
+  const [previewPaneWidth, setPreviewPaneWidth] = React.useState(420);
+  const [overwriteRequest, setOverwriteRequest] = React.useState<{
+    platforms: PlatformId[];
+    resolve: (confirmed: boolean) => void;
+  }>();
   const [stylePanelOpen, setStylePanelOpen] = React.useState(false);
   const [saveState, setSaveState] = React.useState<"loading" | "dirty" | "saving" | "saved" | "error">("loading");
   const [statusMessage, setStatusMessage] = React.useState("正在恢复本地项目");
@@ -291,7 +292,13 @@ export default function UnifiedWorkspace() {
   const cardLayout = React.useMemo(() => {
     if (activePlatform === "wechat" || activePlatform === "douyinLongform") return undefined;
     const ratio = activePlatform === "douyinImage" ? activeDraft.ratio : "3:4";
-    const result = layoutCardPages(activeDraft.content, measurer, {
+    const scheme = DESIGN_SCHEMES[activeDraft.schemeId];
+    const densityScale = scheme.density === "舒展" ? 1.12 : scheme.density === "紧凑" ? 0.86 : 1;
+    const lineHeightScale = scheme.typography.lineHeight / 1.78;
+    const targetPages = activePlatform === "xiaohongshu"
+      ? workspace.designPlan.pagination.xiaohongshuTargetPages
+      : workspace.designPlan.pagination.douyinImageTargetPages;
+    const result = layoutCardPagesToTarget(activeDraft.content, measurer, {
       aspectRatio: ratio,
       safeArea: {
         top: workspace.layout.margin + 64,
@@ -300,22 +307,22 @@ export default function UnifiedWorkspace() {
         left: workspace.layout.margin,
       },
       typography: {
-        titleFontSize: workspace.layout.titleFontSize,
-        headingFontSize: workspace.layout.headingFontSize,
-        bodyFontSize: workspace.layout.bodyFontSize,
-        focusFontSize: workspace.layout.focusFontSize,
-        lineSpacing: workspace.layout.lineSpacing,
-        paragraphSpacing: workspace.layout.paragraphSpacing,
-        titleSpacing: workspace.layout.titleSpacing,
+        titleFontSize: Math.round(workspace.layout.titleFontSize * scheme.typography.titleScale),
+        headingFontSize: Math.round(workspace.layout.headingFontSize * scheme.typography.headingScale),
+        bodyFontSize: Math.round(workspace.layout.bodyFontSize * scheme.typography.bodyScale),
+        focusFontSize: Math.round(workspace.layout.focusFontSize * ((scheme.typography.headingScale + scheme.typography.bodyScale) / 2)),
+        lineSpacing: Math.min(1.8, Math.max(1.1, workspace.layout.lineSpacing * lineHeightScale)),
+        paragraphSpacing: Math.round(workspace.layout.paragraphSpacing * densityScale),
+        titleSpacing: Math.round(workspace.layout.titleSpacing * densityScale),
       },
       manualPages: activeDraft.manualPages.map((page) => ({
         id: page.id,
         locked: page.locked,
         layout: page,
       })),
-    });
+    }, targetPages);
     return applyManualPageOrder(result, activeDraft.manualPages);
-  }, [activeDraft, activePlatform, workspace.layout]);
+  }, [activeDraft, activePlatform, workspace.designPlan.pagination.douyinImageTargetPages, workspace.designPlan.pagination.xiaohongshuTargetPages, workspace.layout]);
 
   const wechatHtml = React.useMemo(() => {
     const template = styleTemplates[activeDraft.templateKey] ?? styleTemplates.zhenyiKnowledgeMinimal;
@@ -669,7 +676,7 @@ export default function UnifiedWorkspace() {
     }
 
     if (workspace.ai.mode === "deterministic") {
-      const regeneration = confirmEditedRegeneration(platforms);
+      const regeneration = await confirmEditedRegeneration(platforms);
       if (!regeneration.platforms.length) {
         setAiRunState("idle");
         setStatusMessage("已取消覆盖人工编辑稿，内容已保留");
@@ -691,7 +698,7 @@ export default function UnifiedWorkspace() {
       return;
     }
 
-    const regeneration = confirmEditedRegeneration(platforms);
+    const regeneration = await confirmEditedRegeneration(platforms);
     if (!regeneration.platforms.length) {
       setAiRunState("idle");
       setStatusMessage("已取消覆盖人工编辑稿，内容已保留");
@@ -728,7 +735,7 @@ export default function UnifiedWorkspace() {
       const result = await generatePlatformVersions({
         provider,
         source: sourceArticle,
-        sourceVersionId: String(sourceArticle.sourceText.length),
+        sourceVersionId: workspaceRef.current.sourceRevision,
         platforms: [platform],
         existingVersions: platformVersionsFromDrafts(workspaceRef.current.platforms),
         signal: controller.signal,
@@ -747,6 +754,8 @@ export default function UnifiedWorkspace() {
         });
         const next = {
           ...current,
+          designPlan: result.designPlan,
+          sourceRevision: result.designPlan.sourceRevision,
           ai: { ...current.ai, lastFallbackReason: undefined },
           platforms: merged.drafts,
         };
@@ -805,35 +814,32 @@ export default function UnifiedWorkspace() {
       return;
     }
 
-    const regeneration = confirmEditedRegeneration([activePlatform]);
-    if (!regeneration.platforms.length) {
-      setStatusMessage("已取消解析，当前平台编辑稿已保留");
-      return;
-    }
-
     const current = workspaceRef.current;
-    const parsedArticle = parseSourceMarkdown(current.sourceMarkdown);
-    const nextDraft = regeneratePlatformDraft(current.platforms[activePlatform], parsedArticle, {
-      ...current.ai,
-      mode: "deterministic",
-    });
-    applyPlatformReplacements({ [activePlatform]: nextDraft });
+    const next = updateWorkspaceSource(current, current.sourceMarkdown);
+    replaceWorkspace(next);
     setAiRunState("idle");
     setAiStatusMessage(undefined);
-    setStatusMessage(`已解析源文并更新${WORKSPACE_PLATFORM_LABELS[activePlatform]}版本`);
+    setStatusMessage(`源文分析完成，推荐“${DESIGN_SCHEMES[next.designPlan.recommendedScheme].name}”；平台稿尚未覆盖`);
   }
 
-  function confirmEditedRegeneration(platforms: PlatformId[]) {
-    return resolveRegenerationPlatforms(workspace.platforms, platforms, (editedPlatforms) => {
-      const labels = editedPlatforms.map((platform) => WORKSPACE_PLATFORM_LABELS[platform]).join("、");
-      return window.confirm(`重新生成会覆盖 ${labels} 的人工编辑稿。确定继续？`);
+  async function confirmEditedRegeneration(platforms: PlatformId[]) {
+    const editedPlatforms = platforms.filter((platform) => workspaceRef.current.platforms[platform].status === "edited");
+    if (!editedPlatforms.length) return resolveRegenerationPlatforms(workspaceRef.current.platforms, platforms, () => true);
+    const confirmed = await new Promise<boolean>((resolve) => {
+      setOverwriteRequest({ platforms: editedPlatforms, resolve });
     });
+    return resolveRegenerationPlatforms(workspaceRef.current.platforms, platforms, () => confirmed);
+  }
+
+  function settleOverwriteRequest(confirmed: boolean) {
+    overwriteRequest?.resolve(confirmed);
+    setOverwriteRequest(undefined);
   }
 
   function applyDeterministicRegeneration(platforms: PlatformId[]) {
     const current = workspaceRef.current;
     const replacements = Object.fromEntries(
-      platforms.map((platform) => [platform, regeneratePlatformDraft(current.platforms[platform], sourceArticle, current.ai)]),
+      platforms.map((platform) => [platform, regeneratePlatformDraft(current.platforms[platform], sourceArticle, current.ai, current.designPlan)]),
     ) as Partial<Record<PlatformId, PlatformDraft>>;
     applyPlatformReplacements(replacements);
   }
@@ -842,7 +848,7 @@ export default function UnifiedWorkspace() {
     return Object.fromEntries(
       platforms.flatMap((platform) => {
         const version = versions[platform];
-        return version ? [[platform, platformDraftFromVersion(currentDrafts[platform], version)]] : [];
+        return version ? [[platform, platformDraftFromVersion(currentDrafts[platform], version, workspaceRef.current.sourceRevision)]] : [];
       }),
     ) as Partial<Record<PlatformId, PlatformDraft>>;
   }
@@ -936,7 +942,7 @@ export default function UnifiedWorkspace() {
   }
 
   async function exportCardPng(page: CardLayoutPage) {
-    const blob = await renderCardPagePngBlob(page, createImageUrlByBlock(activeDraft.content, assets));
+    const blob = await renderCardPagePngBlob(page, createImageUrlByBlock(activeDraft.content, assets), { preset: cardPresetForScheme(activeDraft.schemeId) });
     if (blob) downloadBlob(blob, createCardPngFilename(activeDraft.title, activePlatform, page.pageNumber));
   }
 
@@ -950,8 +956,8 @@ export default function UnifiedWorkspace() {
       }
       const result =
         activePlatform === "xiaohongshu"
-          ? await exportXiaohongshuPackage({ content: activeDraft.content, pages: cardLayout.pages, images: imageSources })
-          : await exportDouyinImagePackage({ content: activeDraft.content, ratio: activeDraft.ratio, pages: cardLayout.pages, images: imageSources });
+          ? await exportXiaohongshuPackage({ content: activeDraft.content, pages: cardLayout.pages, images: imageSources, preset: cardPresetForScheme(activeDraft.schemeId) })
+          : await exportDouyinImagePackage({ content: activeDraft.content, ratio: activeDraft.ratio, pages: cardLayout.pages, images: imageSources, preset: cardPresetForScheme(activeDraft.schemeId) });
       downloadBlob(result.zipBlob, `${activeDraft.title || "cards"}-${activePlatform}.zip`);
       setStatusMessage(`${WORKSPACE_PLATFORM_LABELS[activePlatform]}整包已导出，包含 ${result.images.length} 张 PNG 和文案清单`);
     } catch (error) {
@@ -960,7 +966,7 @@ export default function UnifiedWorkspace() {
   }
 
   async function copyCardPng(page: CardLayoutPage) {
-    const blob = await renderCardPagePngBlob(page, createImageUrlByBlock(activeDraft.content, assets));
+    const blob = await renderCardPagePngBlob(page, createImageUrlByBlock(activeDraft.content, assets), { preset: cardPresetForScheme(activeDraft.schemeId) });
     if (!blob) return;
     try {
       await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
@@ -1010,124 +1016,128 @@ export default function UnifiedWorkspace() {
     commitPlatform(clearManualCardPages(activeDraft));
   }
 
+  function applyScheme(schemeId: DesignSchemeId, mode: SchemeApplyMode) {
+    const current = workspaceRef.current;
+    const currentDraft = current.platforms[activePlatform];
+    const scheme = DESIGN_SCHEMES[schemeId];
+    const replacement = mode === "visual"
+      ? applyDesignSchemeToDraft(currentDraft, schemeId)
+      : regeneratePlatformDraft(
+          { ...currentDraft, schemeId, templateKey: scheme.templateKey },
+          sourceArticle,
+          { ...current.ai, mode: "deterministic" },
+          {
+            ...current.designPlan,
+            recommendedScheme: schemeId,
+            palette: { ...scheme.palette },
+            typography: { ...scheme.typography },
+            density: scheme.density,
+          },
+        );
+    const merged = applyPlatformDraftReplacements({
+      drafts: current.platforms,
+      histories: historyRef.current,
+      replacements: { [activePlatform]: replacement },
+    });
+    const recentSchemeIds = [schemeId, ...current.recentSchemeIds.filter((id) => id !== schemeId)].slice(0, 3);
+    const next = { ...current, platforms: merged.drafts, recentSchemeIds };
+    workspaceRef.current = next;
+    historyRef.current = merged.histories;
+    setHistory(merged.histories);
+    setWorkspace(next);
+    setStatusMessage(mode === "visual" ? `已应用“${scheme.name}”视觉，平台文案未改变` : `已按“${scheme.name}”重排当前平台`);
+  }
+
+  function toggleFavoriteScheme(schemeId: DesignSchemeId) {
+    const current = workspaceRef.current;
+    const favoriteSchemeIds = current.favoriteSchemeIds.includes(schemeId)
+      ? current.favoriteSchemeIds.filter((id) => id !== schemeId)
+      : [...current.favoriteSchemeIds, schemeId];
+    updateWorkspace({ favoriteSchemeIds });
+  }
+
+  function startPaneResize(side: "source" | "preview", event: React.PointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = side === "source" ? sourcePaneWidth : previewPaneWidth;
+    const onMove = (moveEvent: PointerEvent) => {
+      const delta = moveEvent.clientX - startX;
+      if (side === "source") setSourcePaneWidth(Math.min(390, Math.max(260, startWidth + delta)));
+      else setPreviewPaneWidth(Math.min(560, Math.max(360, startWidth - delta)));
+    };
+    const onEnd = () => {
+      document.body.classList.remove("workspace-resizing");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onEnd);
+    };
+    document.body.classList.add("workspace-resizing");
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onEnd, { once: true });
+  }
+
   return (
     <main data-workspace-shell className="flex min-h-screen flex-col bg-[#edf2ef] text-[#17231f] lg:h-screen lg:overflow-hidden">
-      <header className="shrink-0 border-b border-[#31443b] bg-[#1d2b25] text-white lg:z-30">
-        <div className="mx-auto max-w-[1680px] px-4 py-4 lg:px-6">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#d9f4e4] text-[#17633d] shadow-sm">
-                <LayoutTemplate className="h-5 w-5" aria-hidden="true" />
-              </div>
-              <div>
-                <h1 className="text-lg font-semibold tracking-tight">自媒体内容排版器</h1>
-                <p className="mt-0.5 text-xs text-[#c0d0c7]">一篇源文，逐端生成可编辑成稿</p>
-              </div>
-            </div>
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <Input
-                value={projectTitle}
-                onChange={(event) => setProjectTitle(event.target.value)}
-                className="h-9 w-52 border-white/20 bg-white/10 text-white placeholder:text-white/50 focus-visible:ring-[#d9f4e4]"
-                aria-label="项目名称"
-              />
-              <Select value={projectId} onValueChange={openProject}>
-                <SelectTrigger className="h-9 w-48 border-white/20 bg-white/10 text-white hover:bg-white/15">
-                  <SelectValue placeholder="打开项目" />
-                </SelectTrigger>
-                <SelectContent>
-                  {projects.map((project) => (
-                    <SelectItem key={project.id} value={project.id}>
-                      {project.title}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <div className="flex max-w-full flex-wrap items-center gap-1 rounded-lg border border-white/10 bg-white/5 p-1">
-                <Button type="button" size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" onClick={() => void createNewProject()}>
-                  <FilePlus2 className="h-4 w-4" />
-                  新建
-                </Button>
-                <Button type="button" size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" onClick={() => void saveProject()}>
-                  <Save className="h-4 w-4" />
-                  保存
-                </Button>
-                <Button type="button" size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" onClick={() => void exportCurrentProjectBackup()}>
-                  <Download className="h-4 w-4" />
-                  导出项目
-                </Button>
-                <Button type="button" size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" onClick={() => backupInputRef.current?.click()}>
-                  <Upload className="h-4 w-4" />
-                  导入
-                </Button>
-                <Button type="button" size="sm" variant="ghost" className="text-[#f4b6ab] hover:bg-[#8f3c33]/30 hover:text-[#ffd7d0]" onClick={() => void deleteCurrentProject()}>
-                  <Trash2 className="h-4 w-4" />
-                  删除
-                </Button>
-              </div>
-              <div className="flex max-w-full items-center gap-2 text-xs text-[#c0d0c7]" title={statusMessage}>
-                <span className={cn("rounded-full border px-2 py-1", saveState === "error" ? "border-[#f4b6ab]/60 bg-[#8f3c33]/30 text-[#ffd7d0]" : "border-white/15 bg-white/10")}>
-                  {saveStateLabel(saveState)}
-                </span>
-                <span className="max-w-[230px] truncate">{statusMessage}</span>
-              </div>
-            </div>
-          </div>
-          <div className="mt-5 flex flex-col gap-3 border-t border-white/10 pt-3 sm:flex-row sm:items-end sm:justify-between">
-            <nav className="flex min-w-0 flex-wrap items-end gap-1" aria-label="目标平台">
-              <span className="mr-2 pb-2 text-xs font-medium uppercase tracking-[0.12em] text-[#91aaa0]">平台工作区</span>
-              {WORKSPACE_PLATFORM_IDS.map((platform) => (
-                <button
-                  key={platform}
-                  type="button"
-                  aria-current={activePlatform === platform ? "page" : undefined}
-                  className={cn(
-                    "group flex items-center gap-2 rounded-none border-0 border-b-2 px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#d9f4e4] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1d2b25]",
-                    activePlatform === platform ? "border-[#d9f4e4] text-white" : "border-transparent text-[#9fb1a8] hover:border-[#6d897b] hover:text-white",
-                  )}
-                  onClick={() => setActivePlatform(platform)}
-                >
-                  <span className={cn("h-1.5 w-1.5 rounded-full", activePlatform === platform ? "bg-[#d9f4e4]" : "bg-[#6d897b]")} aria-hidden="true" />
-                  {WORKSPACE_PLATFORM_LABELS[platform]}
-                  <span className="text-[10px] text-[#9fb1a8]/70">{draftStatusLabel(workspace.platforms[platform].status)}</span>
-                </button>
-              ))}
-            </nav>
-            <div className="flex gap-1 rounded-lg border border-white/10 bg-white/5 p-1 lg:hidden" aria-label="移动端视图">
-              {(["source", "editor", "preview"] as WorkspaceMode[]).map((view) => (
-                <button
-                  key={view}
-                  type="button"
-                  className={cn("rounded-md px-3 py-1.5 text-sm text-[#b9c9c1] transition-colors", mode === view ? "bg-white text-[#1d2b25]" : "hover:bg-white/10 hover:text-white")}
-                  onClick={() => setMode(view)}
-                >
-                  {view === "source" ? "素材" : view === "editor" ? "编辑" : "预览"}
-                </button>
-              ))}
-            </div>
-          </div>
-          <p className="mt-3 text-xs text-[#91aaa0]">{PROJECT_BACKUP_IMAGE_NOTICE}</p>
-        </div>
-      </header>
-
-      <StyleToolbar
-        open={stylePanelOpen}
-        onToggle={() => setStylePanelOpen((value) => !value)}
+      <WorkspaceHeader
+        projectId={projectId}
+        projectTitle={projectTitle}
+        projects={projects}
+        saveStateLabel={saveStateLabel(saveState)}
+        saveError={saveState === "error"}
+        statusMessage={statusMessage}
         activePlatform={activePlatform}
-        draft={activeDraft}
-        layout={workspace.layout}
-        onLayoutChange={updateLayout}
-        onTemplateChange={(templateKey) => commitPlatform({ ...activeDraft, templateKey, editedWechatHtml: undefined, updatedAt: nowIso() })}
-        onRatioChange={(ratio) => commitPlatform(updatePlatformRatio(activeDraft, ratio))}
+        platformStatus={Object.fromEntries(WORKSPACE_PLATFORM_IDS.map((platform) => [
+          platform,
+          draftStatusLabel(workspace.platforms[platform], workspace.sourceRevision),
+        ])) as Record<PlatformId, string>}
+        mode={mode}
+        focusMode={focusMode}
+        generating={aiRunState === "generating"}
+        onProjectTitleChange={setProjectTitle}
+        onOpenProject={(id) => void openProject(id)}
+        onPlatformChange={setActivePlatform}
+        onModeChange={setMode}
+        onFocusModeChange={setFocusMode}
+        onGenerate={() => void regenerateCurrentPlatform()}
+        onOpenStyles={() => setStylePanelOpen(true)}
+        onNew={() => void createNewProject()}
+        onSave={() => void saveProject()}
+        onExport={() => void exportCurrentProjectBackup()}
+        onImport={() => backupInputRef.current?.click()}
+        onDelete={() => void deleteCurrentProject()}
       />
 
-      <div className="mx-auto grid w-full max-w-[1680px] grid-cols-1 gap-3 p-3 lg:min-h-0 lg:flex-1 lg:grid-cols-[300px_minmax(420px,1fr)_390px] lg:overflow-hidden lg:p-4">
-        <aside className={cn("overflow-hidden rounded-lg border border-[#d8e1dc] bg-white shadow-[0_2px_10px_rgba(31,52,42,0.04)] lg:min-h-0", panelVisible(mode, "source"))}>
+      <DesignPlanDrawer
+        open={stylePanelOpen}
+        onClose={() => setStylePanelOpen(false)}
+        activePlatform={activePlatform}
+        draft={activeDraft}
+        plan={workspace.designPlan}
+        layout={workspace.layout}
+        favoriteSchemeIds={workspace.favoriteSchemeIds}
+        recentSchemeIds={workspace.recentSchemeIds}
+        onLayoutChange={updateLayout}
+        onApplyScheme={applyScheme}
+        onToggleFavorite={toggleFavoriteScheme}
+        onRatioChange={(ratio) => commitPlatform(updatePlatformRatio(activeDraft, ratio))}
+      />
+      <RegenerationDialog
+        open={Boolean(overwriteRequest)}
+        platformLabels={(overwriteRequest?.platforms ?? []).map((platform) => WORKSPACE_PLATFORM_LABELS[platform])}
+        onConfirm={() => settleOverwriteRequest(true)}
+        onCancel={() => settleOverwriteRequest(false)}
+      />
+
+      <div
+        className="workspace-grid mx-auto grid w-full max-w-[1760px] grid-cols-1 p-2 lg:min-h-0 lg:flex-1 lg:overflow-hidden"
+        data-focus-mode={focusMode}
+        style={{ "--source-pane-width": `${sourcePaneWidth}px`, "--preview-pane-width": `${previewPaneWidth}px` } as React.CSSProperties}
+      >
+        <aside className={cn("overflow-hidden border border-[#d8e1dc] bg-white lg:min-h-0", panelVisible(mode, "source"), focusMode !== "all" && "lg:hidden")}>
           <SourcePanel
             sourceMarkdown={workspace.sourceMarkdown}
             article={sourceArticle}
             assets={assets}
-            onSourceChange={(sourceMarkdown) => updateWorkspace({ sourceMarkdown })}
+            onSourceChange={(sourceMarkdown) => replaceWorkspace(updateWorkspaceSource(workspaceRef.current, sourceMarkdown))}
             onReparse={reparseCurrentPlatform}
             onPickImages={() => fileInputRef.current?.click()}
             onUpload={uploadAssets}
@@ -1135,22 +1145,29 @@ export default function UnifiedWorkspace() {
           />
         </aside>
 
-        <section className={cn("min-w-0 overflow-hidden rounded-lg border border-[#d8e1dc] bg-white shadow-[0_2px_10px_rgba(31,52,42,0.04)] lg:min-h-0", panelVisible(mode, "editor"))}>
+        {focusMode === "all" && <PaneResizer label="调整源文栏宽" onPointerDown={(event) => startPaneResize("source", event)} />}
+
+        <section className={cn("min-w-0 overflow-hidden border border-[#d8e1dc] bg-white lg:min-h-0", panelVisible(mode, "editor"), focusMode === "preview" && "lg:hidden")}>
           <PlatformEditor
             draft={activeDraft}
+            plan={workspace.designPlan}
             history={history[activePlatform]}
             onDraftChange={commitPlatform}
-            onRegenerate={regenerateCurrentPlatform}
             onUndo={undoPlatform}
             onRedo={redoPlatform}
             onCopyText={copyText}
           />
         </section>
 
-        <aside className={cn("overflow-hidden rounded-lg border border-[#d8e1dc] bg-white shadow-[0_2px_10px_rgba(31,52,42,0.04)] lg:min-h-0", panelVisible(mode, "preview"))}>
+
+        {focusMode !== "preview" && <PaneResizer label="调整预览栏宽" onPointerDown={(event) => startPaneResize("preview", event)} />}
+
+        <aside className={cn("overflow-hidden border border-[#d8e1dc] bg-white lg:min-h-0", panelVisible(mode, "preview"))}>
           <PreviewPanel
             activePlatform={activePlatform}
             draft={activeDraft}
+            plan={workspace.designPlan}
+            currentSourceRevision={workspace.sourceRevision}
             wechatHtml={wechatHtml}
             cardLayout={cardLayout}
             imageUrlByBlock={createImageUrlByBlock(activeDraft.content, assets)}
@@ -1193,6 +1210,7 @@ export default function UnifiedWorkspace() {
             onSessionApiKeyChange={setSessionApiKey}
             onCancelAi={cancelAiGeneration}
             onRetryAi={() => void regenerateCurrentPlatform()}
+            onOpenStyles={() => setStylePanelOpen(true)}
           />
         </aside>
       </div>
@@ -1246,11 +1264,11 @@ function SourcePanel(props: {
         <div className="mb-3 flex items-center justify-between">
           <div>
             <h2 className="text-sm font-semibold">源文与素材</h2>
-            <p className="mt-1 text-xs text-muted-foreground">编辑源文，解析并应用到当前平台</p>
+            <p className="mt-1 text-xs text-muted-foreground">编辑源文，分析后再生成当前平台</p>
           </div>
           <Button type="button" size="sm" variant="outline" onClick={props.onReparse}>
             <RefreshCw className="h-4 w-4" />
-            解析并应用
+            分析源文
           </Button>
         </div>
         <div className="grid grid-cols-3 gap-2 text-xs">
@@ -1302,9 +1320,9 @@ function SourcePanel(props: {
 
 function PlatformEditor(props: {
   draft: PlatformDraft;
+  plan: DesignPlan;
   history: DraftHistory;
   onDraftChange: (draft: PlatformDraft) => void;
-  onRegenerate: () => Promise<void>;
   onUndo: () => void;
   onRedo: () => void;
   onCopyText: (text: string, success: string) => Promise<void>;
@@ -1326,10 +1344,6 @@ function PlatformEditor(props: {
             <Button type="button" size="sm" variant="outline" onClick={props.onRedo} disabled={!props.history.future.length} aria-label="重做">
               <Redo2 className="h-4 w-4" />
             </Button>
-            <Button type="button" size="sm" onClick={() => void props.onRegenerate()}>
-              <RefreshCw className="h-4 w-4" />
-              生成当前平台
-            </Button>
           </div>
         </div>
         <div className="mt-3 grid gap-2 md:grid-cols-[1fr_220px]">
@@ -1341,6 +1355,20 @@ function PlatformEditor(props: {
             aria-label="平台标签"
             placeholder="标签"
           />
+        </div>
+        <div className="mt-2 flex items-center gap-2 overflow-x-auto pb-1 text-xs">
+          <span className="shrink-0 text-muted-foreground">标题备选</span>
+          {props.plan.titleCandidates.map((title, index) => (
+            <button
+              key={`${index}-${title}`}
+              type="button"
+              className={cn("max-w-[260px] shrink-0 truncate rounded-full border px-2.5 py-1 text-left hover:border-[#17633d] hover:text-[#17633d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#17633d]", title === props.draft.title && "border-[#17633d] bg-[#edf7f1] text-[#17633d]")}
+              onClick={() => props.onDraftChange(updatePlatformTitle(props.draft, title))}
+              title={title}
+            >
+              {index === 0 ? "推荐 · " : ""}{title}
+            </button>
+          ))}
         </div>
         {props.draft.platform !== "wechat" && (
           <Textarea
@@ -1383,100 +1411,11 @@ function PlatformEditor(props: {
   );
 }
 
-function StyleToolbar(props: {
-  open: boolean;
-  onToggle: () => void;
-  activePlatform: PlatformId;
-  draft: PlatformDraft;
-  layout: LayoutSettings;
-  onLayoutChange: (patch: Partial<LayoutSettings>) => void;
-  onTemplateChange: (templateKey: TemplateKey) => void;
-  onRatioChange: (ratio: RatioMode) => void;
-}) {
-  const currentTemplate = templateList.find((template) => template.key === props.draft.templateKey);
-  const isCardPlatform = props.activePlatform !== "wechat" && props.activePlatform !== "douyinLongform";
-
-  return (
-    <section className="border-b border-[#d8e1dc] bg-white">
-      <div className="mx-auto max-w-[1680px] px-4 py-2.5 lg:px-6">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[#e5f3eb] text-[#17633d]">
-              <Settings2 className="h-4 w-4" aria-hidden="true" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-sm font-semibold">样式与画布</h2>
-                <span className="rounded-full bg-[#edf2ef] px-2 py-0.5 text-[11px] text-[#4c6659]">{WORKSPACE_PLATFORM_LABELS[props.activePlatform]}</span>
-              </div>
-              <p className="truncate text-xs text-muted-foreground">
-                {props.activePlatform === "wechat"
-                  ? `公众号样式：${currentTemplate?.name ?? "未选择"}`
-                  : props.activePlatform === "douyinImage"
-                    ? `图文比例：${props.draft.ratio}`
-                    : isCardPlatform
-                      ? "图文画布：可调边距、字号和间距"
-                      : "长文使用当前平台的内容结构"
-                }
-              </p>
-            </div>
-          </div>
-          <Button type="button" size="sm" variant="outline" className="shrink-0" onClick={props.onToggle} aria-expanded={props.open} aria-controls="style-toolbar-controls">
-            {props.open ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-            {props.open ? "收起" : "调整样式"}
-          </Button>
-        </div>
-        {props.open && (
-          <div id="style-toolbar-controls" className="mt-3 grid gap-3 border-t border-[#e3e9e5] pt-3 md:grid-cols-2 xl:grid-cols-4">
-            {props.activePlatform === "wechat" && (
-              <SettingRow label="公众号样式">
-                <Select value={props.draft.templateKey} onValueChange={(value) => props.onTemplateChange(value as TemplateKey)}>
-                  <SelectTrigger className="h-9 rounded-md">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {templateList.map((template) => (
-                      <SelectItem key={template.key} value={template.key}>
-                        {template.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </SettingRow>
-            )}
-            {props.activePlatform === "douyinImage" && (
-              <SettingRow label="图片比例">
-                <div className="grid grid-cols-2 gap-2" role="group" aria-label="图片比例">
-                  <Toggle className="w-full" pressed={props.draft.ratio === "3:4"} onPressedChange={() => props.onRatioChange("3:4")}>3:4</Toggle>
-                  <Toggle className="w-full" pressed={props.draft.ratio === "9:16"} onPressedChange={() => props.onRatioChange("9:16")}>9:16</Toggle>
-                </div>
-              </SettingRow>
-            )}
-            {isCardPlatform && (
-              <>
-                <Range label="边距" value={props.layout.margin} min={48} max={140} step={2} onChange={(margin) => props.onLayoutChange({ margin })} />
-                <Range label="标题" value={props.layout.titleFontSize} min={56} max={92} onChange={(titleFontSize) => props.onLayoutChange({ titleFontSize })} />
-                <Range label="正文" value={props.layout.bodyFontSize} min={28} max={44} onChange={(bodyFontSize) => props.onLayoutChange({ bodyFontSize })} />
-                <Range label="行距" value={props.layout.lineSpacing} min={1.1} max={1.8} step={0.05} onChange={(lineSpacing) => props.onLayoutChange({ lineSpacing })} />
-                <Range label="段距" value={props.layout.paragraphSpacing} min={18} max={64} onChange={(paragraphSpacing) => props.onLayoutChange({ paragraphSpacing })} />
-              </>
-            )}
-            {props.activePlatform === "douyinLongform" && (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground md:col-span-2 xl:col-span-4">
-                <Sparkles className="h-4 w-4" aria-hidden="true" />
-                当前平台为抖音长文，标题、正文、重点和结尾会在右侧预览中同步更新。
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
 function PreviewPanel(props: {
   activePlatform: PlatformId;
   draft: PlatformDraft;
+  plan: DesignPlan;
+  currentSourceRevision: string;
   wechatHtml: string;
   cardLayout?: CardLayoutResult;
   imageUrlByBlock: Record<string, string>;
@@ -1505,98 +1444,62 @@ function PreviewPanel(props: {
   onSessionApiKeyChange: (value: string) => void;
   onCancelAi: () => void;
   onRetryAi: () => void;
+  onOpenStyles: () => void;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="border-b bg-white p-4">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4" aria-hidden="true" />
-          <div>
-            <h2 className="text-sm font-semibold">生成与预览</h2>
-            <p className="text-xs text-muted-foreground">{WORKSPACE_PLATFORM_LABELS[props.activePlatform]} · 只生成当前平台</p>
+      <div className="shrink-0 border-b bg-white p-3">
+        <div className="flex items-start gap-2">
+          <Sparkles className="mt-0.5 h-4 w-4 text-[#17633d]" aria-hidden="true" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold">真实成品预览</h2>
+              <span className="rounded-full bg-[#edf2ef] px-2 py-0.5 text-[10px] text-[#4c6659]">{draftStatusLabel(props.draft, props.currentSourceRevision)}</span>
+            </div>
+            <button type="button" className="mt-1 block max-w-full text-left text-xs leading-5 text-muted-foreground hover:text-[#17633d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#17633d]" onClick={props.onOpenStyles}>
+              推荐：{DESIGN_SCHEMES[props.plan.recommendedScheme].name}。{props.plan.recommendationReason}
+            </button>
           </div>
+          <Button type="button" size="sm" variant="outline" className="h-8 shrink-0" onClick={props.onOpenStyles}>
+            <Settings2 className="h-4 w-4" /> 方案
+          </Button>
         </div>
 
-        <div className="mt-3 rounded-md border bg-[#fafaf8] p-3">
-          <SettingRow label="生成模式">
-            <div className="grid grid-cols-3 gap-1 rounded-md bg-[#eceeea] p-1" role="group" aria-label="生成模式">
-              <Toggle className="w-full px-2 text-xs" pressed={props.aiMode === "deterministic"} onPressedChange={() => props.onAiModeChange("deterministic")}>
-                本地
-              </Toggle>
-              <Toggle className="w-full px-2 text-xs" pressed={props.aiMode === "hosted"} onPressedChange={() => props.onAiModeChange("hosted")}>
-                服务端 AI
-              </Toggle>
-              <Toggle className="w-full px-2 text-xs" pressed={props.aiMode === "custom"} onPressedChange={() => props.onAiModeChange("custom")}>
-                自定义接口
-              </Toggle>
+        <div className="mt-2 grid grid-cols-3 gap-1 rounded-md bg-[#edf1ee] p-1" role="group" aria-label="生成模式">
+          <Toggle className="h-7 w-full px-1 text-[11px]" pressed={props.aiMode === "deterministic"} onPressedChange={() => props.onAiModeChange("deterministic")}>本地</Toggle>
+          <Toggle className="h-7 w-full px-1 text-[11px]" pressed={props.aiMode === "hosted"} onPressedChange={() => props.onAiModeChange("hosted")}>服务端 AI</Toggle>
+          <Toggle className="h-7 w-full px-1 text-[11px]" pressed={props.aiMode === "custom"} onPressedChange={() => props.onAiModeChange("custom")}>自定义接口</Toggle>
+        </div>
+
+        {(props.aiRunState === "generating" || props.aiRunState === "error") && (
+          <div className={cn("mt-2 rounded-md border px-3 py-2 text-xs", props.aiRunState === "error" ? "border-red-200 bg-red-50 text-red-800" : "border-[#c8d8cf] bg-[#f1f7f3] text-[#28553d]")} role={props.aiRunState === "error" ? "alert" : "status"} aria-live="polite">
+            <div className="flex items-start gap-2">
+              {props.aiRunState === "generating" ? <RefreshCw className="mt-0.5 h-3.5 w-3.5 animate-spin" /> : <AlertCircle className="mt-0.5 h-3.5 w-3.5" />}
+              <span className="min-w-0 flex-1">{props.aiStatusMessage ?? props.aiFallbackReason ?? props.statusMessage}</span>
             </div>
-          </SettingRow>
-          {props.aiMode === "hosted" && (
-            <div
-              className={cn(
-                "mt-3 space-y-2 rounded-md border p-3 text-xs",
-                props.aiRunState === "error" ? "border-red-200 bg-red-50 text-red-800" : props.aiRunState === "generating" ? "border-[#c8d8cf] bg-[#f1f7f3] text-[#28553d]" : "border-[#dfe4df] bg-white text-muted-foreground",
+            <div className="mt-2 flex gap-2">
+              {props.aiRunState === "generating" ? (
+                <Button type="button" size="sm" variant="outline" className="h-7" onClick={props.onCancelAi}>取消</Button>
+              ) : (
+                <>
+                  <Button type="button" size="sm" className="h-7" onClick={props.onRetryAi}>重试服务端 AI</Button>
+                  <Button type="button" size="sm" variant="outline" className="h-7" onClick={() => props.onAiModeChange("deterministic")}>切换本地</Button>
+                </>
               )}
-              role={props.aiRunState === "error" ? "alert" : "status"}
-              aria-live="polite"
-            >
-              <div className="flex items-center gap-2 font-medium">
-                {props.aiRunState === "generating" ? <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" /> : props.aiRunState === "error" ? <AlertCircle className="h-4 w-4" aria-hidden="true" /> : <CheckCircle2 className="h-4 w-4" aria-hidden="true" />}
-                <span>{props.aiRunState === "generating" ? "正在请求服务端 AI" : props.aiRunState === "error" ? "服务端 AI 生成失败" : "服务端 AI 已就绪"}</span>
-              </div>
-              <p>
-                {props.aiRunState === "generating"
-                  ? props.aiStatusMessage ?? props.statusMessage
-                  : props.aiRunState === "error"
-                    ? props.aiStatusMessage ?? props.aiFallbackReason ?? "请求失败，当前编辑稿已保留。"
-                    : props.aiStatusMessage ?? (props.statusMessage.startsWith("AI 已完成") ? props.statusMessage : undefined)
-                      ?? "密钥、模型和上游地址由服务端环境变量管理；点击中间栏“生成”只更新当前平台。"
-                }
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" size="sm" variant="outline" onClick={props.onCancelAi} disabled={props.aiRunState !== "generating"}>
-                  取消生成
-                </Button>
-                {props.aiRunState === "error" && (
-                  <>
-                    <Button type="button" size="sm" onClick={props.onRetryAi}>
-                      重试服务端 AI
-                    </Button>
-                    <Button type="button" size="sm" variant="outline" onClick={() => props.onAiModeChange("deterministic")}>
-                      切换本地模式
-                    </Button>
-                  </>
-                )}
-              </div>
             </div>
-          )}
-          {props.aiMode === "custom" && (
-            <div className="mt-3 space-y-2 rounded-md border bg-white p-3">
-              <Input value={props.aiBaseUrl} onChange={(event) => props.onAiBaseUrlChange(event.target.value)} className="h-9 rounded-md" aria-label="AI Base URL" placeholder="Base URL" />
-              <Input value={props.aiModel} onChange={(event) => props.onAiModelChange(event.target.value)} className="h-9 rounded-md" aria-label="AI 模型" placeholder="模型" />
-              <Input
-                value={props.sessionApiKey}
-                onChange={(event) => props.onSessionApiKeyChange(event.target.value)}
-                className="h-9 rounded-md"
-                aria-label="AI 会话 API Key"
-                placeholder="Session API Key"
-                type="password"
-                autoComplete="off"
-              />
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>{props.aiRunState === "generating" ? "生成中" : props.aiFallbackReason ?? "密钥只保存在当前会话"}</span>
-                <Button type="button" size="sm" variant="outline" onClick={props.onCancelAi} disabled={props.aiRunState !== "generating"}>
-                  取消
-                </Button>
-              </div>
-            </div>
-          )}
-        </div>
+          </div>
+        )}
 
-        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-          <Metric label="当前稿件" value={props.draft.status} />
-          <Metric label="预览页面" value={props.cardLayout?.pages.length ?? "HTML"} />
-        </div>
+        {props.aiMode === "custom" && (
+          <details className="mt-2 rounded-md border bg-[#fbfcfb] px-3 py-2 text-xs">
+            <summary className="cursor-pointer font-medium">自定义接口设置</summary>
+            <div className="mt-2 grid gap-2">
+              <Input value={props.aiBaseUrl} onChange={(event) => props.onAiBaseUrlChange(event.target.value)} className="h-8" aria-label="AI Base URL" placeholder="Base URL" />
+              <Input value={props.aiModel} onChange={(event) => props.onAiModelChange(event.target.value)} className="h-8" aria-label="AI 模型" placeholder="模型" />
+              <Input value={props.sessionApiKey} onChange={(event) => props.onSessionApiKeyChange(event.target.value)} className="h-8" aria-label="AI 会话 API Key" placeholder="Session API Key" type="password" autoComplete="off" />
+            </div>
+          </details>
+        )}
       </div>
       <div data-preview-scroll className="min-h-0 flex-1 overflow-y-auto bg-[#efeee8] p-4">
         {props.activePlatform === "wechat" ? (
@@ -1609,6 +1512,7 @@ function PreviewPanel(props: {
             activePlatform={props.activePlatform}
             layout={props.cardLayout}
             imageUrlByBlock={props.imageUrlByBlock}
+            preset={cardPresetForScheme(props.draft.schemeId)}
             onTogglePageLock={props.onTogglePageLock}
             onSplitPage={props.onSplitPage}
             onMergePage={props.onMergePage}
@@ -1671,6 +1575,7 @@ function CardPreview(props: {
   activePlatform: PlatformId;
   layout?: CardLayoutResult;
   imageUrlByBlock: Record<string, string>;
+  preset: ReturnType<typeof cardPresetForScheme>;
   onTogglePageLock: (page: CardLayoutPage) => void;
   onSplitPage: (page: CardLayoutPage, elementId: string) => void;
   onMergePage: (page: CardLayoutPage) => void;
@@ -1770,9 +1675,9 @@ function CardPreview(props: {
           </Button>
         </div>
       </div>
-      <div data-card-preview className="mx-auto overflow-hidden rounded-md border bg-[#fffbf6] shadow-sm" style={{ width: previewWidth, height: Math.round((previewWidth * page.canvas.height) / page.canvas.width) }}>
+      <div data-card-preview className="mx-auto overflow-hidden rounded-md border shadow-sm" style={{ width: previewWidth, height: Math.round((previewWidth * page.canvas.height) / page.canvas.width), background: props.preset.background }}>
         <div style={{ width: page.canvas.width, height: page.canvas.height, transform: `scale(${previewWidth / page.canvas.width})`, transformOrigin: "top left", position: "relative" }}>
-          <div className="absolute bg-[#d8c5b1]" style={{ left: page.safeArea.x, top: page.safeArea.y - 36, width: page.safeArea.width, height: 4 }} />
+          <div className="absolute" style={{ left: page.safeArea.x, top: page.safeArea.y - 36, width: page.safeArea.width, height: 4, background: props.preset.rule }} />
           {page.nodes.map((node) => {
             const imageUrl = props.imageUrlByBlock[node.blockId];
             if (node.kind === "image") {
@@ -1791,13 +1696,13 @@ function CardPreview(props: {
                   }}
                 />
               ) : (
-                <div key={node.id} className="absolute bg-[#f1e7dc]" style={{ left: node.x, top: node.y, width: node.width, height: node.height }} />
+                <div key={node.id} className="absolute" style={{ left: node.x, top: node.y, width: node.width, height: node.height, background: props.preset.highlight }} />
               );
             }
             return (
               <div
                 key={node.id}
-                className={cn("absolute whitespace-pre-wrap break-words", node.kind === "focus" && "rounded-lg bg-[#f1e7dc] px-4 py-3")}
+                className={cn("absolute whitespace-pre-wrap break-words", node.kind === "focus" && "rounded-lg px-4 py-3")}
                   style={{
                     left: node.x,
                     top: node.y,
@@ -1806,7 +1711,8 @@ function CardPreview(props: {
                     fontSize: node.style?.fontSize,
                     lineHeight: node.style?.lineHeight ? `${node.style.lineHeight}px` : undefined,
                     fontWeight: node.style?.fontWeight,
-                    color: node.kind === "body" ? "#6b3a16" : "#8a430e",
+                    color: node.kind === "body" ? props.preset.body : props.preset.title,
+                    background: node.kind === "focus" ? props.preset.highlight : undefined,
                   }}
               >
                 {node.lines.map((line) => line.text).join("\n")}
@@ -1820,20 +1726,16 @@ function CardPreview(props: {
   );
 }
 
-function Range(props: { label: string; value: number; min: number; max: number; step?: number; onChange: (value: number) => void }) {
+function PaneResizer(props: { label: string; onPointerDown: (event: React.PointerEvent<HTMLButtonElement>) => void }) {
   return (
-    <SettingRow label={`${props.label} ${Number.isInteger(props.value) ? props.value : props.value.toFixed(2)}`}>
-      <Slider value={props.value} min={props.min} max={props.max} step={props.step} onValueChange={props.onChange} />
-    </SettingRow>
-  );
-}
-
-function SettingRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="space-y-1">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
-      {children}
-    </div>
+    <button
+      type="button"
+      className="workspace-pane-resizer hidden cursor-col-resize items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#17633d] lg:flex"
+      aria-label={props.label}
+      onPointerDown={props.onPointerDown}
+    >
+      <span className="h-10 w-px bg-[#b9c7bf]" aria-hidden="true" />
+    </button>
   );
 }
 
@@ -1861,8 +1763,11 @@ function saveStateLabel(state: "loading" | "dirty" | "saving" | "saved" | "error
   }
 }
 
-function draftStatusLabel(status: PlatformDraft["status"]) {
-  switch (status) {
+function draftStatusLabel(draft: PlatformDraft, currentSourceRevision: string) {
+  if (draft.sourceRevision !== currentSourceRevision) {
+    return draft.status === "edited" ? "源文已更新" : "待重新生成";
+  }
+  switch (draft.status) {
     case "edited":
       return "已编辑";
     case "generated":

@@ -1,5 +1,7 @@
 import type { TemplateKey } from "@/lib/article-types";
 import type { UnifiedArticleContent } from "@/lib/content";
+import type { DesignPlan } from "@/lib/design-plan";
+import type { DesignSchemeId } from "@/lib/design-schemes";
 import type { PlatformId, PlatformVersionStatus } from "@/lib/platforms/types";
 import type { CardAspectRatio, CardLayoutPage } from "@/lib/renderers/cards";
 import type { ProjectAssetReference } from "@/lib/storage";
@@ -45,6 +47,8 @@ export type PlatformMeta = {
 export type PlatformDraft = {
   platform: PlatformId;
   status: PlatformVersionStatus;
+  sourceRevision: string;
+  schemeId: DesignSchemeId;
   title: string;
   content: UnifiedArticleContent;
   templateKey: TemplateKey;
@@ -66,6 +70,10 @@ export type AiWorkspaceSettings = {
 export type WorkspacePersistedState = {
   schemaVersion: 1;
   sourceMarkdown: string;
+  sourceRevision: string;
+  designPlan: DesignPlan;
+  favoriteSchemeIds: DesignSchemeId[];
+  recentSchemeIds: DesignSchemeId[];
   layout: LayoutSettings;
   ai: AiWorkspaceSettings;
   platforms: Record<PlatformId, PlatformDraft>;

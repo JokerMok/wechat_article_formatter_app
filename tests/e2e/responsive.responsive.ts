@@ -37,17 +37,17 @@ async function expectCardScreenshot(card: import("@playwright/test").Locator, sn
 
 test("TEST-020 narrow workspace exposes source, editor and preview views without horizontal overflow", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "素材" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "源文", exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "素材" }).click();
+  await page.getByRole("button", { name: "源文", exact: true }).click();
   await page.getByLabel("源文 Markdown").fill(articleById("extreme-english").source);
-  await page.getByRole("button", { name: "编辑" }).click();
-  await page.getByRole("button", { name: "生成当前平台" }).click();
-  await expect(page.getByText(/已使用本地确定性生成|已保存到浏览器本地/)).toBeVisible();
+  await page.getByRole("button", { name: "编辑", exact: true }).click();
+  await page.locator("header").getByRole("button", { name: "生成当前平台" }).click();
+  await expect(page.getByRole("navigation", { name: "目标平台" }).getByRole("button", { name: /^公众号/ })).toContainText("已生成");
 
   await expect(page.getByLabel("平台标题")).toBeVisible();
   await page.getByRole("button", { name: "抖音图文" }).click();
-  await page.getByRole("button", { name: "预览" }).click();
+  await page.getByRole("button", { name: "预览", exact: true }).click();
   await expect(page.getByText(/1080x1440/).first()).toBeVisible();
   const narrowCard = await assertCardRatio(page, 1080, 1440);
   await expectCardScreenshot(narrowCard, "narrow-douyin-3x4-card.png");

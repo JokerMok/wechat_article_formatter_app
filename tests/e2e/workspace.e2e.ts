@@ -14,22 +14,24 @@ async function setSource(page: Page, id: Parameters<typeof articleById>[0], opti
   const article = articleById(id);
   await page.getByLabel("项目名称").fill(article.title);
   await page.getByLabel("源文 Markdown").fill(article.source);
-  const acceptEditedDialog = options?.acceptEditedOverwrite
-    ? async (dialog: import("@playwright/test").Dialog) => {
-        expect(dialog.message()).toContain("重新生成会覆盖");
-        await dialog.accept();
-      }
-    : undefined;
-  if (acceptEditedDialog) page.on("dialog", acceptEditedDialog);
-  try {
-    for (const platform of ["公众号", "小红书", "抖音图文", "抖音长文"] as const) {
-      await selectPlatform(page, platform);
-      await page.getByRole("button", { name: "生成当前平台" }).click();
+  for (const platform of ["公众号", "小红书", "抖音图文", "抖音长文"] as const) {
+    await selectPlatform(page, platform);
+    await generateCurrentPlatform(page);
+    const overwriteButton = page.getByRole("button", { name: "覆盖并生成" });
+    if (options?.acceptEditedOverwrite && await overwriteButton.isVisible()) {
+      await overwriteButton.click();
     }
-  } finally {
-    if (acceptEditedDialog) page.off("dialog", acceptEditedDialog);
   }
   await expect(page.getByText(/已使用本地确定性生成|已保存到浏览器本地|已解析/)).toBeVisible();
+}
+
+async function generateCurrentPlatform(page: Page) {
+  await page.locator("header").getByRole("button", { name: "生成当前平台" }).click();
+}
+
+async function runProjectMenuAction(page: Page, action: "新建项目" | "导入项目" | "导出项目" | "删除项目") {
+  await page.getByRole("button", { name: "更多项目操作" }).click();
+  await page.getByRole("menuitem", { name: action }).click();
 }
 
 async function selectPlatform(page: Page, label: "公众号" | "小红书" | "抖音图文" | "抖音长文") {
@@ -180,7 +182,7 @@ test("TEST-001/020 unified entry saves, refreshes, deletes with confirmation, an
   await selectPlatform(page, "公众号");
   await page.getByLabel("平台标题").fill("公众号独立修改");
   await page.getByText("自定义接口", { exact: true }).click();
-  await page.getByRole("button", { name: "生成当前平台", exact: true }).click();
+  await generateCurrentPlatform(page);
   await expect(page.getByText(/AI 配置不完整/).first()).toBeVisible();
   await expect(page.getByLabel("平台标题")).toHaveValue("公众号独立修改");
   await page.getByText("本地", { exact: true }).click();
@@ -189,7 +191,7 @@ test("TEST-001/020 unified entry saves, refreshes, deletes with confirmation, an
   await selectPlatform(page, "公众号");
   await expect(page.getByLabel("平台标题")).toHaveValue("公众号独立修改");
 
-  await page.getByRole("button", { name: "保存" }).click();
+  await page.getByRole("button", { name: "保存项目" }).click();
   await expect(page.getByText("已保存到浏览器本地")).toBeVisible();
   await page.reload();
   await expect(page.getByLabel("项目名称")).toHaveValue(articleById("markdown-headings").title);
@@ -200,28 +202,31 @@ test("TEST-001/020 unified entry saves, refreshes, deletes with confirmation, an
     expect(dialog.message()).toContain("确定删除当前项目");
     await dialog.dismiss();
   });
-  await page.getByRole("button", { name: "删除" }).click();
+  await runProjectMenuAction(page, "删除项目");
   await expect(page.getByLabel("项目名称")).toHaveValue(articleById("markdown-headings").title);
 
   page.once("dialog", async (dialog) => {
     await dialog.accept();
   });
-  await page.getByRole("button", { name: "删除" }).click();
+  await runProjectMenuAction(page, "删除项目");
   await expect(page.getByText("项目已删除")).toBeVisible();
   await expect(page.getByLabel("项目名称")).toHaveValue("未命名项目");
 });
 
-test("解析并应用 updates the selected draft without changing other platforms", async ({ page }) => {
+test("分析源文只更新设计计划，生成操作才更新当前平台", async ({ page }) => {
   await openWorkspace(page);
   const source = "# 解析后的平台标题\n\n这段内容应该进入当前选中的小红书稿件。";
   const originalWechatTitle = await page.getByLabel("平台标题").inputValue();
 
   await page.getByLabel("源文 Markdown").fill(source);
   await selectPlatform(page, "小红书");
-  await page.getByRole("button", { name: "解析并应用" }).click();
+  const originalXhsTitle = await page.getByLabel("平台标题").inputValue();
+  await page.getByRole("button", { name: "分析源文" }).click();
 
-  await expect(page.getByText("已解析源文并更新小红书版本")).toBeVisible();
-  await expect(page.getByLabel("平台标题")).toHaveValue("解析后的平台标题");
+  await expect(page.getByText(/源文分析完成/)).toBeVisible();
+  await expect(page.getByLabel("平台标题")).toHaveValue(originalXhsTitle);
+  await generateCurrentPlatform(page);
+  await expect(page.getByLabel("平台标题")).toHaveValue(/解析后的平台标题/);
   await expect(page.getByLabel("正文内容").first()).toHaveValue("这段内容应该进入当前选中的小红书稿件。");
 
   await selectPlatform(page, "公众号");
@@ -265,7 +270,7 @@ test("TEST-010/011/018/019 WeChat preview editing, HTML export, image node, down
   await expect(page.getByText("已上传 1 张图片")).toBeVisible();
   await page.getByRole("button", { name: "cover.png" }).click();
   await selectPlatform(page, "公众号");
-  await page.getByRole("button", { name: "生成当前平台" }).click();
+  await generateCurrentPlatform(page);
 
   await selectPlatform(page, "公众号");
   const editor = page.locator(".preview-editor");
@@ -325,8 +330,9 @@ test("TEST-012/013/014/015 card previews keep real ratios, reflow after layout e
   expect(xhsZip.file("manifest.json")).not.toBeNull();
   expect(xhsZip.file("copy.txt")).not.toBeNull();
   expect(xhsZip.file("tags.txt")).not.toBeNull();
-  await page.getByRole("button", { name: "调整样式" }).click();
-  await page.getByText(/^正文 /).locator("..").getByRole("slider").press("ArrowRight");
+  await page.getByRole("button", { name: "排版方案" }).click();
+  await page.getByRole("slider", { name: "正文字号" }).press("ArrowRight");
+  await page.getByRole("button", { name: "关闭排版方案" }).click();
   await expect(page.getByText(/1080x1440 · 1\//).first()).toBeVisible();
   await expect(page.locator("text=当前页有溢出")).toHaveCount(0);
 
@@ -345,7 +351,9 @@ test("TEST-012/013/014/015 card previews keep real ratios, reflow after layout e
   await selectPlatform(page, "抖音图文");
   await expect(page.getByText(/1080x1440/).first()).toBeVisible();
   await assertCardRatio(page, 1080, 1440);
-  await page.getByText("9:16").click();
+  await page.getByRole("button", { name: "排版方案" }).click();
+  await page.getByRole("group", { name: "图片比例" }).getByText("9:16").click();
+  await page.getByRole("button", { name: "关闭排版方案" }).click();
   await expect(page.getByText(/1080x1920/).first()).toBeVisible();
   await assertCardRatio(page, 1080, 1920);
   await expect(page.locator("text=当前页有溢出")).toHaveCount(0);
@@ -373,13 +381,13 @@ test("TEST-016/018 project backup, image restore, PNG download and invalid file 
   await expect(page.getByText("已上传 1 张图片")).toBeVisible();
   await page.getByRole("button", { name: "cover.png" }).click();
   await selectPlatform(page, "小红书");
-  await page.getByRole("button", { name: "生成当前平台" }).click();
+  await generateCurrentPlatform(page);
 
   await selectPlatform(page, "小红书");
   await expect(page.locator("img").first()).toBeVisible();
 
   const backupDownload = page.waitForEvent("download");
-  await page.getByRole("button", { name: "导出项目" }).click();
+  await runProjectMenuAction(page, "导出项目");
   const { download: backup, zip } = await readDownloadZip(backupDownload);
   expect(backup.suggestedFilename()).toMatch(/backup\.zip$/);
   const backupPayload = JSON.parse(await zip.file("backup.json")!.async("text"));
@@ -433,7 +441,7 @@ test("TEST-021/022/023/025 fixed articles cover 48 persisted platform versions a
       await assertNoHorizontalOverflow(page);
     }
 
-    await page.getByRole("button", { name: "保存" }).click();
+    await page.getByRole("button", { name: "保存项目" }).click();
     await expect(page.getByText("已保存到浏览器本地")).toBeVisible();
     await page.reload();
     await expect(page.getByLabel("项目名称")).toHaveValue(article.title);

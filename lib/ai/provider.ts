@@ -2,6 +2,7 @@ import { z } from "zod";
 import { parseArticleContent } from "../article-parser";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../content";
 import { unifiedArticleContentSchema } from "../content";
+import { analyzeArticleDesign, type DesignPlan } from "../design-plan";
 import type { PlatformId, PlatformVersion, PlatformVersionMap } from "../platforms/types";
 
 export const aiPlatformIds = ["wechat", "xiaohongshu", "douyinImage", "douyinLongform"] as const;
@@ -111,6 +112,7 @@ export type GeneratePlatformVersionsResult =
   | {
       ok: true;
       versions: PlatformVersionMap;
+      designPlan: DesignPlan;
       diagnostics: AIDiagnostics;
       changes: AIChangeRecord[];
     }
@@ -118,6 +120,7 @@ export type GeneratePlatformVersionsResult =
       ok: false;
       versions: PlatformVersionMap;
       fallbackVersions: PlatformVersionMap;
+      fallbackDesignPlan: DesignPlan;
       error: AIProviderErrorInfo;
     };
 
@@ -371,6 +374,7 @@ export async function generatePlatformVersions(options: GeneratePlatformVersions
   const platforms = options.platforms ?? [...aiPlatformIds];
   const now = options.now?.() ?? new Date().toISOString();
   const fallbackVersions = buildFallbackPlatformVersions(options.source, platforms, now);
+  const fallbackDesignPlan = analyzeArticleDesign(options.source);
   const currentVersions = options.existingVersions ?? {};
 
   if (!options.provider) {
@@ -378,6 +382,7 @@ export async function generatePlatformVersions(options: GeneratePlatformVersions
       ok: false,
       versions: currentVersions,
       fallbackVersions,
+      fallbackDesignPlan,
       error: {
         code: "transport",
         message: "AI provider is not configured.",
@@ -408,6 +413,7 @@ export async function generatePlatformVersions(options: GeneratePlatformVersions
     return {
       ok: true,
       versions: generatedContent.versions,
+      designPlan: fallbackDesignPlan,
       diagnostics: {
         ...generated.diagnostics,
         details: [...(generated.diagnostics.details ?? []), ...generatedContent.factCheckWarnings],
@@ -419,6 +425,7 @@ export async function generatePlatformVersions(options: GeneratePlatformVersions
       ok: false,
       versions: currentVersions,
       fallbackVersions,
+      fallbackDesignPlan,
       error: normalizeAIError(error, options.provider.model, options.sourceVersionId),
     };
   }

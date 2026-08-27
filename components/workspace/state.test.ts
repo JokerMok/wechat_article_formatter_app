@@ -5,6 +5,7 @@ import {
   WORKSPACE_HISTORY_LIMIT,
   WORKSPACE_VERSION_KEY,
   applyPlatformDraftReplacements,
+  applyDesignSchemeToDraft,
   applyManualPageOrder,
   clearManualCardPages,
   createPlatformDraftSignatureMap,
@@ -30,6 +31,7 @@ import {
   updatePlatformCaption,
   updatePlatformRatio,
   updatePlatformTitle,
+  updateWorkspaceSource,
   withLockedCardPage,
   withManualCardPages,
   withWechatHtmlOverride,
@@ -106,6 +108,29 @@ describe("workspace state", () => {
     expect(Object.keys(state.platforms).sort()).toEqual([...WORKSPACE_PLATFORM_IDS].sort());
     expect(state.platforms.wechat.content).not.toBe(state.platforms.xiaohongshu.content);
     expect(state.platforms.douyinImage.ratio).toBe("3:4");
+    expect(state.platforms.wechat.sourceRevision).toBe(state.sourceRevision);
+    expect(state.designPlan.recommendedScheme).toBeDefined();
+  });
+
+  it("marks existing platform drafts as out of date by source revision without overwriting them", () => {
+    const state = createWorkspaceState("# 原标题\n\n原正文。");
+    const edited = updatePlatformTitle(state.platforms.wechat, "人工标题");
+    const next = updateWorkspaceSource({ ...state, platforms: { ...state.platforms, wechat: edited } }, "# 新标题\n\n新正文。");
+
+    expect(next.sourceRevision).not.toBe(edited.sourceRevision);
+    expect(next.platforms.wechat.title).toBe("人工标题");
+    expect(next.platforms.wechat.status).toBe("edited");
+  });
+
+  it("applies a visual scheme without changing platform text", () => {
+    const state = createWorkspaceState("# 标题\n\n正文。");
+    const before = state.platforms.wechat;
+    const after = applyDesignSchemeToDraft(before, "productCase");
+
+    expect(after.schemeId).toBe("productCase");
+    expect(after.templateKey).toBe("zhenyiBusinessCase");
+    expect(after.content).toEqual(before.content);
+    expect(after.status).toBe("edited");
   });
 
   it("edits only the selected platform draft", () => {

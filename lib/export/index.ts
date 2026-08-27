@@ -27,6 +27,7 @@ export type ExportedFile = {
 export type ExportTimestamp = string | Date;
 
 export type CardRenderImages = NonNullable<DrawCardImagePageOptions["images"]>;
+export type CardRenderPreset = NonNullable<DrawCardImagePageOptions["preset"]>;
 
 export type CardPageRenderInput = {
   page: CardLayoutPage;
@@ -35,6 +36,7 @@ export type CardPageRenderInput = {
   fileName: string;
   pageIndex: number;
   images?: CardRenderImages;
+  preset?: CardRenderPreset;
 };
 
 export type CardPageRenderer = (input: CardPageRenderInput) => Promise<Blob>;
@@ -275,7 +277,7 @@ async function renderBrowserCardPageToPng(input: CardPageRenderInput): Promise<B
     throw new Error("card_canvas_context_unavailable");
   }
 
-  drawCardImagePage(context as unknown as CardImageCanvasContext, input.page, { images: input.images });
+  drawCardImagePage(context as unknown as CardImageCanvasContext, input.page, { images: input.images, preset: input.preset });
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (blob) resolve(blob);
@@ -410,6 +412,7 @@ async function renderImageFiles(input: {
   baseName: string;
   renderer?: CardPageRenderer;
   images?: CardRenderImages;
+  preset?: CardRenderPreset;
 }) {
   const renderer = input.renderer ?? renderBrowserCardPageToPng;
   const files: ExportedFile[] = [];
@@ -422,6 +425,7 @@ async function renderImageFiles(input: {
       fileName,
       pageIndex: index,
       images: input.images,
+      preset: input.preset,
     });
     files.push(exportedFile(`images/${fileName}`, blob, "image/png"));
   }
@@ -492,6 +496,7 @@ export async function exportXiaohongshuPackage(input: {
   layoutOptions?: CardLayoutOptions;
   measurer?: TextMeasurer;
   exportedAt?: ExportTimestamp;
+  preset?: CardRenderPreset;
 }): Promise<PlatformImageExportResult<XiaohongshuImageTextOutput>> {
   const output = input.output ?? toXiaohongshuImageText(input.content);
   const exportedAt = toExportedAt(input.exportedAt);
@@ -499,7 +504,7 @@ export async function exportXiaohongshuPackage(input: {
   const pages = resolveCardPages({ content: input.content, ratio: "3:4", pages: input.pages, layoutOptions: input.layoutOptions, measurer: input.measurer });
   assertPagesMatchRatio(pages, "3:4");
   const renderImages = await resolveCardRenderImages({ content: input.content, pages, images: input.images });
-  const images = await renderImageFiles({ pages, platform: "xiaohongshu", ratio: "3:4", baseName, renderer: input.renderer, images: renderImages });
+  const images = await renderImageFiles({ pages, platform: "xiaohongshu", ratio: "3:4", baseName, renderer: input.renderer, images: renderImages, preset: input.preset });
   const copyText = buildXiaohongshuCopy(output);
   const packaged = await packagePlatformImageExport({ output, platform: "xiaohongshu", ratio: "3:4", exportedAt, images, copyText });
   return {
@@ -523,6 +528,7 @@ export async function exportDouyinImagePackage(input: {
   layoutOptions?: CardLayoutOptions;
   measurer?: TextMeasurer;
   exportedAt?: ExportTimestamp;
+  preset?: CardRenderPreset;
 }): Promise<PlatformImageExportResult<DouyinImageOutput>> {
   const output = input.output ?? toDouyinImageText(input.content, { ratio: input.ratio });
   const exportedAt = toExportedAt(input.exportedAt);
@@ -530,7 +536,7 @@ export async function exportDouyinImagePackage(input: {
   const pages = resolveCardPages({ content: input.content, ratio: output.ratio, pages: input.pages, layoutOptions: input.layoutOptions, measurer: input.measurer });
   assertPagesMatchRatio(pages, output.ratio);
   const renderImages = await resolveCardRenderImages({ content: input.content, pages, images: input.images });
-  const images = await renderImageFiles({ pages, platform: "douyinImage", ratio: output.ratio, baseName, renderer: input.renderer, images: renderImages });
+  const images = await renderImageFiles({ pages, platform: "douyinImage", ratio: output.ratio, baseName, renderer: input.renderer, images: renderImages, preset: input.preset });
   const copyText = buildDouyinImageCopy(output);
   const packaged = await packagePlatformImageExport({ output, platform: "douyinImage", ratio: output.ratio, exportedAt, images, copyText });
   return {
