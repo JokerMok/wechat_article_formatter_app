@@ -25,6 +25,7 @@ export async function generateWithServerAI(
     return {
       response: {
         schemaVersion: 1,
+        ...(first.response.designPlan ? { designPlan: first.response.designPlan } : {}),
         drafts: results.flatMap((result) => result.response.drafts),
       },
       diagnostics: {

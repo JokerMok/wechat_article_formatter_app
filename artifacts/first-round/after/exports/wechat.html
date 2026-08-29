@@ -1,0 +1,21 @@
+<section style="max-width: 100%; box-sizing: border-box; font-size: 15px; line-height: 1.75; letter-spacing: 0; color: #3F3F3F; background-color: #FCF8F3; padding: 18px 14px; border-radius: 0; font-family: -apple-system-font, BlinkMacSystemFont, Helvetica Neue, PingFang SC, Hiragino Sans GB, Microsoft YaHei UI, Microsoft YaHei, Arial, sans-serif">
+<section style="margin: 0 0 28px"><span style="display: block; width: 36px; height: 4px; background-color: #7B3F4A; border-radius: 999px; margin: 0 0 14px"></span><p style="margin: 26px 0 42px; padding: 0 0 18px; color: #33282A; background-color: transparent; border: none; border-left: none; border-bottom: 1px solid #D5B88E; border-radius: 0; font-size: 25px; font-weight: 800; line-height: 1.5; letter-spacing: 0; text-align: left; font-family: Songti SC, STSong, SimSun, Georgia, serif">非技术产品经理用 Codex 拆解鲲云算法包：问题、行动与边界复盘</p></section>
+
+<p style="margin: 48px 0 20px; padding: 14px 0 6px; color: #7B3F4A; background-color: transparent; border-left: none; border-bottom: none; border-radius: 0; font-size: 20px; font-weight: 800; line-height: 1.65; letter-spacing: 0; text-align: left; border-top: 1px solid #D5B88E; font-family: Songti SC, STSong, SimSun, Georgia, serif">问题从这里开始</p>
+
+<p style="margin: 20px 0; color: #3F3F3F; font-size: 15px; font-weight: 400; line-height: 1.88; letter-spacing: 0; text-align: justify; word-break: break-word">一个非算法工程师的产品经理，借助 Codex 阅读鲲云平台文档、检查本地依赖和运行工具，把“算法包做不出来”拆成模型转换、RBO、平台插件 SDK、运行时 ABI、设备验证和正式上传包等不同缺口。</p>
+
+<p style="margin: 20px 0; color: #3F3F3F; font-size: 15px; font-weight: 400; line-height: 1.88; letter-spacing: 0; text-align: justify; word-break: break-word">文章的重点不是 Codex 替代算法工程师，而是产品经理可以把陌生技术资料先整理成可验证问题，再带着证据推进技术协作。</p>
+
+<p style="margin: 48px 0 20px; padding: 14px 0 6px; color: #7B3F4A; background-color: transparent; border-left: none; border-bottom: none; border-radius: 0; font-size: 20px; font-weight: 800; line-height: 1.65; letter-spacing: 0; text-align: left; border-top: 1px solid #D5B88E; font-family: Songti SC, STSong, SimSun, Georgia, serif">5个关键环节</p>
+
+<section style="margin: 20px 0; padding: 16px 18px; color: #3F3F3F; background-color: #F8F1EA; border: none; border-radius: 8px; font-size: 15px; line-height: 1.75"><p style="margin: 0 0 12px; font-size: 15px; line-height: 1.75"><span style="color: #7B3F4A; font-weight: 800">—</span> 从产品经理身份和任务背景切入。</p><p style="margin: 0 0 12px; font-size: 15px; line-height: 1.75"><span style="color: #7B3F4A; font-weight: 800">—</span> 区分单独 RBO 与可安装、可调度的完整平台算法包。</p><p style="margin: 0 0 12px; font-size: 15px; line-height: 1.75"><span style="color: #7B3F4A; font-weight: 800">—</span> 通过本地动态库和依赖检查定位 RBAlgSDK、插件接口和设备验证缺口。</p><p style="margin: 0 0 12px; font-size: 15px; line-height: 1.75"><span style="color: #7B3F4A; font-weight: 800">—</span> 记录 Codex 能完成的模型转换、RBO 生成、输入输出校验和暂存包结构。</p><p style="margin: 0 0 12px; font-size: 15px; line-height: 1.75"><span style="color: #7B3F4A; font-weight: 800">—</span> 保留“中间产物不等于正式交付”的边界。</p></section>
+
+<p style="margin: 48px 0 20px; padding: 14px 0 6px; color: #7B3F4A; background-color: transparent; border-left: none; border-bottom: none; border-radius: 0; font-size: 20px; font-weight: 800; line-height: 1.65; letter-spacing: 0; text-align: left; border-top: 1px solid #D5B88E; font-family: Songti SC, STSong, SimSun, Georgia, serif">训练数据与部署包分层</p>
+
+<p style="margin: 20px 0; color: #3F3F3F; font-size: 15px; font-weight: 400; line-height: 1.88; letter-spacing: 0; text-align: justify; word-break: break-word">后续可补一段更具体的工作方法：旧算法输出的红框图不是人工真值，不能直接进入训练集。可靠的流程是“干净原图/视频 → 旧模型预标注 → 人工逐张复核 → 独立标注文件 → 数据集基线 → 训练与部署分层验收”。</p>
+
+<p style="margin: 20px 0; color: #3F3F3F; font-size: 15px; font-weight: 400; line-height: 1.88; letter-spacing: 0; text-align: justify; word-break: break-word">这一段不使用客户细节，重点说明产品经理如何判断“模型预测、训练真值、部署包和现场运行”不是同一个交付对象。</p>
+
+<section style="margin: 32px 0 0; padding: 16px 18px; color: #7B3F4A; background-color: #F8F1EA; border: 1px solid #E5D8CB; border-radius: 8px; font-size: 16px; font-weight: 800; line-height: 1.75; text-align: left">你更认同其中哪一个判断？</section>
+</section>

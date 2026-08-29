@@ -125,7 +125,7 @@ export const platformProfiles = {
     profileSchemaVersion: PLATFORM_PROFILE_SCHEMA_VERSION,
     outputSchemaVersion: PLATFORM_OUTPUT_SCHEMA_VERSION,
     sourceTraceVersion: 1,
-    introTargetWords: 32,
+    introTargetWords: 24,
     endingTargetWords: 24,
     maxTags: 8,
   },
@@ -222,6 +222,37 @@ export function collectRenderableBlocks(content: UnifiedArticleContent): Rendera
   });
 }
 
+export function collectRenderablePages(content: UnifiedArticleContent, maxBlocksPerPage: number): RenderableBlock[][] {
+  const explicitPages: RenderableBlock[][] = [[]];
+  let hasExplicitBreak = false;
+
+  for (const block of content.blocks) {
+    if (block.type === "pageBreak") {
+      hasExplicitBreak = true;
+      if (explicitPages.at(-1)?.length) explicitPages.push([]);
+      continue;
+    }
+    const text = renderBlockText(block);
+    if (!text) continue;
+    explicitPages.at(-1)?.push({
+      blockId: block.id,
+      kind: block.type,
+      text,
+      source: {
+        blockId: block.id,
+        startLine: block.source.startLine,
+        endLine: block.source.endLine,
+        sourceText: block.source.sourceText,
+      },
+    });
+  }
+
+  if (!hasExplicitBreak) return paginateBlocks(explicitPages[0] ?? [], maxBlocksPerPage);
+  return explicitPages
+    .filter((page) => page.length > 0)
+    .flatMap((page) => paginateBlocks(page, maxBlocksPerPage));
+}
+
 export function selectFallbackTitle(content: UnifiedArticleContent) {
   return (
     content.title?.trim() ||
@@ -259,8 +290,18 @@ function splitTokens(value: string) {
     .filter((token) => token.length > 1);
 }
 
+const PUBLISHING_TAG_PATTERNS = [
+  "AI产品经理", "产品经理", "企业AI", "人工智能", "项目复盘", "案例复盘", "技术协作", "算法包",
+  "训练数据", "模型部署", "数据分析", "数据治理", "知识库", "客户服务", "内容创作", "效率工具",
+  "产品设计", "项目管理", "职场成长", "个人成长", "小红书", "公众号", "抖音",
+];
+
 export function collectTags(content: UnifiedArticleContent, maxCount: number) {
-  const tagCandidates = content.blocks.flatMap((block): string[] => {
+  const searchableText = content.blocks.map((block) => renderBlockText(block) ?? "").join(" ");
+  const domainCandidates = PUBLISHING_TAG_PATTERNS.filter((tag) => searchableText.includes(tag));
+  const latinCandidates = [...searchableText.matchAll(/\b(?:AI|[A-Z][A-Za-z0-9.+-]{2,18}|[A-Z]{2,12})\b/g)]
+    .map((match) => match[0]);
+  const structuralCandidates = content.blocks.flatMap((block): string[] => {
     if (block.type === "title" || block.type === "section" || block.type === "subsection" || block.type === "lead") {
       return splitTokens(block.text);
     }
@@ -272,6 +313,7 @@ export function collectTags(content: UnifiedArticleContent, maxCount: number) {
     }
     return [];
   });
+  const tagCandidates = [...domainCandidates, ...latinCandidates, ...structuralCandidates];
 
   const unique = new Map<string, boolean>();
   const tags: string[] = [];
@@ -280,7 +322,7 @@ export function collectTags(content: UnifiedArticleContent, maxCount: number) {
     const clean = candidate
       .trim()
       .replace(/[^\p{L}\p{N}]+/gu, "")
-      .slice(0, 10);
+      .slice(0, 12);
     if (!clean || unique.has(clean)) {
       continue;
     }

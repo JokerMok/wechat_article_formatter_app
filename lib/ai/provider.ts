@@ -2,7 +2,8 @@ import { z } from "zod";
 import { parseArticleContent } from "../article-parser";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../content";
 import { unifiedArticleContentSchema } from "../content";
-import { analyzeArticleDesign, type DesignPlan } from "../design-plan";
+import { analyzeArticleDesign, CONTENT_TYPE_IDS, designPlanSchema, type ContentType, type DesignPlan } from "../design-plan";
+import { DESIGN_SCHEME_IDS, getDesignScheme, type DesignSchemeId } from "../design-schemes";
 import type { PlatformId, PlatformVersion, PlatformVersionMap } from "../platforms/types";
 
 export const aiPlatformIds = ["wechat", "xiaohongshu", "douyinImage", "douyinLongform"] as const;
@@ -27,6 +28,7 @@ const generatedPlatformDraftSchema = z.strictObject({
 
 const generatedResponseSchema = z.strictObject({
   schemaVersion: z.literal(1),
+  designPlan: designPlanSchema.optional(),
   drafts: z.array(generatedPlatformDraftSchema).min(1).max(aiPlatformIds.length),
 });
 
@@ -261,7 +263,7 @@ export class OpenAICompatibleProvider {
         throw this.schemaError(["Assistant content is not valid JSON."], responseDiagnostics);
       }
 
-      const sanitized = sanitizeGeneratedResponse(parsedContent.value, options.source.parseMode, options.source.title);
+      const sanitized = sanitizeGeneratedResponse(parsedContent.value, options.source);
       const generated = generatedResponseSchema.safeParse(sanitized);
       if (!generated.success) {
         throw this.schemaError(compactZodIssues(generated.error), responseDiagnostics);
@@ -299,7 +301,7 @@ export class OpenAICompatibleProvider {
         {
           role: "system",
           content:
-            `Return only JSON with schemaVersion:1 and drafts[]. Each draft must include platform, title, summary, highlights, tags, optional cover, and content. content must be a plain article text or Markdown string, never a nested JSON object; the server will parse it into the internal article structure. ${platformGenerationInstruction(platforms, source.sourceText.length)} Do not add facts that are not supported by the source article.`,
+            `Return only JSON with schemaVersion:1, designPlan, and drafts[]. designPlan may contain only contentType, targetAudience, coreMessage, recommendedTitle, titleCandidates, openingHook, keyPoints, conclusion, callToAction, recommendedScheme, and recommendationReason. contentType must be one of ${CONTENT_TYPE_IDS.join(",")}; recommendedScheme must be one of ${DESIGN_SCHEME_IDS.join(",")}. Each draft must include platform, title, summary, highlights, tags, optional cover, and content. content must be plain article text or Markdown, never nested JSON, HTML, CSS, or script. ${platformGenerationInstruction(platforms, source.sourceText.length)} Preserve source facts and important limitations; do not invent data, cases, people, policies, quotes, or outcomes.`,
         },
         {
           role: "user",
@@ -413,7 +415,7 @@ export async function generatePlatformVersions(options: GeneratePlatformVersions
     return {
       ok: true,
       versions: generatedContent.versions,
-      designPlan: fallbackDesignPlan,
+      designPlan: generated.response.designPlan ?? fallbackDesignPlan,
       diagnostics: {
         ...generated.diagnostics,
         details: [...(generated.diagnostics.details ?? []), ...generatedContent.factCheckWarnings],
@@ -700,15 +702,76 @@ function parseAssistantJson(content: string) {
   }
 }
 
-function sanitizeGeneratedResponse(value: unknown, parseMode: UnifiedArticleContent["parseMode"], fallbackTitle?: string): unknown {
+function sanitizeGeneratedResponse(value: unknown, source: UnifiedArticleContent): unknown {
   if (!isRecord(value) || !Array.isArray(value.drafts)) {
     return value;
   }
 
+  const designPlan = sanitizeGeneratedDesignPlan(value.designPlan, source);
   return {
     ...value,
-    drafts: value.drafts.map((draft) => sanitizeGeneratedDraft(draft, parseMode, fallbackTitle)),
+    ...(designPlan ? { designPlan } : {}),
+    drafts: value.drafts.map((draft) => sanitizeGeneratedDraft(draft, source.parseMode, source.title)),
   };
+}
+
+function sanitizeGeneratedDesignPlan(value: unknown, source: UnifiedArticleContent): DesignPlan | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const fallback = analyzeArticleDesign(source);
+  const contentType = isContentType(value.contentType) ? value.contentType : fallback.contentType;
+  const recommendedScheme = isDesignScheme(value.recommendedScheme) ? value.recommendedScheme : fallback.recommendedScheme;
+  const scheme = getDesignScheme(recommendedScheme);
+  const titleCandidates = safePlanTextArray(value.titleCandidates, fallback.titleCandidates, 3, 80);
+  const keyPoints = safePlanTextArray(value.keyPoints, fallback.keyPoints, 5, 300);
+  const candidate: DesignPlan = {
+    ...fallback,
+    contentType,
+    targetAudience: safePlanText(value.targetAudience, fallback.targetAudience, 120),
+    coreMessage: safePlanText(value.coreMessage, fallback.coreMessage, 500),
+    recommendedScheme,
+    visualStyle: scheme.name,
+    palette: { ...scheme.palette },
+    typography: { ...scheme.typography },
+    density: scheme.density,
+    titleCandidates,
+    recommendedTitle: safePlanText(value.recommendedTitle, titleCandidates[0] ?? fallback.recommendedTitle, 80),
+    openingHook: safePlanText(value.openingHook, fallback.openingHook, 300),
+    keyPoints,
+    conclusion: safePlanText(value.conclusion, fallback.conclusion, 500),
+    callToAction: safePlanText(value.callToAction, fallback.callToAction, 240),
+    recommendationReason: safePlanText(value.recommendationReason, fallback.recommendationReason, 300),
+  };
+  const parsed = designPlanSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function safePlanText(value: unknown, fallback: string, maxLength: number) {
+  if (typeof value === "string" && containsPresentationSyntax(value)) return fallback;
+  const sanitized = typeof value === "string" ? sanitizeGeneratedText(value).slice(0, maxLength).trim() : "";
+  return sanitized || fallback;
+}
+
+function safePlanTextArray(value: unknown, fallback: string[], maxItems: number, maxLength: number) {
+  const sanitized = (Array.isArray(value) ? value : [])
+    .filter((item): item is string => typeof item === "string" && !containsPresentationSyntax(item))
+    .map((item) => sanitizeGeneratedText(item))
+    .map((item) => item.slice(0, maxLength).trim())
+    .filter(Boolean)
+    .slice(0, maxItems);
+  return sanitized.length ? sanitized : fallback.slice(0, maxItems);
+}
+
+function containsPresentationSyntax(value: string) {
+  return /<\/?[a-z][^>]*>|\b(?:display|position|background|font|color|width|height)\s*:|\{[^}]*\}/i.test(value);
+}
+
+function isContentType(value: unknown): value is ContentType {
+  return typeof value === "string" && (CONTENT_TYPE_IDS as readonly string[]).includes(value);
+}
+
+function isDesignScheme(value: unknown): value is DesignSchemeId {
+  return typeof value === "string" && (DESIGN_SCHEME_IDS as readonly string[]).includes(value);
 }
 
 function sanitizeGeneratedDraft(value: unknown, parseMode: UnifiedArticleContent["parseMode"], fallbackTitle?: string): unknown {

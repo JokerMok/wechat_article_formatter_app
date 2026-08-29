@@ -3,8 +3,8 @@ import {
   selectFallbackTitle,
   buildSourceTrace,
   collectRenderableBlocks,
+  collectRenderablePages,
   collectTags,
-  paginateBlocks,
   resolveDouyinImageRatio,
 } from "../platform-profiles";
 import { platformProfiles } from "../platform-profiles";
@@ -47,9 +47,9 @@ export type DouyinLongformOutput = {
 const douyinImageProfile = platformProfiles.douyinImage as DouyinImageProfile;
 const douyinLongProfile = platformProfiles.douyinLongform as DouyinLongformProfile;
 
-function buildImagePages(blocks: RenderableBlock[], ratio: DouyinImageRatio): DouyinImagePage[] {
+function buildImagePages(content: UnifiedArticleContent, ratio: DouyinImageRatio): DouyinImagePage[] {
   const pageSize = douyinImageProfile.maxBlocksPerPage[ratio];
-  const pages = paginateBlocks(blocks, pageSize);
+  const pages = collectRenderablePages(content, pageSize);
 
   return pages.map((pageBlocks, pageIndex) => ({
     pageIndex,
@@ -62,15 +62,15 @@ function clampText(text: string, maxChars: number) {
   if (text.length <= maxChars) {
     return text;
   }
-  return `${text.slice(0, maxChars).trim()}...`;
+  return `${text.slice(0, Math.max(1, maxChars - 1)).replace(/[，、；：\s]+$/u, "").trim()}…`;
 }
 
 function buildImageCaption(title: string, intro: string, tags: string[]) {
   const hash = tags.slice(0, 2).map((tag) => `#${tag}`).join(" ");
   if (hash) {
-    return [clampText(title, 16), clampText(intro, 64), hash].filter(Boolean).join(" ").trim();
+    return [clampText(title, 16), clampText(intro, 64), hash].filter(Boolean).join("\n").trim();
   }
-  return [clampText(title, 18), clampText(intro, 76)].filter(Boolean).join(" ").trim();
+  return [clampText(title, 18), clampText(intro, 76)].filter(Boolean).join("\n").trim();
 }
 
 function buildIntroText(blocks: RenderableBlock[], blocksMaxWords: number) {
@@ -83,21 +83,25 @@ function buildIntroText(blocks: RenderableBlock[], blocksMaxWords: number) {
 }
 
 function buildLongformBody(blocks: RenderableBlock[], profile: DouyinLongformProfile) {
-  const bodyText = blocks.map((block) => block.text).join("\n\n");
+  const bodyBlocks = blocks.filter((block) => block.kind !== "title" && block.kind !== "lead" && block.kind !== "cta");
+  const bodyText = bodyBlocks.map((block) => block.text).join("\n\n");
   const intro = buildIntroText(blocks, profile.introTargetWords);
   const ending = (() => {
     const endingCandidate = blocks.findLast((block) => block.kind === "summary" || block.kind === "cta" || block.kind === "section");
     return clampText(endingCandidate?.text ?? intro, profile.endingTargetWords);
   })();
 
-  const highlightSources = blocks.filter((block) => block.kind === "golden" || block.kind === "quote" || block.kind === "card");
+  const highlightSources = bodyBlocks.filter((block) => block.kind === "golden" || block.kind === "quote" || block.kind === "card");
   const highlights = [...new Set(highlightSources.map((block) => clampText(block.text, 48).trim()).filter(Boolean))].slice(0, 4);
+  const fallbackHighlight = bodyBlocks.find(
+    (block) => (block.kind === "paragraph" || block.kind === "summary") && block.text.trim() && block.text.trim() !== intro,
+  );
 
   return {
     intro,
     ending,
-    body: blocks.length ? bodyText : intro,
-    highlights: highlights.length ? highlights : [intro],
+    body: bodyBlocks.length ? bodyText : intro,
+    highlights: highlights.length ? highlights : fallbackHighlight ? [clampText(fallbackHighlight.text, 48)] : [],
   };
 };
 
@@ -113,7 +117,8 @@ export function toDouyinImageText(content: UnifiedArticleContent, options: Douyi
   const ratio = resolveDouyinImageRatio(options.ratio, douyinImageProfile);
   const blocks = collectRenderableBlocks(content);
   const title = selectFallbackTitle(content);
-  const caption = buildImageCaption(title, buildIntroText(blocks, 16), collectTags(content, douyinImageProfile.maxTags));
+  const coverTitle = content.blocks.find((block) => block.type === "title" && block.text.trim())?.text.trim() || title;
+  const caption = buildImageCaption(coverTitle, buildIntroText(blocks, 16), collectTags(content, douyinImageProfile.maxTags));
   const tags = collectTags(content, douyinImageProfile.maxTags);
 
   return {
@@ -125,7 +130,7 @@ export function toDouyinImageText(content: UnifiedArticleContent, options: Douyi
     title,
     caption,
     tags,
-    pages: buildImagePages(blocks, ratio),
+    pages: buildImagePages(content, ratio),
   };
 }
 

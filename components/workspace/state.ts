@@ -3,7 +3,7 @@ import { parseArticleContent } from "../../lib/article-parser";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../../lib/content";
 import { unifiedArticleContentSchema } from "../../lib/content/schemas";
 import { analyzeArticleDesign, buildPlatformArticle, designPlanSchema, type DesignPlan } from "../../lib/design-plan";
-import { DESIGN_SCHEMES, DESIGN_SCHEME_IDS, type DesignSchemeId } from "../../lib/design-schemes";
+import { DESIGN_SCHEMES, normalizeDesignSchemeId, type DesignSchemeId } from "../../lib/design-schemes";
 import { toDouyinImageText, toDouyinLongform } from "../../lib/platforms/douyin";
 import type { PlatformId, PlatformVersion, PlatformVersionMap } from "../../lib/platforms/types";
 import { createWechatPlatformVersion } from "../../lib/platforms/wechat";
@@ -145,9 +145,10 @@ export function regeneratePlatformDraft(
   ai: AiWorkspaceSettings = DEFAULT_AI_SETTINGS,
   designPlan: DesignPlan = analyzeArticleDesign(article),
 ): PlatformDraft {
+  const schemeId = current.status === "edited" ? current.schemeId : designPlan.recommendedScheme;
   const regenerated = createPlatformDraft(current.platform, article, {
-    templateKey: current.templateKey,
-    schemeId: current.schemeId,
+    templateKey: DESIGN_SCHEMES[schemeId].templateKey,
+    schemeId,
     sourceRevision: designPlan.sourceRevision,
     designPlan,
     ratio: current.ratio,
@@ -602,7 +603,7 @@ function createPlatformMeta(platform: PlatformId, content: UnifiedArticleContent
     const output = toXiaohongshuImageText(content);
     return {
       body: output.body,
-      caption: output.body,
+      caption: output.caption ?? output.body,
       tags: output.tags,
       highlights: output.pages.map((page) => page.focusPrompt).slice(0, 4),
     };
@@ -739,7 +740,7 @@ function readPlatformDraft(value: unknown, platform: PlatformId, fallback: Platf
     platform,
     status: readPlatformDraftStatus(value.status, fallback.status),
     sourceRevision: typeof value.sourceRevision === "string" ? value.sourceRevision : fallback.sourceRevision,
-    schemeId: isDesignSchemeId(value.schemeId) ? value.schemeId : fallback.schemeId,
+    schemeId: typeof value.schemeId === "string" ? normalizeDesignSchemeId(value.schemeId) : fallback.schemeId,
     title: typeof value.title === "string" ? value.title : fallback.title,
     content,
     templateKey: typeof value.templateKey === "string" && value.templateKey in styleTemplates ? (value.templateKey as TemplateKey) : fallback.templateKey,
@@ -756,12 +757,9 @@ function readPlatformDraftStatus(value: unknown, fallback: PlatformDraft["status
   return value === "draft" || value === "generated" || value === "edited" || value === "locked" || value === "error" ? value : fallback;
 }
 
-function isDesignSchemeId(value: unknown): value is DesignSchemeId {
-  return typeof value === "string" && (DESIGN_SCHEME_IDS as readonly string[]).includes(value);
-}
-
 function readDesignSchemeIds(value: unknown): DesignSchemeId[] {
-  return Array.isArray(value) ? value.filter(isDesignSchemeId) : [];
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((item): item is string => typeof item === "string").map(normalizeDesignSchemeId))];
 }
 
 function readPlatformMeta(value: unknown, fallback: PlatformMeta): PlatformMeta {

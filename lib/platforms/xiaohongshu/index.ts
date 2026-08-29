@@ -1,5 +1,5 @@
 import type { UnifiedArticleContent } from "../../content";
-import { paginateBlocks, buildSourceTrace, collectRenderableBlocks, collectTags, selectFallbackTitle, selectSubtitle } from "../platform-profiles";
+import { buildSourceTrace, collectRenderableBlocks, collectRenderablePages, collectTags, selectFallbackTitle, selectSubtitle } from "../platform-profiles";
 import type { PlatformSourceTrace, RenderableBlock } from "../platform-profiles";
 import { platformProfiles } from "../platform-profiles";
 import type { PlatformProfile, XiaohongshuProfile } from "../platform-profiles";
@@ -27,6 +27,7 @@ export type XiaohongshuImageTextOutput = {
   source: PlatformSourceTrace;
   title: string;
   body: string;
+  caption?: string;
   tags: string[];
   cover: XiaohongshuCover;
   pages: XiaohongshuBodyPage[];
@@ -56,8 +57,7 @@ function deriveFocusPrompt(pageBlocks: XiaohongshuPageBlock[], pageTitle: string
 }
 
 function buildPages(profilePageCapacity: number, content: UnifiedArticleContent): XiaohongshuBodyPage[] {
-  const blocks = collectRenderableBlocks(content);
-  const pages = paginateBlocks(blocks, profilePageCapacity);
+  const pages = collectRenderablePages(content, profilePageCapacity);
   const fallbackTitle = selectFallbackTitle(content);
 
   return pages.map((pageBlocks, pageIndex) => {
@@ -91,6 +91,14 @@ function buildBodyText(content: UnifiedArticleContent) {
   };
 }
 
+function buildCaption(content: UnifiedArticleContent, title: string, tags: string[]) {
+  const lead = content.blocks.find((block) => block.type === "lead")?.text.trim() ?? "";
+  const ending = [...content.blocks].reverse().find((block) => block.type === "summary" || block.type === "cta");
+  const endingText = ending?.text.trim() ?? "";
+  const tagLine = tags.map((tag) => `#${tag}`).join(" ");
+  return [title, lead, endingText && endingText !== lead ? endingText : "", tagLine].filter(Boolean).join("\n\n");
+}
+
 export function toXiaohongshuImageText(content: UnifiedArticleContent): XiaohongshuImageTextOutput {
   const pageCapacity = profile.maxBlocksPerPage;
   const pages = buildPages(pageCapacity, content);
@@ -105,6 +113,7 @@ export function toXiaohongshuImageText(content: UnifiedArticleContent): Xiaohong
     source: buildSourceTrace(content),
     title,
     body: body.text,
+    caption: buildCaption(content, title, tags),
     tags,
     cover: buildCover(content),
     pages,

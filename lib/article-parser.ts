@@ -204,7 +204,7 @@ function isSectionTitle(line: SourceLine) {
     line.headingLevel === 2 ||
     /^([一二三四五六七八九十]+[、，.．])/.test(t) ||
     /^第[一二三四五六七八九十]+部分/.test(t) ||
-    /^\d+[、.．]/.test(t) ||
+    /^\d+、/.test(t) ||
     /^(写在最后|总结|结语)$/.test(t)
   );
 }

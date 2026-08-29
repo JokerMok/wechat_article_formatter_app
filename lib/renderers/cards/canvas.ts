@@ -1,16 +1,20 @@
 import type { CardLayoutPage, CardLayoutNode } from "./types";
 
 export type CardCanvasPreset = {
+  variant: "editorial" | "checklist" | "data" | "story";
   background: string;
   title: string;
   body: string;
   rule: string;
   highlight: string;
   dots: string;
+  surface: string;
+  muted: string;
 };
 
 export type CardImageCanvasContext = {
   fillStyle: string | CanvasGradient | CanvasPattern;
+  strokeStyle?: string | CanvasGradient | CanvasPattern;
   font: string;
   textBaseline: CanvasTextBaseline;
   textAlign: CanvasTextAlign;
@@ -40,23 +44,24 @@ export type DrawCardImagePageOptions = {
 };
 
 const DEFAULT_PRESET: CardCanvasPreset = {
+  variant: "editorial",
   background: "#FFFBF6",
   title: "#8A430E",
   body: "#6B3A16",
   rule: "#D8C5B1",
   highlight: "#F1E7DC",
   dots: "#E9E0D7",
+  surface: "#FFFFFF",
+  muted: "#8C8178",
 };
 
 export function drawCardImagePage(ctx: CardImageCanvasContext, page: CardLayoutPage, options: DrawCardImagePageOptions = {}) {
   const preset = { ...DEFAULT_PRESET, ...options.preset };
   ctx.fillStyle = preset.background;
   ctx.fillRect(0, 0, page.canvas.width, page.canvas.height);
-
-  ctx.fillStyle = preset.rule;
-  ctx.fillRect(page.safeArea.x, page.safeArea.y - 36, page.safeArea.width, 4);
   ctx.textBaseline = "top";
   ctx.textAlign = "left";
+  drawPageFrame(ctx, page, preset);
 
   for (const node of page.nodes) {
     drawNode(ctx, node, preset, options);
@@ -86,12 +91,26 @@ function drawNode(ctx: CardImageCanvasContext, node: CardLayoutNode, preset: Car
   }
 
   if (node.kind === "focus") {
-    ctx.fillStyle = preset.highlight;
-    drawRoundRect(ctx, node.x - 24, node.y - 18, node.width + 48, node.height, 16);
-    ctx.fill();
+    if (preset.variant === "story") {
+      ctx.fillStyle = preset.rule;
+      ctx.fillRect(node.x, node.y - 12, node.width, 2);
+      ctx.fillRect(node.x, node.y + node.height + 4, node.width, 2);
+    } else {
+      ctx.fillStyle = preset.variant === "data" ? preset.surface : preset.highlight;
+      drawRoundRect(ctx, node.x - 24, node.y - 18, node.width + 48, node.height + 8, preset.variant === "editorial" ? 4 : 12);
+      ctx.fill();
+      if (preset.variant === "checklist") {
+        ctx.fillStyle = preset.title;
+        ctx.fillRect(node.x - 24, node.y - 18, 8, node.height + 8);
+      }
+      if (preset.variant === "data") {
+        ctx.strokeStyle = preset.rule;
+        ctx.strokeRect(node.x - 24, node.y - 18, node.width + 48, node.height + 8);
+      }
+    }
   }
 
-  if (node.kind === "title") {
+  if (node.kind === "title" && preset.variant === "editorial") {
     for (const line of node.lines) {
       const highlightWidth = Math.min(line.width + 16, node.width);
       ctx.fillStyle = preset.highlight;
@@ -100,8 +119,21 @@ function drawNode(ctx: CardImageCanvasContext, node: CardLayoutNode, preset: Car
   }
 
   if (node.kind === "heading") {
-    ctx.fillStyle = preset.title;
-    ctx.fillRect(node.x - 18, node.y + 4, 7, Math.max(28, node.height - 18));
+    if (preset.variant === "editorial") {
+      ctx.fillStyle = preset.title;
+      ctx.fillRect(node.x - 18, node.y + 4, 7, Math.max(28, node.height - 18));
+    } else if (preset.variant === "checklist") {
+      ctx.fillStyle = preset.rule;
+      ctx.fillRect(node.x - 10, node.y + node.height + 4, Math.min(node.width * 0.34, 260), 8);
+    } else if (preset.variant === "data") {
+      ctx.fillStyle = preset.title;
+      ctx.fillRect(node.x - 16, node.y - 8, 6, node.height + 12);
+      ctx.fillStyle = preset.rule;
+      ctx.fillRect(node.x - 16, node.y + node.height + 8, node.width + 16, 3);
+    } else {
+      ctx.fillStyle = preset.rule;
+      ctx.fillRect(node.x, node.y - 18, 88, 4);
+    }
   }
 
   ctx.fillStyle = node.kind === "body" ? preset.body : preset.title;
@@ -109,6 +141,48 @@ function drawNode(ctx: CardImageCanvasContext, node: CardLayoutNode, preset: Car
   for (const line of node.lines) {
     ctx.fillText(line.text, line.x, line.y);
   }
+}
+
+function drawPageFrame(ctx: CardImageCanvasContext, page: CardLayoutPage, preset: CardCanvasPreset) {
+  const labelY = Math.max(44, page.safeArea.y - 78);
+  if (preset.variant === "editorial") {
+    ctx.fillStyle = preset.rule;
+    ctx.fillRect(page.safeArea.x, page.safeArea.y - 36, page.safeArea.width, 3);
+    ctx.fillStyle = preset.muted;
+    ctx.font = "600 22px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+    ctx.fillText(`EDITORIAL  /  ${String(page.pageNumber).padStart(2, "0")}`, page.safeArea.x, labelY);
+    return;
+  }
+
+  if (preset.variant === "checklist") {
+    ctx.fillStyle = preset.title;
+    ctx.fillRect(page.safeArea.x, labelY, 76, 8);
+    ctx.fillStyle = preset.rule;
+    ctx.font = "800 86px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+    ctx.fillText(String(page.pageNumber).padStart(2, "0"), page.safeArea.x + page.safeArea.width - 104, labelY - 36);
+    ctx.fillStyle = preset.muted;
+    ctx.font = "700 20px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+    ctx.fillText("ACTION LIST", page.safeArea.x, labelY + 20);
+    return;
+  }
+
+  if (preset.variant === "data") {
+    ctx.fillStyle = `${preset.rule}3D`;
+    const column = page.safeArea.width / 4;
+    for (let index = 0; index <= 4; index += 1) ctx.fillRect(page.safeArea.x + column * index, page.safeArea.y - 28, 1, page.safeArea.height + 56);
+    ctx.fillStyle = preset.title;
+    ctx.fillRect(page.safeArea.x, page.safeArea.y - 36, page.safeArea.width, 4);
+    ctx.font = "700 21px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+    ctx.fillText(`INSIGHT ${String(page.pageNumber).padStart(2, "0")}`, page.safeArea.x, labelY);
+    return;
+  }
+
+  ctx.fillStyle = preset.rule;
+  ctx.fillRect(page.safeArea.x, page.safeArea.y - 34, 72, 3);
+  ctx.fillRect(page.safeArea.x, page.safeArea.y - 34, 2, page.safeArea.height + 52);
+  ctx.fillStyle = preset.title;
+  ctx.font = "600 22px Songti SC, STSong, SimSun, serif";
+  ctx.fillText(`CHAPTER  ${String(page.pageNumber).padStart(2, "0")}`, page.safeArea.x + 20, labelY);
 }
 
 function drawPageIndicator(ctx: CardImageCanvasContext, page: CardLayoutPage, preset: CardCanvasPreset) {

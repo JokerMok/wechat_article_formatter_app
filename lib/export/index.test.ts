@@ -11,6 +11,7 @@ import {
   exportProjectBackupPackage,
   exportWechatHtml,
   exportXiaohongshuPackage,
+  portableArchiveName,
 } from "./index";
 
 const exportedAt = "2026-01-02T03:04:05.000Z";
@@ -164,6 +165,11 @@ describe("platform exports", () => {
     expect(createExportBaseName("  Hello, WeChat!  ", exportedAt, "wechat")).toBe("hello-wechat-20260102-030405-wechat");
   });
 
+  it("creates portable archive entry names for Chinese titles", () => {
+    expect(portableArchiveName("非技术产品经理用 Codex 拆解鲲云算法包")).toBe("codex");
+    expect(portableArchiveName("纯中文标题")).toBe("content");
+  });
+
   it("exports WeChat edited HTML with image nodes intact", async () => {
     const html = '<section><p>Edited paragraph</p><img src="data:image/png;base64,abc" alt="Edited image" /></section>';
     const result = exportWechatHtml({
@@ -243,6 +249,31 @@ describe("platform exports", () => {
     ]);
     await expect(files["images/edited-xhs-20260102-030405-xiaohongshu-01.png"].async("text")).resolves.toBe("png:second");
     await expect(files["copy.txt"].async("text")).resolves.toContain("Edited body survives export");
+  });
+
+  it("keeps Chinese titles in copy while using portable image paths", async () => {
+    const result = await exportXiaohongshuPackage({
+      content: articleContent(),
+      exportedAt,
+      pages: [page("first", 1, "First page")],
+      output: {
+        platform: "xiaohongshu",
+        schemaVersion: 1,
+        profileVersion: "1.0.0",
+        source: { sourceSchemaVersion: 1, sourceTextFingerprint: "fixed", sourceFormat: "markdown", sourceTitle: "中文标题", blockIds: [], blockCount: 0 },
+        title: "非技术产品经理用 Codex 拆解鲲云算法包",
+        body: "中文正文",
+        caption: "可直接发布的短文案\n\n#产品经理",
+        tags: ["产品经理", "产品"],
+        cover: { title: "非技术产品经理用 Codex 拆解鲲云算法包", subtitle: "副标题" },
+        pages: [],
+      },
+      renderer: async () => new Blob(["png"], { type: "image/png" }),
+    });
+
+    expect(result.images[0]?.path).toBe("images/codex-20260102-030405-xiaohongshu-01.png");
+    expect(result.copyText).toBe("可直接发布的短文案\n\n#产品经理\n\n#产品");
+    expect(result.copyText).not.toContain("中文正文");
   });
 
   it("passes embedded card image sources into browser PNG rendering", async () => {
@@ -337,6 +368,9 @@ describe("platform exports", () => {
     expect(result.images[0]?.path).toBe("images/original-title-20260102-030405-douyin-9x16-01.png");
     expect(result.copyText).toContain(result.output.caption);
     expect(result.tagsText).toContain("#Original");
+    for (const tag of result.output.tags) {
+      expect(result.copyText.split(`#${tag}`).length - 1).toBe(1);
+    }
 
     const files = await zipEntries(result.zipBlob);
     await expect(files["images/original-title-20260102-030405-douyin-9x16-01.png"].async("text")).resolves.toBe("png:9:16");

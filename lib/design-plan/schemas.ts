@@ -1,18 +1,21 @@
 import { z } from "zod";
 import { DESIGN_SCHEME_IDS } from "../design-schemes";
+import { CONTENT_TYPE_IDS } from "./types";
 
 const platformIdSchema = z.enum(["wechat", "xiaohongshu", "douyinImage", "douyinLongform"]);
 const schemeIdSchema = z.enum(DESIGN_SCHEME_IDS);
+const contentTypeSchema = z.enum(CONTENT_TYPE_IDS);
 
 export const designPlanSchema = z.strictObject({
   schemaVersion: z.literal(1),
   sourceRevision: z.string().min(1),
-  contentType: schemeIdSchema,
-  audience: z.string().min(1).max(120),
-  coreThesis: z.string().min(1).max(500),
+  contentType: contentTypeSchema,
+  targetAudience: z.string().min(1).max(120),
+  coreMessage: z.string().min(1).max(500),
   tone: z.enum(["理性", "叙事", "实用", "轻松"]),
   recommendedPlatforms: z.array(platformIdSchema).min(1).max(4),
   recommendedScheme: schemeIdSchema,
+  visualStyle: z.string().min(1).max(80),
   palette: z.strictObject({
     primary: z.string().min(4).max(32),
     secondary: z.string().min(4).max(32),
@@ -43,8 +46,8 @@ export const designPlanSchema = z.strictObject({
   recommendationReason: z.string().min(1).max(300),
   titleCandidates: z.array(z.string().min(1).max(80)).min(1).max(3),
   recommendedTitle: z.string().min(1).max(80),
-  hook: z.string().min(1).max(300),
+  openingHook: z.string().min(1).max(300),
   keyPoints: z.array(z.string().min(1).max(300)).min(1).max(5),
-  summary: z.string().min(1).max(500),
+  conclusion: z.string().min(1).max(500),
   tags: z.array(z.string().min(1).max(20)).max(8),
 });

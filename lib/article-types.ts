@@ -32,6 +32,8 @@ export type TemplateKey =
   | "zhenyiKnowledgeMinimal"
   | "zhenyiBusinessCase"
   | "zhenyiTechCards"
+  | "zhenyiChecklist"
+  | "zhenyiStoryMagazine"
   | "baoyuDefaultBlue"
   | "baoyuDefaultGreen"
   | "baoyuDefaultVermilion"

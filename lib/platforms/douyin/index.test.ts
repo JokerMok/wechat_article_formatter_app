@@ -66,6 +66,23 @@ describe("toDouyinImageText & toDouyinLongform", () => {
     expect(nineBlocks.length).toEqual(threeBlocks.length);
   });
 
+  it("uses the compact cover title and a three-line publishing caption", () => {
+    const content = parseArticleContent(`# 很长的平台文章标题：问题、行动与边界复盘
+
+短导语说明本页主题。
+
+## 核心判断
+
+正文内容。`);
+    const titleBlock = content.blocks.find((block) => block.type === "title");
+    if (titleBlock?.type === "title") titleBlock.text = "适合缩略图的短标题";
+    const output = toDouyinImageText(content);
+
+    expect(output.caption.split("\n")[0]).toBe("适合缩略图的短标题");
+    expect(output.caption).not.toContain("...");
+    expect(output.caption.split("\n").length).toBeGreaterThanOrEqual(2);
+  });
+
   it("falls back deterministically for an unsupported runtime ratio without dropping blocks", () => {
     const content = parseArticleContent(longArticle);
     const output = toDouyinImageText(content, { ratio: "1:1" as DouyinImageRatio });
@@ -88,6 +105,25 @@ describe("toDouyinImageText & toDouyinLongform", () => {
     expect(longformFirst.highlights.length).toBeGreaterThan(0);
     expect(longformFirst.ending).toBeTruthy();
     expect(longformFirst.caption).toContain(longformFirst.title);
+  });
+
+  it("keeps explicit title, intro, body, and ending in separate longform fields", () => {
+    const content = parseArticleContent(`# 正式标题
+
+这是一个用于说明问题的简短导语。
+
+## 方法
+
+正文只保留真正需要阅读的内容。
+
+留言说说你的判断。`);
+    const output = toDouyinLongform(content);
+
+    expect(output.title).toBe("正式标题");
+    expect(output.body).not.toContain("正式标题");
+    expect(output.body.startsWith(output.intro)).toBe(false);
+    expect(output.ending).toBeTruthy();
+    expect(output.highlights).not.toContain(output.intro);
   });
 
   it("uses the centralized intro target from the selected versioned profile", () => {

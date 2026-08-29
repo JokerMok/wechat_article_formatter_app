@@ -2,118 +2,172 @@ import type { UnifiedArticleBlock, UnifiedArticleContent } from "../content";
 import { getDesignScheme, type DesignSchemeId } from "../design-schemes";
 import { collectTags, renderBlockText, stableChecksum } from "../platforms/platform-profiles";
 import type { PlatformId } from "../platforms/types";
-import type { ContentBlockRole, ContentTone, DesignPlan, DesignPlanBlock } from "./types";
+import { cleanPublishingText, isGenericStructureHeading, isWeakPublishingText, publicationBlocks } from "./content-filter";
+import type { ContentBlockRole, ContentTone, ContentType, DesignPlan, DesignPlanBlock } from "./types";
 
-const CONTENT_RULES: Array<{ id: DesignSchemeId; pattern: RegExp; weight: number }> = [
-  { id: "checklistGuide", pattern: /步骤|清单|攻略|避坑|注意事项|怎么做|如何|工具|方法/, weight: 3 },
-  { id: "dataInsight", pattern: /数据|报告|趋势|增长|下降|同比|环比|调查|比例|统计|\d+(?:\.\d+)?%/, weight: 3 },
-  { id: "storyNarrative", pattern: /我|我们|当时|后来|第一次|经历|复盘|故事|几个月|那天/, weight: 2 },
-  { id: "productCase", pattern: /产品|客户|方案|案例|业务|功能|交付|实施|SOP|企业/, weight: 2 },
-  { id: "lightRecommendation", pattern: /推荐|体验|好用|种草|生活|穿搭|护肤|旅行|适合谁|购买/, weight: 3 },
+type ContentRule = { id: ContentType; pattern: RegExp; weight: number };
+
+const CONTENT_RULES: ContentRule[] = [
+  { id: "knowledgeTutorial", pattern: /教程|入门|指南|怎么做|如何|操作|配置|使用方法|实操|流程/, weight: 3 },
+  { id: "checklistGuide", pattern: /清单|攻略|避坑|检查项|注意事项|步骤|工具推荐|要点/, weight: 4 },
+  { id: "opinionAnalysis", pattern: /我认为|真正关键|本质|不是.+而是|观点|判断|为什么|反常识|核心问题/, weight: 3 },
+  { id: "dataInsight", pattern: /数据|报告|趋势|增长|下降|同比|环比|调查|比例|统计|样本|\d+(?:\.\d+)?%/, weight: 4 },
+  { id: "caseReview", pattern: /案例|复盘|项目|客户|交付|实施|问题|解决方案|结果|验收/, weight: 3 },
+  { id: "storyNarrative", pattern: /那天|后来|第一次|当时|直到|没想到|故事|经历|转折|最后/, weight: 3 },
+  { id: "productIntroduction", pattern: /产品|功能|能力|适用场景|选型|配置建议|版本|服务/, weight: 3 },
+  { id: "experienceSharing", pattern: /体验|体会|感受|分享|踩坑|我用|这几个月|建议|心得/, weight: 3 },
 ];
+
+const CONTENT_TYPE_SCHEME: Record<ContentType, DesignSchemeId> = {
+  knowledgeTutorial: "knowledgeMinimal",
+  checklistGuide: "checklistGuide",
+  opinionAnalysis: "knowledgeMinimal",
+  dataInsight: "dataInsight",
+  caseReview: "storyNarrative",
+  storyNarrative: "storyNarrative",
+  productIntroduction: "knowledgeMinimal",
+  experienceSharing: "storyNarrative",
+};
+
+export const CONTENT_TYPE_LABELS: Record<ContentType, string> = {
+  knowledgeTutorial: "知识教程",
+  checklistGuide: "清单攻略",
+  opinionAnalysis: "观点分析",
+  dataInsight: "数据洞察",
+  caseReview: "案例复盘",
+  storyNarrative: "故事叙事",
+  productIntroduction: "产品介绍",
+  experienceSharing: "经验分享",
+};
 
 export function analyzeArticleDesign(content: UnifiedArticleContent): DesignPlan {
   const sourceRevision = stableChecksum(content.sourceText);
+  const publishableContent = { ...content, blocks: publicationBlocks(content) };
   const contentType = detectContentType(content);
-  const scheme = getDesignScheme(contentType);
-  const title = cleanLine(content.title || firstText(content, ["title", "section", "paragraph"]) || "未命名文章", 72);
-  const coreThesis = cleanLine(firstText(content, ["summary", "golden", "quote", "lead", "paragraph"]) || title, 280);
-  const hook = cleanLine(firstText(content, ["lead", "quote", "paragraph"]) || coreThesis, 220);
-  const keyPoints = collectKeyPoints(content, coreThesis);
-  const highlights = collectHighlights(content, keyPoints);
+  const recommendedScheme = CONTENT_TYPE_SCHEME[contentType];
+  const scheme = getDesignScheme(recommendedScheme);
+  const title = cleanTitle(content.title || firstMeaningfulText(publishableContent, ["title", "section", "paragraph"]) || "未命名文章", 72);
+  const coreMessage = cleanLine(firstMeaningfulText(publishableContent, ["summary", "golden", "quote", "lead", "paragraph"]) || title, 280);
+  const keyPoints = collectKeyPoints(publishableContent, coreMessage);
+  const openingHook = cleanLine(firstMeaningfulText(publishableContent, ["lead", "quote", "paragraph"]) || coreMessage, 220);
+  const conclusion = cleanLine(lastMeaningfulText(publishableContent, ["summary", "golden", "paragraph"]) || coreMessage, 360);
+  const highlights = collectHighlights(publishableContent, keyPoints);
   const tone = detectTone(content, contentType);
-  const textLength = content.blocks.reduce((total, block) => total + (renderBlockText(block)?.length ?? 0), 0);
-  const audience = detectAudience(content.sourceText);
-  const tags = collectTags(content, 8);
-  const titleCandidates = buildTitleCandidates(title, contentType);
+  const textLength = publishableContent.blocks.reduce((total, block) => total + (renderBlockText(block)?.length ?? 0), 0);
+  const publishableText = publishableContent.blocks.map((block) => renderBlockText(block) ?? "").join("\n");
+  const targetAudience = detectAudience(publishableText);
+  const tags = collectTags(publishableContent, 8);
+  const titleCandidates = buildTitleCandidates(title, contentType, keyPoints.length);
+  const callToAction = cleanLine(firstMeaningfulText(content, ["cta"]) || defaultCallToAction(contentType), 180);
 
   return {
     schemaVersion: 1,
     sourceRevision,
     contentType,
-    audience,
-    coreThesis,
+    targetAudience,
+    coreMessage,
     tone,
     recommendedPlatforms: recommendPlatforms(contentType),
-    recommendedScheme: scheme.id,
+    recommendedScheme,
+    visualStyle: scheme.name,
     palette: { ...scheme.palette },
     typography: { ...scheme.typography },
     density: scheme.density,
     coverStrategy: coverStrategyFor(contentType),
-    blockOrder: content.blocks.map(toPlanBlock),
+    blockOrder: publishableContent.blocks.map(toPlanBlock),
     highlights,
     pagination: {
-      xiaohongshuTargetPages: clamp(Math.ceil(textLength / 360) + 2, textLength > 700 ? 6 : 3, 10),
-      douyinImageTargetPages: clamp(Math.ceil(textLength / 480) + 1, textLength > 700 ? 4 : 2, 8),
+      xiaohongshuTargetPages: clamp(4 + Math.min(keyPoints.length, 5) + (textLength > 1600 ? 1 : 0), 6, 10),
+      douyinImageTargetPages: clamp(3 + Math.min(keyPoints.length, 4) + (textLength > 2200 ? 1 : 0), 4, 8),
     },
-    callToAction: cleanLine(firstText(content, ["cta"]) || "结合你的场景，先选择一个最容易验证的动作。", 180),
-    recommendationReason: recommendationReasonFor(contentType),
+    callToAction,
+    recommendationReason: recommendationReasonFor(contentType, scheme.name),
     titleCandidates,
     recommendedTitle: titleCandidates[0],
-    hook,
+    openingHook,
     keyPoints,
-    summary: cleanLine(firstText(content, ["summary"]) || coreThesis, 360),
+    conclusion,
     tags,
   };
 }
 
-function detectContentType(content: UnifiedArticleContent): DesignSchemeId {
-  const text = content.sourceText;
-  const scores = new Map<DesignSchemeId, number>([
-    ["knowledgeMinimal", 1],
+export function detectContentType(content: UnifiedArticleContent): ContentType {
+  const analysisText = publicationBlocks(content).map((block) => renderBlockText(block) ?? "").join("\n");
+  const scores = new Map<ContentType, number>([
+    ["knowledgeTutorial", content.parseMode === "knowledge" ? 2 : 0],
+    ["checklistGuide", content.blocks.some((block) => block.type === "list") ? 5 : 0],
+    ["opinionAnalysis", 2],
     ["dataInsight", 0],
-    ["checklistGuide", content.blocks.some((block) => block.type === "list") ? 4 : 0],
-    ["storyNarrative", content.parseMode === "narrative" ? 3 : 0],
-    ["productCase", content.parseMode === "business" ? 3 : 0],
-    ["lightRecommendation", 0],
+    ["caseReview", content.parseMode === "business" ? 4 : 0],
+    ["storyNarrative", content.parseMode === "narrative" ? 4 : 0],
+    ["productIntroduction", content.parseMode === "business" ? 2 : 0],
+    ["experienceSharing", 0],
   ]);
 
   for (const rule of CONTENT_RULES) {
-    const matches = text.match(new RegExp(rule.pattern.source, `${rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`}`));
-    scores.set(rule.id, (scores.get(rule.id) ?? 0) + Math.min(matches?.length ?? 0, 5) * rule.weight);
+    const flags = rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`;
+    const matches = analysisText.match(new RegExp(rule.pattern.source, flags));
+    scores.set(rule.id, (scores.get(rule.id) ?? 0) + Math.min(matches?.length ?? 0, 6) * rule.weight);
   }
 
-  return [...scores.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ?? "knowledgeMinimal";
+  return [...scores.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ?? "opinionAnalysis";
 }
 
-function detectTone(content: UnifiedArticleContent, contentType: DesignSchemeId): ContentTone {
-  if (contentType === "storyNarrative") return "叙事";
-  if (contentType === "lightRecommendation") return "轻松";
-  if (contentType === "checklistGuide") return "实用";
+function detectTone(content: UnifiedArticleContent, contentType: ContentType): ContentTone {
+  if (contentType === "storyNarrative" || contentType === "caseReview") return "叙事";
+  if (contentType === "experienceSharing") return "轻松";
+  if (contentType === "checklistGuide" || contentType === "knowledgeTutorial") return "实用";
   return content.parseMode === "narrative" ? "叙事" : "理性";
 }
 
 function detectAudience(text: string) {
-  if (/企业|客户|业务|产品|管理|团队/.test(text)) return "关注业务落地与团队实践的从业者";
-  if (/教程|方法|步骤|工具|学习/.test(text)) return "希望快速掌握方法并直接实践的读者";
-  if (/生活|体验|推荐|购买/.test(text)) return "关注真实体验和选择建议的读者";
+  if (/企业|客户|业务|产品|管理|团队|项目/.test(text)) return "关注业务落地、产品与团队实践的从业者";
+  if (/教程|方法|步骤|工具|学习|入门/.test(text)) return "希望快速掌握方法并直接实践的读者";
+  if (/生活|体验|推荐|购买|旅行|穿搭/.test(text)) return "关注真实体验和选择建议的读者";
   return "关注该主题并希望获得清晰判断的读者";
 }
 
 function collectKeyPoints(content: UnifiedArticleContent, fallback: string) {
   const preferred = content.blocks
-    .filter((block) => block.type === "section" || block.type === "subsection" || block.type === "list" || block.type === "golden")
-    .flatMap((block) => (block.type === "list" ? block.items : [block.text]))
+    .filter((block) => block.type === "section" || block.type === "subsection" || block.type === "list" || block.type === "golden" || block.type === "card")
+    .flatMap((block) => {
+      if ((block.type === "section" || block.type === "subsection") && isGenericStructureHeading(block.text)) return [];
+      return block.type === "list" ? block.items : block.type === "card" ? [block.title ?? "", block.body] : [block.text];
+    })
     .map((value) => cleanLine(value, 220))
-    .filter(Boolean);
+    .filter((value) => value && !isWeakPublishingText(value));
   const paragraphFallback = content.blocks
     .filter((block) => block.type === "paragraph")
-    .map((block) => cleanLine(block.text.split(/[。！？]/)[0] || block.text, 220));
+    .map((block) => cleanLine(firstSentence(block.text), 220))
+    .filter((value) => value && !isWeakPublishingText(value));
   return uniqueText([...preferred, ...paragraphFallback, fallback]).slice(0, 5);
 }
 
 function collectHighlights(content: UnifiedArticleContent, keyPoints: string[]) {
   const preferred = content.blocks
     .filter((block) => block.type === "golden" || block.type === "quote" || block.type === "summary")
-    .map((block) => cleanLine(block.text, 260));
+    .map((block) => cleanLine(block.text, 260))
+    .filter((value) => value && !isWeakPublishingText(value));
   return uniqueText([...preferred, ...keyPoints]).slice(0, 5);
 }
 
-function firstText(content: UnifiedArticleContent, types: UnifiedArticleBlock["type"][]) {
+function firstMeaningfulText(content: UnifiedArticleContent, types: UnifiedArticleBlock["type"][]) {
   for (const type of types) {
-    const block = content.blocks.find((candidate) => candidate.type === type);
-    const text = block ? renderBlockText(block) : undefined;
-    if (text?.trim()) return text;
+    for (const block of content.blocks.filter((candidate) => candidate.type === type)) {
+      const text = renderBlockText(block)?.trim();
+      if (text && !isWeakPublishingText(text)) return text;
+    }
+  }
+  return "";
+}
+
+function lastMeaningfulText(content: UnifiedArticleContent, types: UnifiedArticleBlock["type"][]) {
+  for (const type of types) {
+    const blocks = content.blocks.filter((candidate) => candidate.type === type).reverse();
+    for (const block of blocks) {
+      const text = renderBlockText(block)?.trim();
+      if (text && !isWeakPublishingText(text)) return text;
+    }
   }
   return "";
 }
@@ -131,43 +185,78 @@ function toPlanBlock(block: UnifiedArticleBlock): DesignPlanBlock {
   return { blockId: block.id, role, priority: role === "cover" || role === "highlight" ? 1 : role === "heading" || role === "conclusion" ? 2 : 3 };
 }
 
-function buildTitleCandidates(title: string, contentType: DesignSchemeId) {
-  const suffix = contentType === "checklistGuide" ? "实操清单" : contentType === "dataInsight" ? "关键判断" : contentType === "storyNarrative" ? "一次真实复盘" : contentType === "productCase" ? "问题与解法" : contentType === "lightRecommendation" ? "真实体验" : "核心方法";
-  return uniqueText([title, `${title}：${suffix}`, `关于「${title}」的几个关键判断`]).map((value) => cleanLine(value, 72)).slice(0, 3);
+function buildTitleCandidates(title: string, contentType: ContentType, pointCount: number) {
+  const topic = title.split(/[：:｜|。！？]/)[0]?.trim() || title;
+  const count = clamp(pointCount, 3, 5);
+  const candidates: Record<ContentType, string[]> = {
+    knowledgeTutorial: [`${topic}：一套可以直接照做的方法`, title, `先把${topic}讲清楚`],
+    checklistGuide: [`${topic}：${count}个关键步骤`, title, `${topic}，先避开这${count}个问题`],
+    opinionAnalysis: [`${topic}：真正关键的是什么`, title, `关于${topic}，我更在意这${count}个判断`],
+    dataInsight: [`${topic}：数据背后的${count}个判断`, title, `${topic}，先看结论再看原因`],
+    caseReview: [`${topic}：问题、行动与边界复盘`, title, `${topic}，这次项目留下的${count}个判断`],
+    storyNarrative: [`${topic}：这件事后来怎么了`, title, `${topic}，转折发生在这里`],
+    productIntroduction: [`${topic}：能力、边界和适用场景`, title, `什么情况下适合用${topic}`],
+    experienceSharing: [`${topic}：一次真实使用后的${count}个体会`, title, `${topic}，我最后留下了什么`],
+  };
+  return uniqueText(candidates[contentType]).map((value) => cleanTitle(value, 72)).slice(0, 3);
 }
 
-function recommendPlatforms(contentType: DesignSchemeId): PlatformId[] {
-  if (contentType === "lightRecommendation") return ["xiaohongshu", "douyinImage", "douyinLongform", "wechat"];
-  if (contentType === "dataInsight" || contentType === "productCase") return ["wechat", "douyinLongform", "xiaohongshu", "douyinImage"];
+function recommendPlatforms(contentType: ContentType): PlatformId[] {
+  if (contentType === "experienceSharing" || contentType === "checklistGuide") return ["xiaohongshu", "douyinImage", "douyinLongform", "wechat"];
+  if (contentType === "dataInsight" || contentType === "caseReview" || contentType === "opinionAnalysis") return ["wechat", "douyinLongform", "xiaohongshu", "douyinImage"];
   return ["wechat", "xiaohongshu", "douyinImage", "douyinLongform"];
 }
 
-function coverStrategyFor(contentType: DesignSchemeId) {
-  const strategies: Record<DesignSchemeId, string> = {
-    knowledgeMinimal: "用主题与核心收益组成两级标题，封面不堆叠正文。",
-    dataInsight: "突出一个有来源的关键数据或趋势结论，不补造数字。",
-    checklistGuide: "使用明确问题和步骤数量，正文页逐项展开。",
-    storyNarrative: "用具体场景或转折开场，保留叙事悬念。",
-    productCase: "先呈现业务问题，再说明方案边界和结果。",
-    lightRecommendation: "以真实体验结论为主标题，补充适用场景。",
+function coverStrategyFor(contentType: ContentType) {
+  const strategies: Record<ContentType, string> = {
+    knowledgeTutorial: "用主题和读者可获得的方法组成两级标题，封面不堆正文。",
+    checklistGuide: "突出真实步骤数量和执行结果，内页逐项展开。",
+    opinionAnalysis: "用原文核心判断建立认知落差，不制造虚假冲突。",
+    dataInsight: "突出一个有来源的数据或趋势结论，没有数字时改用判断。",
+    caseReview: "先呈现具体问题，再说明行动、边界和结果。",
+    storyNarrative: "用真实场景或转折开场，保留叙事悬念。",
+    productIntroduction: "先讲适用问题，再讲能力、边界和使用场景。",
+    experienceSharing: "以真实体验结论为标题，补充适用对象。",
   };
   return strategies[contentType];
 }
 
-function recommendationReasonFor(contentType: DesignSchemeId) {
-  const reasons: Record<DesignSchemeId, string> = {
-    knowledgeMinimal: "文章以观点和方法为主，清晰层级比装饰更重要。",
-    dataInsight: "文章包含数据、对比或趋势判断，适合先突出证据再解释原因。",
-    checklistGuide: "文章包含步骤、工具或避坑点，清单结构更方便扫读和执行。",
-    storyNarrative: "文章包含经历、时间推进或转折，叙事结构更能保留上下文。",
-    productCase: "文章围绕业务、产品或客户问题展开，问题到方案的结构更清楚。",
-    lightRecommendation: "文章以体验和选择建议为主，适合轻量、留白更多的图文结构。",
+function recommendationReasonFor(contentType: ContentType, schemeName: string) {
+  const reasons: Record<ContentType, string> = {
+    knowledgeTutorial: "文章以方法和解释为主，需要清晰章节和足够正文阅读空间。",
+    checklistGuide: "文章包含步骤或检查点，大数字清单更便于快速扫读和执行。",
+    opinionAnalysis: "文章依赖观点推进，编辑部式层级能突出判断而不过度装饰。",
+    dataInsight: "文章包含数据、对比或趋势判断，需要先展示证据再解释结论。",
+    caseReview: "文章围绕问题、行动和结果展开，章节式叙事更能保留上下文。",
+    storyNarrative: "文章包含时间推进与转折，杂志式章节更适合连续阅读。",
+    productIntroduction: "文章需要同时交代能力与边界，克制的编辑结构更可信。",
+    experienceSharing: "文章以个人体会和选择建议为主，舒展的故事节奏更自然。",
   };
-  return reasons[contentType];
+  return `推荐“${schemeName}”：${reasons[contentType]}`;
+}
+
+function defaultCallToAction(contentType: ContentType) {
+  if (contentType === "checklistGuide" || contentType === "knowledgeTutorial") return "你准备先从哪一步开始？";
+  if (contentType === "productIntroduction") return "先对照自己的场景，判断它是否真的适用。";
+  if (contentType === "storyNarrative" || contentType === "experienceSharing") return "你遇到过类似的情况吗？";
+  return "你更认同其中哪一个判断？";
+}
+
+function firstSentence(value: string) {
+  return value.split(/(?<=[。！？；])/u).find((part) => part.trim())?.trim() ?? value;
+}
+
+function cleanTitle(value: string, maxLength: number) {
+  return cleanLine(value, maxLength).replace(/[。；，、]+$/u, "");
 }
 
 function cleanLine(value: string, maxLength: number) {
-  return value.replace(/^#+\s*/, "").replace(/^>\s*/, "").replace(/\s+/g, " ").trim().slice(0, maxLength);
+  return cleanPublishingText(value)
+    .replace(/^#+\s*/, "")
+    .replace(/^>\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
 }
 
 function uniqueText(values: string[]) {

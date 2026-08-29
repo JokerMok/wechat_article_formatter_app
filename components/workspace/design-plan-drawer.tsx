@@ -6,8 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Toggle } from "@/components/ui/toggle";
-import type { DesignPlan } from "@/lib/design-plan";
-import { DESIGN_SCHEME_LIST, DESIGN_SCHEMES, type DesignScheme, type DesignSchemeId } from "@/lib/design-schemes";
+import { CONTENT_TYPE_LABELS, type DesignPlan } from "@/lib/design-plan";
+import { DESIGN_SCHEMES, getAlternativeSchemes, type DesignScheme, type DesignSchemeId } from "@/lib/design-schemes";
 import type { PlatformId } from "@/lib/platforms/types";
 import { cn } from "@/lib/utils";
 import { WORKSPACE_PLATFORM_LABELS } from "./state";
@@ -31,6 +31,10 @@ export function DesignPlanDrawer(props: {
 }) {
   const [pendingScheme, setPendingScheme] = React.useState<DesignSchemeId>();
   const isCardPlatform = props.activePlatform === "xiaohongshu" || props.activePlatform === "douyinImage";
+  const visibleSchemes = [
+    DESIGN_SCHEMES[props.plan.recommendedScheme],
+    ...getAlternativeSchemes(props.plan.recommendedScheme, 2, props.plan.contentType),
+  ];
 
   if (!props.open) return null;
 
@@ -53,7 +57,7 @@ export function DesignPlanDrawer(props: {
         <section className="rounded-md border border-[#cfe0d6] bg-[#f1f7f3] p-3">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-xs font-medium text-[#17633d]">系统推荐</div>
+              <div className="text-xs font-medium text-[#17633d]">系统推荐 · {CONTENT_TYPE_LABELS[props.plan.contentType]}</div>
               <h3 className="mt-1 text-base font-semibold">{DESIGN_SCHEMES[props.plan.recommendedScheme].name}</h3>
             </div>
             {props.draft.schemeId === props.plan.recommendedScheme && (
@@ -71,7 +75,7 @@ export function DesignPlanDrawer(props: {
         </section>
 
         <div className="mt-4 grid gap-3">
-          {DESIGN_SCHEME_LIST.map((scheme) => (
+          {visibleSchemes.map((scheme) => (
             <SchemeCard
               key={scheme.id}
               scheme={scheme}
@@ -147,17 +151,7 @@ function SchemeCard(props: {
 }) {
   return (
     <article className={cn("grid grid-cols-[96px_1fr] gap-3 rounded-md border bg-white p-3", props.active ? "border-[#17633d] ring-1 ring-[#17633d]/15" : "border-[#dfe5e1]") }>
-      <div className="aspect-[3/4] overflow-hidden rounded border p-2" style={{ background: props.scheme.palette.background, borderColor: props.scheme.palette.secondary }}>
-        <div className="h-1 w-full" style={{ background: props.scheme.palette.secondary }} />
-        <div className="mt-3 line-clamp-3 text-[8px] font-bold leading-[1.35]" style={{ color: props.scheme.palette.primary }}>{props.title}</div>
-        <div className="mt-3 h-1.5 w-4/5 rounded-full" style={{ background: props.scheme.palette.primary }} />
-        <div className="mt-2 h-1 w-full rounded-full" style={{ background: props.scheme.palette.secondary }} />
-        <div className="mt-1 h-1 w-3/4 rounded-full" style={{ background: props.scheme.palette.secondary }} />
-        <div className="mt-3 rounded-sm p-1" style={{ background: props.scheme.palette.secondary }}>
-          <div className="h-1 w-5/6 rounded-full bg-white/80" />
-          <div className="mt-1 h-1 w-2/3 rounded-full bg-white/80" />
-        </div>
-      </div>
+      <SchemeThumbnail scheme={props.scheme} title={props.title} />
       <div className="min-w-0">
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
@@ -181,6 +175,61 @@ function SchemeCard(props: {
         </Button>
       </div>
     </article>
+  );
+}
+
+function SchemeThumbnail({ scheme, title }: { scheme: DesignScheme; title: string }) {
+  const frame = "relative aspect-[3/4] overflow-hidden rounded border p-2";
+  if (scheme.layoutVariant === "checklist") {
+    return (
+      <div className={frame} style={{ background: scheme.palette.background, borderColor: scheme.palette.secondary }}>
+        <div className="text-[7px] font-bold" style={{ color: scheme.palette.primary }}>ACTION LIST</div>
+        <div className="absolute right-2 top-1 text-2xl font-black" style={{ color: scheme.palette.secondary }}>03</div>
+        <div className="mt-5 line-clamp-2 text-[8px] font-extrabold leading-[1.3]" style={{ color: scheme.palette.text }}>{title}</div>
+        {[1, 2, 3].map((item) => (
+          <div key={item} className="mt-2 flex items-center gap-1.5">
+            <span className="text-[9px] font-black" style={{ color: scheme.palette.primary }}>0{item}</span>
+            <span className="h-1 flex-1" style={{ background: scheme.palette.secondary }} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (scheme.layoutVariant === "data") {
+    return (
+      <div className={frame} style={{ background: scheme.palette.background, borderColor: scheme.palette.secondary }}>
+        <div className="grid h-full grid-cols-2 gap-px" style={{ background: `${scheme.palette.secondary}55` }}>
+          <div className="col-span-2 bg-white/90 p-1.5">
+            <div className="text-[6px] font-bold" style={{ color: scheme.palette.primary }}>INSIGHT 01</div>
+            <div className="mt-1 line-clamp-2 text-[8px] font-extrabold leading-tight" style={{ color: scheme.palette.text }}>{title}</div>
+          </div>
+          <div className="bg-white/90 p-1"><b className="text-sm" style={{ color: scheme.palette.primary }}>68%</b><i className="mt-1 block h-1 w-3/4" style={{ background: scheme.palette.secondary }} /></div>
+          <div className="bg-white/90 p-1"><b className="text-sm" style={{ color: scheme.palette.primary }}>2.4x</b><i className="mt-1 block h-1 w-2/3" style={{ background: scheme.palette.secondary }} /></div>
+        </div>
+      </div>
+    );
+  }
+  if (scheme.layoutVariant === "story") {
+    return (
+      <div className={frame} style={{ background: scheme.palette.background, borderColor: scheme.palette.secondary }}>
+        <div className="absolute bottom-2 left-3 top-2 w-px" style={{ background: scheme.palette.secondary }} />
+        <div className="pl-2 text-[6px] font-semibold" style={{ color: scheme.palette.primary }}>CHAPTER 01</div>
+        <div className="mt-6 line-clamp-3 pl-2 font-serif text-[10px] font-bold leading-[1.45]" style={{ color: scheme.palette.text }}>{title}</div>
+        <div className="ml-2 mt-4 h-px w-10" style={{ background: scheme.palette.secondary }} />
+        <div className="ml-2 mt-3 h-1 w-5/6" style={{ background: `${scheme.palette.text}44` }} />
+        <div className="ml-2 mt-1 h-1 w-3/4" style={{ background: `${scheme.palette.text}33` }} />
+      </div>
+    );
+  }
+  return (
+    <div className={frame} style={{ background: scheme.palette.background, borderColor: scheme.palette.secondary }}>
+      <div className="text-[6px] font-semibold" style={{ color: `${scheme.palette.text}88` }}>EDITORIAL / 01</div>
+      <div className="mt-2 h-px w-full" style={{ background: scheme.palette.secondary }} />
+      <div className="mt-5 line-clamp-3 text-[9px] font-extrabold leading-[1.35]" style={{ color: scheme.palette.text }}>{title}</div>
+      <div className="mt-4 h-1 w-10" style={{ background: scheme.palette.primary }} />
+      <div className="mt-3 h-1 w-full" style={{ background: `${scheme.palette.text}33` }} />
+      <div className="mt-1 h-1 w-4/5" style={{ background: `${scheme.palette.text}26` }} />
+    </div>
   );
 }
 

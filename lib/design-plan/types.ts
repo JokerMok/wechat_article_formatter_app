@@ -1,7 +1,18 @@
 import type { PlatformId } from "../platforms/types";
 import type { DesignDensity, DesignSchemeId } from "../design-schemes";
 
-export type ContentType = DesignSchemeId;
+export const CONTENT_TYPE_IDS = [
+  "knowledgeTutorial",
+  "checklistGuide",
+  "opinionAnalysis",
+  "dataInsight",
+  "caseReview",
+  "storyNarrative",
+  "productIntroduction",
+  "experienceSharing",
+] as const;
+
+export type ContentType = (typeof CONTENT_TYPE_IDS)[number];
 export type ContentTone = "理性" | "叙事" | "实用" | "轻松";
 export type ContentBlockRole = "cover" | "hook" | "heading" | "body" | "highlight" | "conclusion" | "action" | "media";
 
@@ -15,11 +26,12 @@ export type DesignPlan = {
   schemaVersion: 1;
   sourceRevision: string;
   contentType: ContentType;
-  audience: string;
-  coreThesis: string;
+  targetAudience: string;
+  coreMessage: string;
   tone: ContentTone;
   recommendedPlatforms: PlatformId[];
   recommendedScheme: DesignSchemeId;
+  visualStyle: string;
   palette: {
     primary: string;
     secondary: string;
@@ -44,8 +56,8 @@ export type DesignPlan = {
   recommendationReason: string;
   titleCandidates: string[];
   recommendedTitle: string;
-  hook: string;
+  openingHook: string;
   keyPoints: string[];
-  summary: string;
+  conclusion: string;
   tags: string[];
 };

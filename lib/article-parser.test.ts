@@ -29,6 +29,27 @@ describe("parseArticle", () => {
     expect(blocks.map((block) => block.type)).toEqual(["title", "lead", "section", "quote", "list", "image", "cta"]);
   });
 
+  it("keeps consecutive ordered markdown items as one list instead of section titles", () => {
+    const content = parseArticleContent(`# 项目复盘
+
+## 内容结构
+
+1. 区分中间产物和正式交付。
+2. 检查平台接口和运行环境。
+3. 保留设备验证边界。`, { mode: "knowledge" });
+    const list = content.blocks.find((block) => block.type === "list");
+
+    expect(content.blocks.filter((block) => block.type === "section")).toHaveLength(1);
+    expect(list?.type).toBe("list");
+    if (list?.type === "list") {
+      expect(list.items).toEqual([
+        "区分中间产物和正式交付。",
+        "检查平台接口和运行环境。",
+        "保留设备验证边界。",
+      ]);
+    }
+  });
+
   it("keeps empty lines from breaking paragraph and section recognition", () => {
     const blocks = parseArticle(`深度文章标题
 

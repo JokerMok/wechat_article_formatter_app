@@ -143,6 +143,17 @@ export function slugifyExportName(value: string | undefined, fallback = "untitle
   return slug || fallback;
 }
 
+export function portableArchiveName(value: string | undefined, fallback = "content") {
+  const portable = (value ?? "")
+    .normalize("NFKD")
+    .replace(/[^\x20-\x7E]+/g, "-")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[.-]+|[.-]+$/g, "")
+    .toLowerCase();
+  return portable || fallback;
+}
+
 export function formatExportTimestamp(value: ExportTimestamp) {
   const date = new Date(value);
   const pad = (part: number) => String(part).padStart(2, "0");
@@ -199,12 +210,24 @@ function buildTagsText(tags: string[]) {
   return tags.map((tag) => `#${tag.replace(/^#/, "")}`).join(" ");
 }
 
+function appendMissingTags(copy: string, tags: string[]) {
+  const existingTags = new Set(
+    [...copy.matchAll(/#([^\s#]+)/gu)].map((match) => match[1]?.replace(/[，。,.；;！!？?]+$/u, "").trim()).filter(Boolean),
+  );
+  const missingTags = tags.filter((tag) => {
+    const normalized = tag.replace(/^#/, "").trim();
+    return normalized && !existingTags.has(normalized);
+  });
+  return [copy.trim(), buildTagsText(missingTags)].filter(Boolean).join("\n\n");
+}
+
 function buildXiaohongshuCopy(output: XiaohongshuImageTextOutput) {
-  return [output.title, output.body, buildTagsText(output.tags)].filter(Boolean).join("\n\n");
+  const publishingCopy = output.caption?.trim() || [output.title, output.body].filter(Boolean).join("\n\n");
+  return appendMissingTags(publishingCopy, output.tags);
 }
 
 function buildDouyinImageCopy(output: DouyinImageOutput) {
-  return [output.caption, buildTagsText(output.tags)].filter(Boolean).join("\n\n");
+  return appendMissingTags(output.caption, output.tags);
 }
 
 function buildDouyinLongformText(output: DouyinLongformOutput) {
@@ -416,8 +439,9 @@ async function renderImageFiles(input: {
 }) {
   const renderer = input.renderer ?? renderBrowserCardPageToPng;
   const files: ExportedFile[] = [];
+  const portableBaseName = portableArchiveName(input.baseName);
   for (const [index, page] of input.pages.entries()) {
-    const fileName = `${input.baseName}-${String(index + 1).padStart(2, "0")}.png`;
+    const fileName = `${portableBaseName}-${String(index + 1).padStart(2, "0")}.png`;
     const blob = await renderer({
       page,
       platform: input.platform,

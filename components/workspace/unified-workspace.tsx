@@ -295,18 +295,23 @@ export default function UnifiedWorkspace() {
     const scheme = DESIGN_SCHEMES[activeDraft.schemeId];
     const densityScale = scheme.density === "舒展" ? 1.12 : scheme.density === "紧凑" ? 0.86 : 1;
     const lineHeightScale = scheme.typography.lineHeight / 1.78;
+    const topOffset = scheme.layoutVariant === "story" ? 90 : scheme.layoutVariant === "checklist" ? 74 : 64;
+    const fontFamily = scheme.layoutVariant === "story"
+      ? "Songti SC, STSong, SimSun, Georgia, serif"
+      : "-apple-system, BlinkMacSystemFont, Helvetica Neue, PingFang SC, Microsoft YaHei, Arial, sans-serif";
     const targetPages = activePlatform === "xiaohongshu"
       ? workspace.designPlan.pagination.xiaohongshuTargetPages
       : workspace.designPlan.pagination.douyinImageTargetPages;
     const result = layoutCardPagesToTarget(activeDraft.content, measurer, {
       aspectRatio: ratio,
       safeArea: {
-        top: workspace.layout.margin + 64,
+        top: workspace.layout.margin + topOffset,
         right: workspace.layout.margin,
         bottom: workspace.layout.margin + 64,
         left: workspace.layout.margin,
       },
       typography: {
+        fontFamily,
         titleFontSize: Math.round(workspace.layout.titleFontSize * scheme.typography.titleScale),
         headingFontSize: Math.round(workspace.layout.headingFontSize * scheme.typography.headingScale),
         bodyFontSize: Math.round(workspace.layout.bodyFontSize * scheme.typography.bodyScale),
@@ -1029,6 +1034,7 @@ export default function UnifiedWorkspace() {
           {
             ...current.designPlan,
             recommendedScheme: schemeId,
+            visualStyle: scheme.name,
             palette: { ...scheme.palette },
             typography: { ...scheme.typography },
             density: scheme.density,
@@ -1349,7 +1355,7 @@ function PlatformEditor(props: {
         <div className="mt-3 grid gap-2 md:grid-cols-[1fr_220px]">
           <Input value={props.draft.title} onChange={(event) => props.onDraftChange(updatePlatformTitle(props.draft, event.target.value))} className="rounded-md" aria-label="平台标题" />
           <Input
-            value={props.draft.meta.tags.join(" #")}
+            value={props.draft.meta.tags.map((tag) => `#${tag.replace(/^#/, "")}`).join(" ")}
             onChange={(event) => props.onDraftChange(updatePlatformTags(props.draft, event.target.value))}
             className="rounded-md"
             aria-label="平台标签"
@@ -1677,7 +1683,7 @@ function CardPreview(props: {
       </div>
       <div data-card-preview className="mx-auto overflow-hidden rounded-md border shadow-sm" style={{ width: previewWidth, height: Math.round((previewWidth * page.canvas.height) / page.canvas.width), background: props.preset.background }}>
         <div style={{ width: page.canvas.width, height: page.canvas.height, transform: `scale(${previewWidth / page.canvas.width})`, transformOrigin: "top left", position: "relative" }}>
-          <div className="absolute" style={{ left: page.safeArea.x, top: page.safeArea.y - 36, width: page.safeArea.width, height: 4, background: props.preset.rule }} />
+          <CardPreviewFrame page={page} preset={props.preset} />
           {page.nodes.map((node) => {
             const imageUrl = props.imageUrlByBlock[node.blockId];
             if (node.kind === "image") {
@@ -1702,7 +1708,7 @@ function CardPreview(props: {
             return (
               <div
                 key={node.id}
-                className={cn("absolute whitespace-pre-wrap break-words", node.kind === "focus" && "rounded-lg px-4 py-3")}
+                className={cn("absolute whitespace-pre-wrap break-words", node.kind === "focus" && props.preset.variant !== "story" && "px-4 py-3")}
                   style={{
                     left: node.x,
                     top: node.y,
@@ -1712,7 +1718,12 @@ function CardPreview(props: {
                     lineHeight: node.style?.lineHeight ? `${node.style.lineHeight}px` : undefined,
                     fontWeight: node.style?.fontWeight,
                     color: node.kind === "body" ? props.preset.body : props.preset.title,
-                    background: node.kind === "focus" ? props.preset.highlight : undefined,
+                    background: node.kind === "focus"
+                      ? props.preset.variant === "story" ? "transparent" : props.preset.variant === "data" ? props.preset.surface : props.preset.highlight
+                      : undefined,
+                    ...cardNodeBorderStyle(node.kind, props.preset),
+                    borderRadius: node.kind === "focus" && props.preset.variant !== "story" ? (props.preset.variant === "editorial" ? 4 : 12) : undefined,
+                    padding: node.kind === "heading" && (props.preset.variant === "editorial" || props.preset.variant === "data") ? "0 0 0 18px" : undefined,
                   }}
               >
                 {node.lines.map((line) => line.text).join("\n")}
@@ -1723,6 +1734,74 @@ function CardPreview(props: {
       </div>
       {!!page.overflow.length && <div className="mx-auto mt-2 w-full max-w-[340px] rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">当前页有溢出，调整字号或边距后会重新计算。</div>}
     </div>
+  );
+}
+
+function cardNodeBorderStyle(
+  kind: CardLayoutPage["nodes"][number]["kind"],
+  preset: ReturnType<typeof cardPresetForScheme>,
+): React.CSSProperties {
+  const allSides = kind === "focus" && preset.variant === "data";
+  const storyFocus = kind === "focus" && preset.variant === "story";
+  const leftWidth = kind === "heading" && preset.variant === "editorial"
+    ? 7
+    : kind === "focus" && preset.variant === "checklist"
+      ? 8
+      : kind === "heading" && preset.variant === "data"
+        ? 6
+        : allSides
+          ? 2
+          : 0;
+  const bottomWidth = kind === "heading" && preset.variant === "checklist" ? 8 : storyFocus || allSides ? 2 : 0;
+
+  return {
+    borderTopWidth: storyFocus || allSides ? 2 : 0,
+    borderRightWidth: allSides ? 2 : 0,
+    borderBottomWidth: bottomWidth,
+    borderLeftWidth: leftWidth,
+    borderStyle: "solid",
+    borderColor: preset.rule,
+    borderLeftColor: leftWidth > 0 && !allSides ? preset.title : preset.rule,
+  };
+}
+
+function CardPreviewFrame(props: { page: CardLayoutPage; preset: ReturnType<typeof cardPresetForScheme> }) {
+  const { page, preset } = props;
+  const labelY = Math.max(44, page.safeArea.y - 78);
+  if (preset.variant === "checklist") {
+    return (
+      <>
+        <div className="absolute" style={{ left: page.safeArea.x, top: labelY, width: 76, height: 8, background: preset.title }} />
+        <div className="absolute text-[20px] font-bold" style={{ left: page.safeArea.x, top: labelY + 20, color: preset.muted }}>ACTION LIST</div>
+        <div className="absolute text-[86px] font-extrabold leading-none" style={{ right: page.safeArea.right, top: labelY - 36, color: preset.rule }}>{String(page.pageNumber).padStart(2, "0")}</div>
+      </>
+    );
+  }
+  if (preset.variant === "data") {
+    return (
+      <>
+        {[0, 1, 2, 3, 4].map((column) => (
+          <div key={column} className="absolute" style={{ left: page.safeArea.x + (page.safeArea.width / 4) * column, top: page.safeArea.y - 28, width: 1, height: page.safeArea.height + 56, background: `${preset.rule}3D` }} />
+        ))}
+        <div className="absolute" style={{ left: page.safeArea.x, top: page.safeArea.y - 36, width: page.safeArea.width, height: 4, background: preset.title }} />
+        <div className="absolute text-[21px] font-bold" style={{ left: page.safeArea.x, top: labelY, color: preset.title }}>INSIGHT {String(page.pageNumber).padStart(2, "0")}</div>
+      </>
+    );
+  }
+  if (preset.variant === "story") {
+    return (
+      <>
+        <div className="absolute" style={{ left: page.safeArea.x, top: page.safeArea.y - 34, width: 72, height: 3, background: preset.rule }} />
+        <div className="absolute" style={{ left: page.safeArea.x, top: page.safeArea.y - 34, width: 2, height: page.safeArea.height + 52, background: preset.rule }} />
+        <div className="absolute font-serif text-[22px] font-semibold" style={{ left: page.safeArea.x + 20, top: labelY, color: preset.title }}>CHAPTER {String(page.pageNumber).padStart(2, "0")}</div>
+      </>
+    );
+  }
+  return (
+    <>
+      <div className="absolute" style={{ left: page.safeArea.x, top: page.safeArea.y - 36, width: page.safeArea.width, height: 3, background: preset.rule }} />
+      <div className="absolute text-[22px] font-semibold" style={{ left: page.safeArea.x, top: labelY, color: preset.muted }}>EDITORIAL / {String(page.pageNumber).padStart(2, "0")}</div>
+    </>
   );
 }
 

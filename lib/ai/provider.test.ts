@@ -656,4 +656,65 @@ describe("OpenAICompatibleProvider", () => {
     expect(result.versions.wechat?.content.blocks.some((block) => block.type === "paragraph" && block.text.includes("散落资料"))).toBe(true);
     expect(result.versions.wechat?.highlights).toEqual(["知识库重构的关键判断", "先把散落资料整理成可复用知识库。", "再基于稳定资料接入业务应用。"]);
   });
+
+  it("accepts a constrained AI design plan and hydrates controlled visual tokens", async () => {
+    const assistantContent = JSON.parse(String(validFixture.choices[0].message.content)) as Record<string, unknown>;
+    assistantContent.designPlan = {
+      contentType: "checklistGuide",
+      targetAudience: "需要整理企业知识的项目负责人",
+      coreMessage: "先统一资料，再接入业务应用。",
+      recommendedTitle: "企业知识库整理清单",
+      titleCandidates: ["企业知识库整理清单", "先整理资料，再接 AI", "知识库落地的三个动作"],
+      openingHook: "资料没有整理好，模型能力再强也难以稳定复用。",
+      keyPoints: ["收集资料", "统一口径", "建立更新机制"],
+      conclusion: "知识库首先是一套可持续维护的资料流程。",
+      callToAction: "先检查现有资料缺在哪一步。",
+      recommendedScheme: "checklistGuide",
+      recommendationReason: "文章包含可执行动作，适合清单结构。",
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+      ...validFixture,
+      choices: [{ ...validFixture.choices[0], message: { role: "assistant", content: JSON.stringify(assistantContent) } }],
+    })));
+
+    const result = await generatePlatformVersions({
+      provider: new OpenAICompatibleProvider(baseProviderConfig),
+      source,
+      platforms: ["wechat"],
+    });
+
+    expectOk(result);
+    expect(result.designPlan).toMatchObject({
+      contentType: "checklistGuide",
+      recommendedScheme: "checklistGuide",
+      visualStyle: "高能清单",
+      recommendedTitle: "企业知识库整理清单",
+    });
+    expect(result.designPlan.palette.primary).toBe("#0E5B4B");
+  });
+
+  it("falls back to the local design plan when AI design fields are illegal", async () => {
+    const assistantContent = JSON.parse(String(validFixture.choices[0].message.content)) as Record<string, unknown>;
+    assistantContent.designPlan = {
+      contentType: "viralMagic",
+      recommendedScheme: "<script>alert(1)</script>",
+      recommendedTitle: "<style>body{display:none}</style>",
+      html: "<iframe src='evil'></iframe>",
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+      ...validFixture,
+      choices: [{ ...validFixture.choices[0], message: { role: "assistant", content: JSON.stringify(assistantContent) } }],
+    })));
+
+    const result = await generatePlatformVersions({
+      provider: new OpenAICompatibleProvider(baseProviderConfig),
+      source,
+      platforms: ["wechat"],
+    });
+
+    expectOk(result);
+    expect(result.designPlan.contentType).not.toBe("viralMagic");
+    expect(result.designPlan.recommendedScheme).not.toContain("script");
+    expect(JSON.stringify(result.designPlan)).not.toMatch(/script|iframe|display:none/i);
+  });
 });

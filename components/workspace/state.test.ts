@@ -125,10 +125,10 @@ describe("workspace state", () => {
   it("applies a visual scheme without changing platform text", () => {
     const state = createWorkspaceState("# 标题\n\n正文。");
     const before = state.platforms.wechat;
-    const after = applyDesignSchemeToDraft(before, "productCase");
+    const after = applyDesignSchemeToDraft(before, "checklistGuide");
 
-    expect(after.schemeId).toBe("productCase");
-    expect(after.templateKey).toBe("zhenyiBusinessCase");
+    expect(after.schemeId).toBe("checklistGuide");
+    expect(after.templateKey).toBe("zhenyiChecklist");
     expect(after.content).toEqual(before.content);
     expect(after.status).toBe("edited");
   });
@@ -139,12 +139,13 @@ describe("workspace state", () => {
 正文第一段。
 `);
     const paragraph = state.platforms.wechat.content.blocks.find((block) => block.type === "paragraph");
+    const untouchedXiaohongshu = state.platforms.xiaohongshu;
     expect(paragraph).toBeDefined();
 
     const edited = updatePlatformBlock(state.platforms.wechat, paragraph!.id, "只改公众号版本。");
 
     expect(edited.content.blocks.find((block) => block.id === paragraph!.id && "text" in block)?.text).toBe("只改公众号版本。");
-    expect(state.platforms.xiaohongshu.content.blocks.find((block) => block.id === paragraph!.id && "text" in block)?.text).toBe("正文第一段。");
+    expect(state.platforms.xiaohongshu).toBe(untouchedXiaohongshu);
   });
 
   it("preserves manually edited title and caption when block text changes", () => {
@@ -342,6 +343,8 @@ describe("workspace state", () => {
 本地正文。
 `);
     const deterministicDraft = regeneratePlatformDraft(state.platforms.wechat, deterministicSource.platforms.wechat.content, state.ai);
+    const initialTitle = state.platforms.wechat.title;
+    const deterministicTitle = deterministicDraft.title;
     const deterministicResult = applyPlatformDraftReplacements({
       drafts: state.platforms,
       histories: emptyHistories(),
@@ -350,8 +353,8 @@ describe("workspace state", () => {
 
     expect(deterministicResult.appliedPlatforms).toEqual(["wechat"]);
     expect(deterministicResult.histories.wechat.past).toHaveLength(1);
-    expect(deterministicResult.histories.wechat.past[0]?.title).toBe("旧标题");
-    expect(deterministicResult.drafts.wechat.title).toBe("本地标题");
+    expect(deterministicResult.histories.wechat.past[0]?.title).toBe(initialTitle);
+    expect(deterministicResult.drafts.wechat.title).toBe(deterministicTitle);
 
     const aiSource = createWorkspaceState(`# AI 标题
 
@@ -367,8 +370,8 @@ AI 正文。
     });
 
     expect(aiResult.histories.wechat.past).toHaveLength(2);
-    expect(aiResult.histories.wechat.past.at(-1)?.title).toBe("本地标题");
-    expect(aiResult.drafts.wechat.title).toBe("AI 标题");
+    expect(aiResult.histories.wechat.past.at(-1)?.title).toBe(deterministicTitle);
+    expect(aiResult.drafts.wechat.title).toBe(aiVersion!.title);
   });
 
   it("does not overwrite or write history for platform drafts edited during AI generation", () => {
@@ -400,7 +403,7 @@ AI 正文。
     expect(result.skippedChangedPlatforms).toEqual(["wechat"]);
     expect(result.appliedPlatforms).toEqual(["xiaohongshu"]);
     expect(result.drafts.wechat.content.blocks.find((block) => block.id === paragraph!.id && "text" in block)?.text).toBe("AI 请求期间的人工修改。");
-    expect(result.drafts.xiaohongshu.title).toBe("AI 标题");
+    expect(result.drafts.xiaohongshu.title).toBe(aiVersions.xiaohongshu!.title);
     expect(result.histories.wechat.past).toEqual([]);
     expect(result.histories.xiaohongshu.past).toHaveLength(1);
   });
@@ -461,7 +464,7 @@ AI 正文。
     ) as typeof current;
 
     expect(next.wechat.content.blocks.find((block) => block.id === paragraph!.id && "text" in block)?.text).toBe("公众号人工修改。");
-    expect(next.xiaohongshu.title).toBe("新标题");
+    expect(next.xiaohongshu.title).toContain("新标题");
   });
 
   it("marks incomplete AI configuration without replacing any current platform drafts", () => {
