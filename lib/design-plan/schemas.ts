@@ -1,9 +1,11 @@
 import { z } from "zod";
-import { DESIGN_SCHEME_IDS } from "../design-schemes";
+import { CONTENT_LAYOUT_IDS, DESIGN_SCHEME_IDS, VISUAL_THEME_IDS } from "../design-schemes";
 import { CONTENT_TYPE_IDS, GENERATION_MODE_IDS, PAGE_PLAN_KINDS } from "./types";
 
 const platformIdSchema = z.enum(["wechat", "xiaohongshu", "douyinImage", "douyinLongform"]);
 const schemeIdSchema = z.enum(DESIGN_SCHEME_IDS);
+const visualThemeIdSchema = z.enum(VISUAL_THEME_IDS);
+const contentLayoutIdSchema = z.enum(CONTENT_LAYOUT_IDS);
 const contentTypeSchema = z.enum(CONTENT_TYPE_IDS);
 const generationModeSchema = z.enum(GENERATION_MODE_IDS);
 
@@ -19,6 +21,18 @@ const typographySchema = z.strictObject({
   headingScale: z.number().min(0.7).max(1.4),
   bodyScale: z.number().min(0.7).max(1.4),
   lineHeight: z.number().min(1.2).max(2.2),
+  titleFamily: z.string().max(240).optional(),
+  bodyFamily: z.string().max(240).optional(),
+  focusFamily: z.string().max(240).optional(),
+});
+
+const brandOverrideSchema = z.strictObject({
+  primaryColor: z.string().max(32).optional(),
+  logoAssetId: z.string().max(160).optional(),
+  fontFamily: z.string().max(240).optional(),
+  authorName: z.string().max(120).optional(),
+  footer: z.string().max(240).optional(),
+  watermark: z.string().max(120).optional(),
 });
 
 const plannedContentBlockSchema = z.strictObject({
@@ -41,10 +55,13 @@ const platformDesignPlanSchema = z.strictObject({
   schemaVersion: z.literal(1),
   platform: platformIdSchema,
   visualPresetId: schemeIdSchema,
+  themeId: visualThemeIdSchema.optional(),
+  layoutId: contentLayoutIdSchema.optional(),
   title: z.string().min(1).max(120),
   publishCopy: z.string(),
   palette: paletteSchema,
   typography: typographySchema,
+  brandOverride: brandOverrideSchema.optional(),
   pages: z.array(pagePlanSchema).min(1),
   exportSpec: z.strictObject({
     format: z.enum(["html", "png", "text"]),
@@ -88,6 +105,24 @@ export const designPlanSchema = z.strictObject({
   tone: z.enum(["理性", "叙事", "实用", "轻松"]),
   recommendedPlatforms: z.array(platformIdSchema).min(1).max(4),
   recommendedScheme: schemeIdSchema,
+  recommendedThemeId: visualThemeIdSchema.optional(),
+  contentLayoutId: contentLayoutIdSchema.optional(),
+  contentLayout: z.strictObject({
+    id: contentLayoutIdSchema,
+    name: z.string(),
+    contentTypes: z.array(z.string()),
+    density: z.enum(["low", "medium", "high"]),
+    pageSequence: z.array(z.string()),
+    blockRules: z.array(z.strictObject({ role: z.string(), maxChars: z.number().int().positive(), maxBlocks: z.number().int().positive() })),
+    paginationRules: z.strictObject({
+      longformCharacterBudget: z.strictObject({ wechat: z.number().int().positive(), douyinLongform: z.number().int().positive() }),
+      cardCharacterBudget: z.strictObject({ xiaohongshu: z.number().int().positive(), douyinImage: z.number().int().positive() }),
+      cardMaxUnits: z.strictObject({ xiaohongshu: z.number().int().positive(), douyinImage: z.number().int().positive() }),
+      shortPageThreshold: z.number().min(0).max(1),
+      allowSplitLongParagraphs: z.boolean(),
+    }),
+  }).optional(),
+  brandOverride: brandOverrideSchema.optional(),
   visualStyle: z.string().min(1).max(80),
   palette: paletteSchema,
   typography: typographySchema,

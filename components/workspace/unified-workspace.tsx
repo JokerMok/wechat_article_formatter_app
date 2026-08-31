@@ -27,7 +27,7 @@ import { Toggle } from "@/components/ui/toggle";
 import { copyRichText } from "@/lib/copy-rich-text";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "@/lib/content";
 import { analyzeArticleDesign, type DesignPlan, type GenerationMode } from "@/lib/design-plan";
-import { cardPresetForScheme, DESIGN_SCHEMES, type DesignSchemeId } from "@/lib/design-schemes";
+import { cardPresetForScheme, DESIGN_SCHEMES, getContentLayout, getVisualTheme, type DesignSchemeId } from "@/lib/design-schemes";
 import type { PlatformId } from "@/lib/platforms/types";
 import {
   createApproximateTextMeasurer,
@@ -293,10 +293,12 @@ export default function UnifiedWorkspace() {
     if (activePlatform === "wechat" || activePlatform === "douyinLongform") return undefined;
     const ratio = activePlatform === "douyinImage" ? activeDraft.ratio : "3:4";
     const scheme = DESIGN_SCHEMES[activeDraft.schemeId];
-    const densityScale = scheme.density === "舒展" ? 1.12 : scheme.density === "紧凑" ? 0.86 : 1;
-    const lineHeightScale = scheme.typography.lineHeight / 1.78;
-    const topOffset = scheme.layoutVariant === "story" ? 90 : scheme.layoutVariant === "checklist" ? 74 : 64;
-    const fontFamily = "-apple-system, BlinkMacSystemFont, Helvetica Neue, PingFang SC, Microsoft YaHei, Arial, sans-serif";
+    const theme = getVisualTheme(activeDraft.themeId ?? scheme.themeId);
+    const layoutVariant = activeDraft.layoutId ?? scheme.contentLayoutId;
+    const contentLayout = getContentLayout(layoutVariant);
+    const densityScale = contentLayout.density === "low" ? 1.12 : contentLayout.density === "high" ? 0.88 : 1;
+    const lineHeightScale = theme.typography.lineHeight / 1.78;
+    const topOffset = layoutVariant === "story" ? 90 : layoutVariant === "checklist" ? 74 : 64;
     const targetPages = activePlatform === "xiaohongshu"
       ? workspace.designPlan.pagination.xiaohongshuTargetPages
       : workspace.designPlan.pagination.douyinImageTargetPages;
@@ -309,11 +311,12 @@ export default function UnifiedWorkspace() {
         left: workspace.layout.margin,
       },
       typography: {
-        fontFamily,
-        titleFontSize: Math.round(workspace.layout.titleFontSize * scheme.typography.titleScale),
-        headingFontSize: Math.round(workspace.layout.headingFontSize * scheme.typography.headingScale),
-        bodyFontSize: Math.round(workspace.layout.bodyFontSize * scheme.typography.bodyScale),
-        focusFontSize: Math.round(workspace.layout.focusFontSize * ((scheme.typography.headingScale + scheme.typography.bodyScale) / 2)),
+        fontFamily: theme.typography.bodyFamily,
+        focusFontFamily: theme.typography.focusFamily,
+        titleFontSize: Math.round(workspace.layout.titleFontSize * theme.typography.titleScale),
+        headingFontSize: Math.round(workspace.layout.headingFontSize * theme.typography.headingScale),
+        bodyFontSize: Math.round(workspace.layout.bodyFontSize * theme.typography.bodyScale),
+        focusFontSize: Math.round(workspace.layout.focusFontSize * ((theme.typography.headingScale + theme.typography.bodyScale) / 2)),
         lineSpacing: Math.min(1.8, Math.max(1.1, workspace.layout.lineSpacing * lineHeightScale)),
         paragraphSpacing: Math.round(workspace.layout.paragraphSpacing * densityScale),
         titleSpacing: Math.round(workspace.layout.titleSpacing * densityScale),
@@ -823,7 +826,7 @@ export default function UnifiedWorkspace() {
     replaceWorkspace(next);
     setAiRunState("idle");
     setAiStatusMessage(undefined);
-    setStatusMessage(`源文分析完成，推荐“${DESIGN_SCHEMES[next.designPlan.recommendedScheme].name}”；平台稿尚未覆盖`);
+    setStatusMessage(`源文分析完成，推荐“${getVisualTheme(next.designPlan.recommendedThemeId ?? DESIGN_SCHEMES[next.designPlan.recommendedScheme].themeId).name}”；平台稿尚未覆盖`);
   }
 
   async function confirmEditedRegeneration(platforms: PlatformId[]) {
@@ -945,7 +948,7 @@ export default function UnifiedWorkspace() {
   }
 
   async function exportCardPng(page: CardLayoutPage) {
-    const blob = await renderCardPagePngBlob(page, createImageUrlByBlock(activeDraft.content, assets), { preset: cardPresetForScheme(activeDraft.schemeId) });
+    const blob = await renderCardPagePngBlob(page, createImageUrlByBlock(activeDraft.content, assets), { preset: cardPresetForScheme(activeDraft.schemeId, activeDraft.layoutId) });
     if (blob) downloadBlob(blob, createCardPngFilename(activeDraft.title, activePlatform, page.pageNumber));
   }
 
@@ -959,8 +962,8 @@ export default function UnifiedWorkspace() {
       }
       const result =
         activePlatform === "xiaohongshu"
-          ? await exportXiaohongshuPackage({ content: activeDraft.content, pages: cardLayout.pages, images: imageSources, preset: cardPresetForScheme(activeDraft.schemeId) })
-          : await exportDouyinImagePackage({ content: activeDraft.content, ratio: activeDraft.ratio, pages: cardLayout.pages, images: imageSources, preset: cardPresetForScheme(activeDraft.schemeId) });
+          ? await exportXiaohongshuPackage({ content: activeDraft.content, pages: cardLayout.pages, images: imageSources, preset: cardPresetForScheme(activeDraft.schemeId, activeDraft.layoutId) })
+          : await exportDouyinImagePackage({ content: activeDraft.content, ratio: activeDraft.ratio, pages: cardLayout.pages, images: imageSources, preset: cardPresetForScheme(activeDraft.schemeId, activeDraft.layoutId) });
       downloadBlob(result.zipBlob, `${activeDraft.title || "cards"}-${activePlatform}.zip`);
       setStatusMessage(`${WORKSPACE_PLATFORM_LABELS[activePlatform]}整包已导出，包含 ${result.images.length} 张 PNG 和文案清单`);
     } catch (error) {
@@ -969,7 +972,7 @@ export default function UnifiedWorkspace() {
   }
 
   async function copyCardPng(page: CardLayoutPage) {
-    const blob = await renderCardPagePngBlob(page, createImageUrlByBlock(activeDraft.content, assets), { preset: cardPresetForScheme(activeDraft.schemeId) });
+    const blob = await renderCardPagePngBlob(page, createImageUrlByBlock(activeDraft.content, assets), { preset: cardPresetForScheme(activeDraft.schemeId, activeDraft.layoutId) });
     if (!blob) return;
     try {
       await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
@@ -1023,14 +1026,16 @@ export default function UnifiedWorkspace() {
     const current = workspaceRef.current;
     const currentDraft = current.platforms[activePlatform];
     const scheme = DESIGN_SCHEMES[schemeId];
+    const selectedLayoutId = currentDraft.layoutId ?? current.designPlan.contentLayoutId ?? scheme.contentLayoutId;
     const structuralPlan = analyzeArticleDesign(sourceArticle, {
       generationMode: current.designPlan.generationMode,
-      recommendedScheme: schemeId,
+      recommendedThemeId: scheme.themeId,
+      recommendedLayoutId: selectedLayoutId,
     });
     const replacement = mode === "visual"
       ? applyDesignSchemeToDraft(currentDraft, schemeId)
       : regeneratePlatformDraft(
-          { ...currentDraft, schemeId, templateKey: scheme.templateKey },
+          { ...currentDraft, schemeId, themeId: scheme.themeId, layoutId: selectedLayoutId, templateKey: scheme.templateKey },
           sourceArticle,
           { ...current.ai, mode: "deterministic" },
           structuralPlan,
@@ -1052,9 +1057,11 @@ export default function UnifiedWorkspace() {
   function changeGenerationMode(generationMode: GenerationMode) {
     if (generationMode === workspaceRef.current.designPlan.generationMode) return;
     const current = workspaceRef.current;
+    const currentDraft = current.platforms[activePlatform];
     const designPlan = analyzeArticleDesign(sourceArticle, {
       generationMode,
-      recommendedScheme: current.designPlan.recommendedScheme,
+      recommendedThemeId: currentDraft.themeId ?? current.designPlan.recommendedThemeId,
+      recommendedLayoutId: currentDraft.layoutId ?? current.designPlan.contentLayoutId,
     });
     updateWorkspace({ designPlan, sourceRevision: designPlan.sourceRevision });
     setStatusMessage(generationMode === "layoutOnly"
@@ -1475,7 +1482,7 @@ function PreviewPanel(props: {
               <span className="rounded-full bg-[#edf2ef] px-2 py-0.5 text-[10px] text-[#4c6659]">{draftStatusLabel(props.draft, props.currentSourceRevision)}</span>
             </div>
             <button type="button" className="mt-1 block max-w-full text-left text-xs leading-5 text-muted-foreground hover:text-[#17633d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#17633d]" onClick={props.onOpenStyles}>
-              推荐：{DESIGN_SCHEMES[props.plan.recommendedScheme].name}。{props.plan.recommendationReason}
+              推荐：{getVisualTheme(props.plan.recommendedThemeId ?? DESIGN_SCHEMES[props.plan.recommendedScheme].themeId).name}。{props.plan.recommendationReason}
             </button>
           </div>
           <Button type="button" size="sm" variant="outline" className="h-8 shrink-0" onClick={props.onOpenStyles}>
@@ -1535,14 +1542,14 @@ function PreviewPanel(props: {
         {props.activePlatform === "wechat" ? (
           <WechatPreview html={props.wechatHtml} onBlur={props.onWechatPreviewBlur} onCopy={props.onCopyWechat} onExport={props.onExportWechat} />
         ) : props.activePlatform === "douyinLongform" ? (
-          <LongformPreview draft={props.draft} />
+          <LongformPreview draft={props.draft} imageUrlByBlock={props.imageUrlByBlock} />
         ) : (
           <CardPreview
             key={props.activePlatform}
             activePlatform={props.activePlatform}
             layout={props.cardLayout}
             imageUrlByBlock={props.imageUrlByBlock}
-            preset={cardPresetForScheme(props.draft.schemeId)}
+            preset={cardPresetForScheme(props.draft.schemeId, props.draft.layoutId)}
             onTogglePageLock={props.onTogglePageLock}
             onSplitPage={props.onSplitPage}
             onMergePage={props.onMergePage}
@@ -1582,23 +1589,49 @@ function WechatPreview(props: { html: string; onBlur: (html: string) => void; on
   );
 }
 
-function LongformPreview({ draft }: { draft: PlatformDraft }) {
+function LongformPreview({ draft, imageUrlByBlock }: { draft: PlatformDraft; imageUrlByBlock: Record<string, string> }) {
+  const scheme = DESIGN_SCHEMES[draft.schemeId];
+  const theme = getVisualTheme(draft.themeId ?? scheme.themeId);
+  const border = `${theme.colors.secondary}99`;
+
   return (
-    <div data-longform-preview className="mx-auto max-w-[390px] rounded-md border bg-white p-5 shadow-sm">
-      <h1 className="text-xl font-semibold leading-snug">{draft.title}</h1>
-      {draft.meta.intro && <p className="mt-4 border-l-4 border-[#20201d] pl-3 text-sm leading-7">{draft.meta.intro}</p>}
-      <div className="mt-5 whitespace-pre-wrap text-sm leading-7">{draft.meta.body}</div>
-      {!!draft.meta.highlights?.length && (
-        <div className="mt-5 rounded-md bg-[#f3f1eb] p-3">
-          {draft.meta.highlights.map((item) => (
-            <div key={item} className="mb-2 text-sm font-medium last:mb-0">
-              {item}
-            </div>
-          ))}
-        </div>
-      )}
-      {draft.meta.ending && <p className="mt-5 text-sm font-semibold leading-7">{draft.meta.ending}</p>}
-    </div>
+    <article
+      data-longform-preview
+      className="mx-auto max-w-[390px] border p-5 shadow-sm"
+      style={{
+        background: theme.colors.surface,
+        borderColor: border,
+        color: theme.colors.text,
+        fontFamily: theme.typography.bodyFamily,
+      }}
+    >
+      {draft.content.blocks.map((block) => {
+        if (block.type === "divider" || block.type === "pageBreak" || !block.text?.trim()) return null;
+        const text = block.type === "list" ? block.items.join("\n") : block.text;
+        if (block.type === "title") {
+          return <h1 key={block.id} className="border-b pb-4 text-2xl font-bold leading-tight" style={{ borderColor: theme.colors.secondary, color: theme.colors.primary, fontFamily: theme.typography.titleFamily }}>{text}</h1>;
+        }
+        if (block.type === "section" || block.type === "subsection") {
+          return <h2 key={block.id} className="mt-7 border-t pt-3 text-lg font-bold leading-snug" style={{ borderColor: theme.colors.secondary, color: theme.colors.primary, fontFamily: theme.typography.titleFamily }}>{text}</h2>;
+        }
+        if (block.type === "quote" || block.type === "golden") {
+          return <blockquote key={block.id} className="my-5 border-l-4 px-4 py-3 text-sm font-semibold leading-7" style={{ borderColor: theme.colors.primary, background: theme.colors.highlight, fontFamily: theme.typography.focusFamily }}>{text}</blockquote>;
+        }
+        if (block.type === "summary" || block.type === "cta") {
+          return <p key={block.id} className="my-5 border px-4 py-3 text-sm font-semibold leading-7" style={{ borderColor: theme.colors.secondary, background: theme.colors.highlight }}>{text}</p>;
+        }
+        if (block.type === "image") {
+          const imageUrl = imageUrlByBlock[block.id];
+          // Assets stay local to the preview and are copied/exported separately.
+          // eslint-disable-next-line @next/next/no-img-element
+          return imageUrl ? <img key={block.id} src={imageUrl} alt="" className="my-5 w-full object-cover" /> : null;
+        }
+        if (block.type === "list") {
+          return <p key={block.id} className="my-4 whitespace-pre-line border-l-2 pl-4 text-sm leading-7" style={{ borderColor: theme.colors.secondary }}>{text}</p>;
+        }
+        return <p key={block.id} className="my-4 whitespace-pre-line text-sm leading-7" style={{ lineHeight: theme.typography.lineHeight }}>{text}</p>;
+      })}
+    </article>
   );
 }
 
@@ -1747,7 +1780,7 @@ function CardPreview(props: {
                       ? props.preset.variant === "story" ? "transparent" : props.preset.variant === "data" ? props.preset.surface : props.preset.highlight
                       : undefined,
                     ...cardNodeBorderStyle(node.kind, props.preset),
-                    borderRadius: node.kind === "focus" && props.preset.variant !== "story" ? (props.preset.variant === "editorial" ? 4 : 12) : undefined,
+                    borderRadius: node.kind === "focus" && props.preset.variant !== "story" ? (props.preset.radius ?? (props.preset.variant === "editorial" ? 4 : 12)) : undefined,
                     padding: node.kind === "heading" && (props.preset.variant === "editorial" || props.preset.variant === "data") ? "0 0 0 18px" : undefined,
                   }}
               >

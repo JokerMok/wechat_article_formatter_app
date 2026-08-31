@@ -1,5 +1,13 @@
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../content";
-import { getDesignScheme, type DesignSchemeId } from "../design-schemes";
+import {
+  getContentLayout,
+  getDesignScheme,
+  getVisualTheme,
+  schemeIdForVisualThemeAndLayout,
+  type ContentLayoutId,
+  type DesignSchemeId,
+  type VisualThemeId,
+} from "../design-schemes";
 import { collectTags, renderBlockText, stableChecksum } from "../platforms/platform-profiles";
 import type { PlatformId } from "../platforms/types";
 import { cleanPublishingText, isGenericStructureHeading, isWeakPublishingText, publicationBlocks } from "./content-filter";
@@ -23,22 +31,33 @@ const CONTENT_RULES: ContentRule[] = [
   { id: "knowledgeTutorial", pattern: /教程|入门|指南|怎么做|如何|操作|配置|使用方法|实操|流程/, weight: 3 },
   { id: "checklistGuide", pattern: /清单|攻略|避坑|检查项|注意事项|步骤|工具推荐|要点/, weight: 4 },
   { id: "opinionAnalysis", pattern: /我认为|真正关键|本质|不是.+而是|观点|判断|为什么|反常识|核心问题/, weight: 3 },
-  { id: "dataInsight", pattern: /数据|报告|趋势|增长|下降|同比|环比|调查|比例|统计|样本|\d+(?:\.\d+)?\s*(?:%|％|倍|万|亿|元|人|次|个|项|条|类|月|年|天)/, weight: 4 },
-  { id: "caseReview", pattern: /案例|复盘|项目|客户|交付|实施|问题|解决方案|结果|验收/, weight: 3 },
-  { id: "storyNarrative", pattern: /那天|后来|第一次|当时|直到|没想到|故事|经历|转折|最后/, weight: 3 },
-  { id: "productIntroduction", pattern: /产品|功能|能力|适用场景|选型|配置建议|版本|服务/, weight: 3 },
+  { id: "dataInsight", pattern: /数据显示|数据表明|数据分析|数据解读|数据复盘|报告|趋势|增长|下降|同比|环比|调查|比例|统计|样本|\d+(?:\.\d+)?\s*(?:%|％|倍|万|亿|元|人|次|个|项|条|类|月|年|天)/, weight: 4 },
+  { id: "caseReview", pattern: /案例|复盘|项目复盘|业务复盘|客户交付|交付|实施|上线|解决方案|验收/, weight: 4 },
+  { id: "storyNarrative", pattern: /那天|后来|第一次|当时|直到|没想到|故事|经历|转折|回头看|这几个月/, weight: 3 },
+  { id: "productIntroduction", pattern: /产品说明|产品介绍|产品功能|产品能力|适用场景|选型|配置建议|服务方案|版本说明/, weight: 3 },
   { id: "experienceSharing", pattern: /体验|体会|感受|分享|踩坑|我用|这几个月|建议|心得/, weight: 3 },
 ];
 
-const CONTENT_TYPE_SCHEME: Record<ContentType, DesignSchemeId> = {
-  knowledgeTutorial: "knowledgeMinimal",
-  checklistGuide: "checklistGuide",
-  opinionAnalysis: "knowledgeMinimal",
-  dataInsight: "dataInsight",
-  caseReview: "storyNarrative",
-  storyNarrative: "storyNarrative",
-  productIntroduction: "knowledgeMinimal",
-  experienceSharing: "storyNarrative",
+const CONTENT_TYPE_THEME: Record<ContentType, VisualThemeId> = {
+  knowledgeTutorial: "informationCard",
+  checklistGuide: "informationCard",
+  opinionAnalysis: "editorial",
+  dataInsight: "editorial",
+  caseReview: "storyMagazine",
+  storyNarrative: "storyMagazine",
+  productIntroduction: "editorial",
+  experienceSharing: "storyMagazine",
+};
+
+const CONTENT_TYPE_LAYOUT: Record<ContentType, ContentLayoutId> = {
+  knowledgeTutorial: "checklist",
+  checklistGuide: "checklist",
+  opinionAnalysis: "editorial",
+  dataInsight: "data",
+  caseReview: "story",
+  storyNarrative: "story",
+  productIntroduction: "editorial",
+  experienceSharing: "story",
 };
 
 export const CONTENT_TYPE_LABELS: Record<ContentType, string> = {
@@ -55,6 +74,8 @@ export const CONTENT_TYPE_LABELS: Record<ContentType, string> = {
 export type AnalyzeArticleDesignOptions = {
   generationMode?: GenerationMode;
   recommendedScheme?: DesignSchemeId;
+  recommendedThemeId?: VisualThemeId;
+  recommendedLayoutId?: ContentLayoutId;
 };
 
 export function analyzeArticleDesign(content: UnifiedArticleContent, options: AnalyzeArticleDesignOptions = {}): DesignPlan {
@@ -62,8 +83,15 @@ export function analyzeArticleDesign(content: UnifiedArticleContent, options: An
   const publishableContent = { ...content, blocks: publicationBlocks(content) };
   const contentType = detectContentType(content);
   const generationMode = options.generationMode ?? "layoutOnly";
-  const recommendedScheme = options.recommendedScheme ?? CONTENT_TYPE_SCHEME[contentType];
+  const legacyScheme = options.recommendedScheme ? getDesignScheme(options.recommendedScheme) : undefined;
+  const themeId = options.recommendedThemeId ?? legacyScheme?.themeId ?? CONTENT_TYPE_THEME[contentType];
+  const contentLayoutId = options.recommendedLayoutId ?? legacyScheme?.contentLayoutId ?? CONTENT_TYPE_LAYOUT[contentType];
+  const recommendedScheme = options.recommendedScheme && !options.recommendedThemeId && !options.recommendedLayoutId
+    ? options.recommendedScheme
+    : schemeIdForVisualThemeAndLayout(themeId, contentLayoutId);
   const scheme = getDesignScheme(recommendedScheme);
+  const theme = getVisualTheme(themeId);
+  const contentLayout = getContentLayout(contentLayoutId);
   const title = cleanTitle(content.title || firstMeaningfulText(publishableContent, ["title", "section", "paragraph"]) || "未命名文章", 72);
   const coreMessage = cleanLine(firstMeaningfulText(publishableContent, ["summary", "golden", "quote", "lead", "paragraph"]) || title, 280);
   const keyPoints = collectKeyPoints(publishableContent, coreMessage);
@@ -96,7 +124,7 @@ export function analyzeArticleDesign(content: UnifiedArticleContent, options: An
     ...(callToAction ? { callToAction } : {}),
     modificationSummary,
   };
-  const platformPlans = buildPlatformDesignPlans(content, blueprint, scheme);
+  const platformPlans = buildPlatformDesignPlans(content, blueprint, scheme, { themeId, contentLayoutId });
 
   return {
     schemaVersion: 1,
@@ -108,9 +136,12 @@ export function analyzeArticleDesign(content: UnifiedArticleContent, options: An
     tone,
     recommendedPlatforms: recommendPlatforms(contentType),
     recommendedScheme,
-    visualStyle: scheme.name,
-    palette: { ...scheme.palette },
-    typography: { ...scheme.typography },
+    recommendedThemeId: themeId,
+    contentLayoutId,
+    contentLayout,
+    visualStyle: theme.name,
+    palette: { primary: theme.colors.primary, secondary: theme.colors.secondary, background: theme.colors.background, text: theme.colors.text },
+    typography: { ...scheme.typography, titleFamily: theme.typography.titleFamily, bodyFamily: theme.typography.bodyFamily, focusFamily: theme.typography.focusFamily },
     density: scheme.density,
     coverStrategy: coverStrategyFor(contentType),
     blockOrder: publishableContent.blocks.map(toPlanBlock),
@@ -120,7 +151,7 @@ export function analyzeArticleDesign(content: UnifiedArticleContent, options: An
       douyinImageTargetPages: clamp(3 + Math.min(keyPoints.length, 4) + (textLength > 2200 ? 1 : 0), 4, 8),
     },
     callToAction,
-    recommendationReason: recommendationReasonFor(contentType, scheme.name),
+    recommendationReason: recommendationReasonFor(contentType, theme.name, contentLayout.name),
     titleCandidates,
     recommendedTitle,
     openingHook,
@@ -191,7 +222,7 @@ function sectionPurpose(contentType: ContentType, index: number): ContentSection
 export function detectContentType(content: UnifiedArticleContent): ContentType {
   const analysisText = publicationBlocks(content).map((block) => renderBlockText(block) ?? "").join("\n");
   const scores = new Map<ContentType, number>([
-    ["knowledgeTutorial", content.parseMode === "knowledge" ? 2 : 0],
+    ["knowledgeTutorial", 0],
     ["checklistGuide", content.blocks.some((block) => block.type === "list") ? 5 : 0],
     ["opinionAnalysis", 2],
     ["dataInsight", 0],
@@ -207,7 +238,20 @@ export function detectContentType(content: UnifiedArticleContent): ContentType {
     scores.set(rule.id, (scores.get(rule.id) ?? 0) + Math.min(matches?.length ?? 0, 6) * rule.weight);
   }
 
+  // Generic words such as "项目" or "最后" are common in explanatory prose.
+  // Case and story layouts need multiple narrative signals before they can win.
+  const dataSignalCount = countMatches(analysisText, /数据显示|数据表明|数据分析|数据解读|数据复盘|报告|趋势|增长|下降|同比|环比|调查|比例|统计|样本|\d+(?:\.\d+)?\s*(?:%|％|倍|万|亿|元|人|次|个|项|条|类|月|年|天)/g);
+  const caseSignalCount = countMatches(analysisText, /案例|复盘|项目复盘|业务复盘|客户交付|交付|实施|上线|解决方案|验收/g);
+  const storySignalCount = countMatches(analysisText, /那天|后来|第一次|当时|直到|没想到|故事|经历|转折|回头看|这几个月/g);
+  if (content.parseMode !== "business" && caseSignalCount < 2) scores.set("caseReview", 0);
+  if (content.parseMode !== "narrative" && storySignalCount < 2) scores.set("storyNarrative", 0);
+  if (dataSignalCount < 2) scores.set("dataInsight", 0);
+
   return [...scores.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ?? "opinionAnalysis";
+}
+
+function countMatches(text: string, pattern: RegExp) {
+  return text.match(pattern)?.length ?? 0;
 }
 
 function detectTone(content: UnifiedArticleContent, contentType: ContentType): ContentTone {
@@ -318,7 +362,7 @@ function coverStrategyFor(contentType: ContentType) {
   return strategies[contentType];
 }
 
-function recommendationReasonFor(contentType: ContentType, schemeName: string) {
+function recommendationReasonFor(contentType: ContentType, themeName: string, layoutName: string) {
   const reasons: Record<ContentType, string> = {
     knowledgeTutorial: "文章以方法和解释为主，需要清晰章节和足够正文阅读空间。",
     checklistGuide: "文章包含步骤或检查点，大数字清单更便于快速扫读和执行。",
@@ -329,7 +373,7 @@ function recommendationReasonFor(contentType: ContentType, schemeName: string) {
     productIntroduction: "文章需要同时交代能力与边界，克制的编辑结构更可信。",
     experienceSharing: "文章以个人体会和选择建议为主，舒展的故事节奏更自然。",
   };
-  return `推荐“${schemeName}”：${reasons[contentType]}`;
+  return `推荐“${themeName}”和“${layoutName}”骨架：${reasons[contentType]}`;
 }
 
 function defaultCallToAction(contentType: ContentType) {

@@ -22,8 +22,15 @@ export function buildPlatformArticle(source: UnifiedArticleContent, platform: Pl
 
 function resolvePlatformPlan(source: UnifiedArticleContent, platform: PlatformId, plan: DesignPlan): PlatformDesignPlan {
   const existing = plan.platformPlans[platform];
-  if (existing?.visualPresetId === plan.recommendedScheme && existing.title) return existing;
-  return buildPlatformDesignPlans(source, plan.blueprint, getDesignScheme(plan.recommendedScheme))[platform];
+  const themeId = plan.recommendedThemeId ?? getDesignScheme(plan.recommendedScheme).themeId;
+  const layoutId = plan.contentLayoutId ?? getDesignScheme(plan.recommendedScheme).contentLayoutId;
+  if (
+    existing?.visualPresetId === plan.recommendedScheme
+    && existing?.themeId === themeId
+    && existing?.layoutId === layoutId
+    && existing.title
+  ) return existing;
+  return buildPlatformDesignPlans(source, plan.blueprint, getDesignScheme(plan.recommendedScheme), { themeId, contentLayoutId: layoutId })[platform];
 }
 
 function renderCardPages(
@@ -81,15 +88,14 @@ function blockTypeForRole(
   if (block.role === "subtitle") return "lead";
   if (block.role === "heading") return "section";
   if (block.role === "focus") {
-    if (page.kind === "action") return "cta";
-    if (page.kind === "summary" || page.kind === "ending" || page.kind === "boundary") return "summary";
+    if (page.kind === "action" || page.kind === "callToAction") return "cta";
+    if (page.kind === "summary" || page.kind === "ending" || page.kind === "boundary" || page.kind === "conclusion" || page.kind === "epilogue") return "summary";
     return "golden";
   }
   if (block.role === "body") {
-    if ((page.kind === "keyMetric" || page.kind === "turning") && blockIndex === 0) return "golden";
+    if ((page.kind === "keyMetric" || page.kind === "turning" || page.kind === "transition") && blockIndex === 0) return "golden";
     if (page.kind === "conflict" && blockIndex === 0) return "quote";
-    if (page.kind === "objective" && blockIndex === 0) return "lead";
-    if ((page.kind === "summary" || page.kind === "ending") && blockIndex === page.blocks.length - 1) return "summary";
+    if ((page.kind === "summary" || page.kind === "ending" || page.kind === "conclusion" || page.kind === "epilogue") && blockIndex === page.blocks.length - 1) return "summary";
   }
   return "paragraph";
 }

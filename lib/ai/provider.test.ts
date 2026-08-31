@@ -714,10 +714,10 @@ describe("OpenAICompatibleProvider", () => {
     expect(result.designPlan).toMatchObject({
       contentType: "checklistGuide",
       recommendedScheme: "checklistGuide",
-      visualStyle: "行动清单",
+      visualStyle: "B 高能信息卡",
       recommendedTitle: "企业知识库整理清单",
     });
-    expect(result.designPlan.palette.primary).toBe("#A33A35");
+    expect(result.designPlan.palette.primary).toBe("#111111");
   });
 
   it("falls back to the local design plan when AI design fields are illegal", async () => {

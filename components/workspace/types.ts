@@ -1,7 +1,7 @@
 import type { TemplateKey } from "@/lib/article-types";
 import type { UnifiedArticleContent } from "@/lib/content";
 import type { DesignPlan } from "@/lib/design-plan";
-import type { DesignSchemeId } from "@/lib/design-schemes";
+import type { ContentLayoutId, DesignSchemeId, VisualThemeId } from "@/lib/design-schemes";
 import type { PlatformId, PlatformVersionStatus } from "@/lib/platforms/types";
 import type { CardAspectRatio, CardLayoutPage } from "@/lib/renderers/cards";
 import type { ProjectAssetReference } from "@/lib/storage";
@@ -49,6 +49,8 @@ export type PlatformDraft = {
   status: PlatformVersionStatus;
   sourceRevision: string;
   schemeId: DesignSchemeId;
+  themeId?: VisualThemeId;
+  layoutId?: ContentLayoutId;
   title: string;
   content: UnifiedArticleContent;
   templateKey: TemplateKey;

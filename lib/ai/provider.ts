@@ -12,7 +12,18 @@ import {
   type DesignPlan,
   type GenerationMode,
 } from "../design-plan";
-import { DESIGN_SCHEME_IDS, getDesignScheme, type DesignSchemeId } from "../design-schemes";
+import {
+  CONTENT_LAYOUT_IDS,
+  DESIGN_SCHEME_IDS,
+  getContentLayout,
+  getDesignScheme,
+  getVisualTheme,
+  schemeIdForVisualThemeAndLayout,
+  VISUAL_THEME_IDS,
+  type ContentLayoutId,
+  type DesignSchemeId,
+  type VisualThemeId,
+} from "../design-schemes";
 import type { PlatformId, PlatformVersion, PlatformVersionMap } from "../platforms/types";
 
 export const aiPlatformIds = ["wechat", "xiaohongshu", "douyinImage", "douyinLongform"] as const;
@@ -312,7 +323,7 @@ export class OpenAICompatibleProvider {
         {
           role: "system",
           content:
-            `Return only JSON with schemaVersion:1, designPlan, and drafts[]. designPlan may contain only contentType, targetAudience, coreMessage, recommendedTitle, titleCandidates, openingHook, keyPoints, conclusion, callToAction, recommendedScheme, recommendationReason, and modificationSummary. contentType must be one of ${CONTENT_TYPE_IDS.join(",")}; recommendedScheme must be one of ${DESIGN_SCHEME_IDS.join(",")}. Each draft must include platform, title, summary, highlights, tags, optional cover, and content. content must be plain article text or Markdown, never nested JSON, HTML, CSS, or script. ${generationInstruction(generationMode)} ${platformGenerationInstruction(platforms, source.sourceText.length)} Preserve source facts and important limitations; do not invent data, cases, people, policies, quotes, or outcomes.`,
+            `Return only JSON with schemaVersion:1, designPlan, and drafts[]. designPlan may contain only contentType, targetAudience, coreMessage, recommendedTitle, titleCandidates, openingHook, keyPoints, conclusion, callToAction, recommendedScheme, recommendedThemeId, contentLayoutId, recommendationReason, and modificationSummary. contentType must be one of ${CONTENT_TYPE_IDS.join(",")}; recommendedScheme must be one of ${DESIGN_SCHEME_IDS.join(",")}; recommendedThemeId, when provided, must be one of ${VISUAL_THEME_IDS.join(",")}; contentLayoutId, when provided, must be one of ${CONTENT_LAYOUT_IDS.join(",")}. Each draft must include platform, title, summary, highlights, tags, optional cover, and content. content must be plain article text or Markdown, never nested JSON, HTML, CSS, or script. ${generationInstruction(generationMode)} ${platformGenerationInstruction(platforms, source.sourceText.length)} Preserve source facts and important limitations; do not invent data, cases, people, policies, quotes, or outcomes.`,
         },
         {
           role: "user",
@@ -767,8 +778,16 @@ function sanitizeGeneratedDesignPlan(value: unknown, source: UnifiedArticleConte
 
   const fallback = analyzeArticleDesign(source, { generationMode });
   const contentType = isContentType(value.contentType) ? value.contentType : fallback.contentType;
-  const recommendedScheme = isDesignScheme(value.recommendedScheme) ? value.recommendedScheme : fallback.recommendedScheme;
+  const requestedScheme = isDesignScheme(value.recommendedScheme) ? value.recommendedScheme : fallback.recommendedScheme;
+  const requestedSchemeConfig = getDesignScheme(requestedScheme);
+  const themeId = isVisualTheme(value.recommendedThemeId) ? value.recommendedThemeId : requestedSchemeConfig.themeId;
+  const contentLayoutId = isContentLayout(value.contentLayoutId) ? value.contentLayoutId : requestedSchemeConfig.contentLayoutId;
+  const recommendedScheme = value.recommendedThemeId || value.contentLayoutId
+    ? schemeIdForVisualThemeAndLayout(themeId, contentLayoutId)
+    : requestedScheme;
   const scheme = getDesignScheme(recommendedScheme);
+  const theme = getVisualTheme(themeId);
+  const contentLayout = getContentLayout(contentLayoutId);
   const canRewrite = generationMode === "reachOptimized";
   const titleCandidates = canRewrite ? safePlanTextArray(value.titleCandidates, fallback.titleCandidates, 3, 80) : fallback.titleCandidates;
   const keyPoints = canRewrite ? safePlanTextArray(value.keyPoints, fallback.keyPoints, 5, 300) : fallback.keyPoints;
@@ -792,7 +811,7 @@ function sanitizeGeneratedDesignPlan(value: unknown, source: UnifiedArticleConte
     ...(callToAction ? { callToAction } : { callToAction: undefined }),
     modificationSummary,
   };
-  const platformPlans = buildPlatformDesignPlans(source, blueprint, scheme);
+  const platformPlans = buildPlatformDesignPlans(source, blueprint, scheme, { themeId, contentLayoutId });
   const candidate: DesignPlan = {
     ...fallback,
     contentType,
@@ -800,9 +819,12 @@ function sanitizeGeneratedDesignPlan(value: unknown, source: UnifiedArticleConte
     generationMode,
     coreMessage: blueprint.coreMessage,
     recommendedScheme,
-    visualStyle: scheme.name,
-    palette: { ...scheme.palette },
-    typography: { ...scheme.typography },
+    recommendedThemeId: themeId,
+    contentLayoutId,
+    contentLayout,
+    visualStyle: theme.name,
+    palette: { primary: theme.colors.primary, secondary: theme.colors.secondary, background: theme.colors.background, text: theme.colors.text },
+    typography: { ...scheme.typography, titleFamily: theme.typography.titleFamily, bodyFamily: theme.typography.bodyFamily, focusFamily: theme.typography.focusFamily },
     density: scheme.density,
     titleCandidates,
     recommendedTitle,
@@ -845,6 +867,14 @@ function isContentType(value: unknown): value is ContentType {
 
 function isDesignScheme(value: unknown): value is DesignSchemeId {
   return typeof value === "string" && (DESIGN_SCHEME_IDS as readonly string[]).includes(value);
+}
+
+function isVisualTheme(value: unknown): value is VisualThemeId {
+  return typeof value === "string" && (VISUAL_THEME_IDS as readonly string[]).includes(value);
+}
+
+function isContentLayout(value: unknown): value is ContentLayoutId {
+  return typeof value === "string" && (CONTENT_LAYOUT_IDS as readonly string[]).includes(value);
 }
 
 function sanitizeGeneratedDraft(value: unknown, parseMode: UnifiedArticleContent["parseMode"], fallbackTitle?: string): unknown {

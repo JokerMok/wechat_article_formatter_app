@@ -3,7 +3,7 @@ import { parseArticleContent } from "../../lib/article-parser";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../../lib/content";
 import { unifiedArticleContentSchema } from "../../lib/content/schemas";
 import { analyzeArticleDesign, buildPlatformArticle, designPlanSchema, PAGE_PLAN_KINDS, type DesignPlan, type PagePlanKind } from "../../lib/design-plan";
-import { DESIGN_SCHEMES, normalizeDesignSchemeId, type DesignSchemeId } from "../../lib/design-schemes";
+import { DESIGN_SCHEMES, normalizeDesignSchemeId, type ContentLayoutId, type DesignSchemeId, type VisualThemeId } from "../../lib/design-schemes";
 import { toDouyinImageText, toDouyinLongform } from "../../lib/platforms/douyin";
 import type { PlatformId, PlatformVersion, PlatformVersionMap } from "../../lib/platforms/types";
 import { createWechatPlatformVersion } from "../../lib/platforms/wechat";
@@ -90,12 +90,15 @@ export function cloneArticleContent(content: UnifiedArticleContent): UnifiedArti
 export function createPlatformDraft(
   platform: PlatformId,
   article: UnifiedArticleContent,
-  options: Partial<Pick<PlatformDraft, "templateKey" | "ratio" | "lockedPageIds" | "manualPages" | "sourceRevision" | "schemeId">> & { designPlan?: DesignPlan } = {},
+  options: Partial<Pick<PlatformDraft, "templateKey" | "ratio" | "lockedPageIds" | "manualPages" | "sourceRevision" | "schemeId" | "themeId" | "layoutId">> & { designPlan?: DesignPlan } = {},
 ): PlatformDraft {
   const designPlan = options.designPlan ?? analyzeArticleDesign(article);
   const ratio = options.ratio ?? defaultRatioForPlatform(platform);
   const schemeId = options.schemeId ?? designPlan.recommendedScheme;
-  const templateKey = options.templateKey ?? DESIGN_SCHEMES[schemeId].templateKey;
+  const scheme = DESIGN_SCHEMES[schemeId];
+  const themeId = options.themeId ?? designPlan.recommendedThemeId ?? scheme.themeId;
+  const layoutId = options.layoutId ?? designPlan.contentLayoutId ?? scheme.contentLayoutId;
+  const templateKey = options.templateKey ?? scheme.templateKey;
   const content = buildPlatformArticle(article, platform, designPlan);
   const meta = createPlatformMeta(platform, content, ratio);
 
@@ -104,6 +107,8 @@ export function createPlatformDraft(
     status: "generated",
     sourceRevision: options.sourceRevision ?? designPlan.sourceRevision,
     schemeId,
+    themeId,
+    layoutId,
     title: metaTitle(platform, content, meta),
     content,
     templateKey,
@@ -131,6 +136,8 @@ export function createWorkspaceState(sourceMarkdown = DEFAULT_SOURCE_MARKDOWN): 
       sourceRevision: designPlan.sourceRevision,
       schemeId: designPlan.recommendedScheme,
       templateKey: DESIGN_SCHEMES[designPlan.recommendedScheme].templateKey,
+      themeId: designPlan.recommendedThemeId,
+      layoutId: designPlan.contentLayoutId,
       designPlan,
     })])) as Record<
       PlatformId,
@@ -145,12 +152,25 @@ export function regeneratePlatformDraft(
   ai: AiWorkspaceSettings = DEFAULT_AI_SETTINGS,
   designPlan: DesignPlan = analyzeArticleDesign(article),
 ): PlatformDraft {
-  const schemeId = current.status === "edited" ? current.schemeId : designPlan.recommendedScheme;
+  const preservesManualSelection = current.status === "edited";
+  const schemeId = preservesManualSelection ? current.schemeId : designPlan.recommendedScheme;
+  const selectedScheme = DESIGN_SCHEMES[schemeId];
+  const selectedThemeId = preservesManualSelection ? current.themeId ?? selectedScheme.themeId : designPlan.recommendedThemeId ?? selectedScheme.themeId;
+  const selectedLayoutId = preservesManualSelection ? current.layoutId ?? designPlan.contentLayoutId ?? selectedScheme.contentLayoutId : designPlan.contentLayoutId ?? selectedScheme.contentLayoutId;
+  const selectedPlan = preservesManualSelection
+    ? analyzeArticleDesign(article, {
+        generationMode: designPlan.generationMode,
+        recommendedThemeId: selectedThemeId,
+        recommendedLayoutId: selectedLayoutId,
+      })
+    : designPlan;
   const regenerated = createPlatformDraft(current.platform, article, {
-    templateKey: DESIGN_SCHEMES[schemeId].templateKey,
+    templateKey: selectedScheme.templateKey,
     schemeId,
-    sourceRevision: designPlan.sourceRevision,
-    designPlan,
+    themeId: selectedThemeId,
+    layoutId: selectedLayoutId,
+    sourceRevision: selectedPlan.sourceRevision,
+    designPlan: selectedPlan,
     ratio: current.ratio,
     lockedPageIds: current.lockedPageIds,
     manualPages: current.manualPages,
@@ -170,6 +190,8 @@ export function platformDraftFromVersion(current: PlatformDraft, version: Platfo
   const fallback = createPlatformDraft(current.platform, version.content, {
     templateKey: current.templateKey,
     schemeId: current.schemeId,
+    themeId: current.themeId,
+    layoutId: current.layoutId,
     sourceRevision,
     designPlan: analyzeArticleDesign(version.content),
     ratio: current.ratio,
@@ -505,6 +527,8 @@ export function applyDesignSchemeToDraft(draft: PlatformDraft, schemeId: DesignS
   return {
     ...draft,
     schemeId,
+    themeId: scheme.themeId,
+    layoutId: draft.layoutId ?? scheme.contentLayoutId,
     templateKey: scheme.templateKey,
     status: "edited",
     editedWechatHtml: undefined,
@@ -703,6 +727,14 @@ function readLayout(value: unknown, fallback: LayoutSettings): LayoutSettings {
   };
 }
 
+function readVisualThemeId(value: unknown, fallback: VisualThemeId): VisualThemeId {
+  return value === "editorial" || value === "informationCard" || value === "storyMagazine" ? value : fallback;
+}
+
+function readContentLayoutId(value: unknown, fallback: ContentLayoutId): ContentLayoutId {
+  return value === "editorial" || value === "checklist" || value === "data" || value === "story" ? value : fallback;
+}
+
 function readAi(value: unknown, fallback: AiWorkspaceSettings): AiWorkspaceSettings {
   if (!isRecord(value)) return fallback;
   return {
@@ -741,6 +773,8 @@ function readPlatformDraft(value: unknown, platform: PlatformId, fallback: Platf
     status: readPlatformDraftStatus(value.status, fallback.status),
     sourceRevision: typeof value.sourceRevision === "string" ? value.sourceRevision : fallback.sourceRevision,
     schemeId: typeof value.schemeId === "string" ? normalizeDesignSchemeId(value.schemeId) : fallback.schemeId,
+    themeId: readVisualThemeId(value.themeId, DESIGN_SCHEMES[typeof value.schemeId === "string" ? normalizeDesignSchemeId(value.schemeId) : fallback.schemeId].themeId),
+    layoutId: readContentLayoutId(value.layoutId, DESIGN_SCHEMES[typeof value.schemeId === "string" ? normalizeDesignSchemeId(value.schemeId) : fallback.schemeId].contentLayoutId),
     title: typeof value.title === "string" ? value.title : fallback.title,
     content,
     templateKey: typeof value.templateKey === "string" && value.templateKey in styleTemplates ? (value.templateKey as TemplateKey) : fallback.templateKey,

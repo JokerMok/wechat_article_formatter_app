@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Toggle } from "@/components/ui/toggle";
 import { CONTENT_TYPE_LABELS, type DesignPlan } from "@/lib/design-plan";
-import { DESIGN_SCHEMES, getAlternativeSchemes, type DesignScheme, type DesignSchemeId } from "@/lib/design-schemes";
+import { DESIGN_SCHEMES, getVisualTheme, schemeIdForVisualTheme, VISUAL_THEME_LIST, type DesignScheme, type DesignSchemeId } from "@/lib/design-schemes";
 import type { PlatformId } from "@/lib/platforms/types";
 import { cn } from "@/lib/utils";
 import { WORKSPACE_PLATFORM_LABELS } from "./state";
@@ -31,10 +31,9 @@ export function DesignPlanDrawer(props: {
 }) {
   const [pendingScheme, setPendingScheme] = React.useState<DesignSchemeId>();
   const isCardPlatform = props.activePlatform === "xiaohongshu" || props.activePlatform === "douyinImage";
-  const visibleSchemes = [
-    DESIGN_SCHEMES[props.plan.recommendedScheme],
-    ...getAlternativeSchemes(props.plan.recommendedScheme, 3, props.plan.contentType),
-  ];
+  const visibleSchemes = VISUAL_THEME_LIST.map((theme) => DESIGN_SCHEMES[schemeIdForVisualTheme(theme.id)]);
+  const recommendedThemeId = props.plan.recommendedThemeId ?? DESIGN_SCHEMES[props.plan.recommendedScheme].themeId;
+  const activeThemeId = props.draft.themeId ?? DESIGN_SCHEMES[props.draft.schemeId].themeId;
 
   if (!props.open) return null;
 
@@ -46,7 +45,7 @@ export function DesignPlanDrawer(props: {
       <div className="flex h-14 shrink-0 items-center justify-between border-b border-[#dfe5e1] px-4">
         <div>
           <h2 className="text-sm font-semibold text-[#17231f]">排版方案</h2>
-          <p className="text-xs text-muted-foreground">{WORKSPACE_PLATFORM_LABELS[props.activePlatform]} · {DESIGN_SCHEMES[props.draft.schemeId].name}</p>
+          <p className="text-xs text-muted-foreground">{WORKSPACE_PLATFORM_LABELS[props.activePlatform]} · {getVisualTheme(activeThemeId).name}</p>
         </div>
         <Button type="button" size="icon" variant="ghost" onClick={props.onClose} aria-label="关闭排版方案">
           <X className="h-4 w-4" />
@@ -58,9 +57,9 @@ export function DesignPlanDrawer(props: {
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="text-xs font-medium text-[#17633d]">系统推荐 · {CONTENT_TYPE_LABELS[props.plan.contentType]}</div>
-              <h3 className="mt-1 text-base font-semibold">{DESIGN_SCHEMES[props.plan.recommendedScheme].name}</h3>
+              <h3 className="mt-1 text-base font-semibold">{getVisualTheme(recommendedThemeId).name}</h3>
             </div>
-            {props.draft.schemeId === props.plan.recommendedScheme && (
+            {activeThemeId === recommendedThemeId && (
               <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-1 text-[11px] font-medium text-[#17633d]">
                 <Check className="h-3 w-3" /> 当前使用
               </span>
@@ -75,8 +74,8 @@ export function DesignPlanDrawer(props: {
               {props.plan.modificationSummary.map((item) => <li key={item}>· {item}</li>)}
             </ul>
           )}
-          {props.draft.schemeId !== props.plan.recommendedScheme && (
-            <Button type="button" size="sm" variant="outline" className="mt-3" onClick={() => setPendingScheme(props.plan.recommendedScheme)}>
+          {activeThemeId !== recommendedThemeId && (
+            <Button type="button" size="sm" variant="outline" className="mt-3" onClick={() => setPendingScheme(schemeIdForVisualTheme(recommendedThemeId))}>
               <RotateCcw className="h-4 w-4" /> 恢复推荐方案
             </Button>
           )}
@@ -89,10 +88,10 @@ export function DesignPlanDrawer(props: {
               scheme={scheme}
               title={props.plan.recommendedTitle}
               sample={props.plan.keyPoints[0] ?? props.plan.coreMessage}
-              recommendation={scheme.contentTypes.includes(props.plan.contentType)
-                ? "适合当前识别出的内容结构"
-                : `适合${scheme.structure.slice(0, 2).join("、")}型内容`}
-              active={scheme.id === props.draft.schemeId}
+              recommendation={scheme.themeId === recommendedThemeId
+                ? "当前内容的系统推荐主题"
+                : `适合${getVisualTheme(scheme.themeId).description.split("。", 1)[0]}`}
+              active={scheme.themeId === activeThemeId}
               favorite={props.favoriteSchemeIds.includes(scheme.id)}
               recent={props.recentSchemeIds.includes(scheme.id)}
               onApply={() => setPendingScheme(scheme.id)}
@@ -130,19 +129,19 @@ export function DesignPlanDrawer(props: {
           if (event.currentTarget === event.target) setPendingScheme(undefined);
         }}>
           <div className="w-full rounded-md border bg-white p-4 shadow-xl" role="dialog" aria-modal="true" aria-label="应用排版方案">
-            <h3 className="font-semibold">应用“{DESIGN_SCHEMES[pendingScheme].name}”</h3>
+              <h3 className="font-semibold">应用“{getVisualTheme(DESIGN_SCHEMES[pendingScheme].themeId).name}”</h3>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              {props.draft.status === "edited" ? "当前平台已有人工修改。只换视觉不会改文案；优化结构会重排当前平台稿。" : "可只替换视觉，也可以按该方案重新组织当前平台稿。"}
+              {props.draft.status === "edited" ? "当前平台已有人工修改。只换主题不会改文案；重新排版会重组当前平台稿。" : "可只换主题，也可以按当前内容类型重新排版。"}
             </p>
             <div className="mt-4 grid gap-2">
               <Button type="button" onClick={() => {
                 props.onApplyScheme(pendingScheme, "visual");
                 setPendingScheme(undefined);
-              }}>只换视觉</Button>
+              }}>只换主题</Button>
               <Button type="button" variant="outline" onClick={() => {
                 props.onApplyScheme(pendingScheme, "structure");
                 setPendingScheme(undefined);
-              }}>{props.draft.status === "edited" ? "覆盖当前人工稿并优化结构" : "同时优化结构"}</Button>
+              }}>{props.draft.status === "edited" ? "覆盖当前人工稿并重新排版" : "同时重新排版"}</Button>
               <Button type="button" variant="ghost" onClick={() => setPendingScheme(undefined)}>取消</Button>
             </div>
           </div>
@@ -169,7 +168,7 @@ function SchemeCard(props: {
       <div className="min-w-0">
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
-            <h3 className="font-semibold">{props.scheme.name}</h3>
+            <h3 className="font-semibold">{getVisualTheme(props.scheme.themeId).name}</h3>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">{props.scheme.description}</p>
             <p className="mt-1 text-[11px] font-medium text-[#6f4b47]">{props.recommendation}</p>
           </div>

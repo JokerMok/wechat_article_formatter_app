@@ -1,3 +1,32 @@
-export { DESIGN_SCHEMES, DESIGN_SCHEME_LIST, cardPresetForScheme, getAlternativeSchemes, getDesignScheme } from "./catalog";
-export { DESIGN_SCHEME_IDS, LEGACY_DESIGN_SCHEME_IDS, normalizeDesignSchemeId } from "./types";
-export type { DesignDensity, DesignLayoutVariant, DesignScheme, DesignSchemeId, LegacyDesignSchemeId, PlatformDesignRule } from "./types";
+export {
+  CONTENT_LAYOUTS,
+  DESIGN_SCHEMES,
+  DESIGN_SCHEME_LIST,
+  VISUAL_THEMES,
+  VISUAL_THEME_LIST,
+  cardPresetForScheme,
+  getAlternativeSchemes,
+  getContentLayout,
+  getDesignScheme,
+  getVisualTheme,
+  schemeIdForVisualTheme,
+  schemeIdForVisualThemeAndLayout,
+} from "./catalog";
+export { CONTENT_LAYOUT_IDS, DESIGN_SCHEME_IDS, LEGACY_DESIGN_SCHEME_IDS, VISUAL_THEME_IDS, normalizeDesignSchemeId } from "./types";
+export type {
+  BlockVariantTokens,
+  BrandOverride,
+  ContentLayout,
+  ContentLayoutId,
+  DecorationTokens,
+  DesignDensity,
+  DesignLayoutVariant,
+  DesignScheme,
+  DesignSchemeId,
+  LegacyDesignSchemeId,
+  PlatformDesignRule,
+  SpacingTokens,
+  ThemeColors,
+  VisualTheme,
+  VisualThemeId,
+} from "./types";

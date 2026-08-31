@@ -10,6 +10,9 @@ export type CardCanvasPreset = {
   dots: string;
   surface: string;
   muted: string;
+  fontFamily?: string;
+  focusFontFamily?: string;
+  radius?: number;
 };
 
 export type CardImageCanvasContext = {
@@ -53,6 +56,9 @@ const DEFAULT_PRESET: CardCanvasPreset = {
   dots: "#E9E0D7",
   surface: "#FFFFFF",
   muted: "#8C8178",
+  fontFamily: "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif",
+  focusFontFamily: "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif",
+  radius: 8,
 };
 
 export function drawCardImagePage(ctx: CardImageCanvasContext, page: CardLayoutPage, options: DrawCardImagePageOptions = {}) {
@@ -98,7 +104,7 @@ function drawNode(ctx: CardImageCanvasContext, node: CardLayoutNode, preset: Car
       ctx.fillRect(node.x, node.y + node.height + 4, node.width, 2);
     } else {
       ctx.fillStyle = preset.variant === "data" ? preset.surface : preset.highlight;
-      drawRoundRect(ctx, node.x - 24, node.y - 18, node.width + 48, node.height + 8, preset.variant === "editorial" ? 4 : 12);
+      drawRoundRect(ctx, node.x - 24, node.y - 18, node.width + 48, node.height + 8, preset.radius ?? (preset.variant === "editorial" ? 4 : 12));
       ctx.fill();
       if (preset.variant === "checklist") {
         ctx.fillStyle = preset.title;
@@ -150,7 +156,7 @@ function drawPageFrame(ctx: CardImageCanvasContext, page: CardLayoutPage, preset
     ctx.fillStyle = preset.rule;
     ctx.fillRect(page.safeArea.x, page.safeArea.y - 36, page.safeArea.width, 3);
     ctx.fillStyle = preset.muted;
-    ctx.font = "600 22px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+    ctx.font = `600 22px ${preset.fontFamily ?? "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"}`;
     ctx.fillText(`编辑部  /  ${String(page.pageNumber).padStart(2, "0")}`, page.safeArea.x, labelY);
     return;
   }
@@ -159,11 +165,11 @@ function drawPageFrame(ctx: CardImageCanvasContext, page: CardLayoutPage, preset
     ctx.fillStyle = preset.title;
     ctx.fillRect(page.safeArea.x, labelY, 76, 8);
     ctx.fillStyle = preset.rule;
-    ctx.font = "800 86px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+    ctx.font = `800 86px ${preset.fontFamily ?? "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"}`;
     ctx.fillText(String(page.pageNumber).padStart(2, "0"), page.safeArea.x + page.safeArea.width - 104, labelY - 36);
     ctx.fillStyle = preset.muted;
-    ctx.font = "700 20px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
-    ctx.fillText(page.pageKind === "warning" ? "避坑提醒" : page.pageKind === "action" ? "执行清单" : "行动清单", page.safeArea.x, labelY + 20);
+    ctx.font = `700 20px ${preset.fontFamily ?? "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"}`;
+    ctx.fillText(page.pageKind === "warning" ? "避坑提醒" : page.pageKind === "action" || page.pageKind === "callToAction" ? "执行清单" : "行动清单", page.safeArea.x, labelY + 20);
     return;
   }
 
@@ -173,7 +179,7 @@ function drawPageFrame(ctx: CardImageCanvasContext, page: CardLayoutPage, preset
     for (let index = 0; index <= 4; index += 1) ctx.fillRect(page.safeArea.x + column * index, page.safeArea.y - 28, 1, page.safeArea.height + 56);
     ctx.fillStyle = preset.title;
     ctx.fillRect(page.safeArea.x, page.safeArea.y - 36, page.safeArea.width, 4);
-    ctx.font = "700 21px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+    ctx.font = `700 21px ${preset.fontFamily ?? "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"}`;
     ctx.fillText(`数据编辑部  ${String(page.pageNumber).padStart(2, "0")}`, page.safeArea.x, labelY);
     return;
   }
@@ -182,7 +188,7 @@ function drawPageFrame(ctx: CardImageCanvasContext, page: CardLayoutPage, preset
   ctx.fillRect(page.safeArea.x, page.safeArea.y - 34, 72, 3);
   ctx.fillRect(page.safeArea.x, page.safeArea.y - 34, 2, page.safeArea.height + 52);
   ctx.fillStyle = preset.title;
-  ctx.font = "600 22px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+  ctx.font = `600 22px ${preset.fontFamily ?? "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"}`;
   ctx.fillText(`${storyLabel(page.pageKind)}  ${String(page.pageNumber).padStart(2, "0")}`, page.safeArea.x + 20, labelY);
 }
 
@@ -203,21 +209,21 @@ function drawPageKindAccent(ctx: CardImageCanvasContext, page: CardLayoutPage, p
     const metric = page.nodes.map((node) => node.text).join(" ").match(/\d+(?:\.\d+)?\s*(?:%|％|倍|万|亿|元|人|次|个|项|条|类|月|年|天)?/u)?.[0];
     if (!metric) return;
     ctx.fillStyle = `${preset.title}18`;
-    ctx.font = "800 118px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+    ctx.font = `800 118px ${preset.fontFamily ?? "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"}`;
     ctx.textAlign = "right";
     ctx.fillText(metric, page.safeArea.x + page.safeArea.width, page.safeArea.y + 14);
     ctx.textAlign = "left";
     return;
   }
-  if (page.pageKind === "turning") {
+  if (page.pageKind === "turning" || page.pageKind === "transition") {
     ctx.fillStyle = preset.title;
     ctx.fillRect(page.safeArea.x, page.safeArea.y + 46, 72, 7);
     ctx.fillStyle = preset.muted;
-    ctx.font = "600 22px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+    ctx.font = `600 22px ${preset.fontFamily ?? "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"}`;
     ctx.fillText("转折", page.safeArea.x + 90, page.safeArea.y + 34);
     return;
   }
-  if (page.pageKind === "ending" || page.pageKind === "summary") {
+  if (page.pageKind === "ending" || page.pageKind === "summary" || page.pageKind === "conclusion" || page.pageKind === "epilogue") {
     ctx.fillStyle = preset.rule;
     const width = Math.min(180, page.safeArea.width * 0.24);
     ctx.fillRect(page.canvas.width / 2 - width / 2, page.safeArea.y + page.safeArea.height - 16, width, 3);
@@ -226,9 +232,9 @@ function drawPageKindAccent(ctx: CardImageCanvasContext, page: CardLayoutPage, p
 
 function storyLabel(kind: CardLayoutPage["pageKind"]) {
   if (kind === "conflict") return "冲突";
-  if (kind === "turning") return "转折";
-  if (kind === "ending") return "尾声";
-  if (kind === "opening") return "开场";
+  if (kind === "turning" || kind === "transition") return "转折";
+  if (kind === "ending" || kind === "epilogue") return "尾声";
+  if (kind === "opening" || kind === "intro") return "开场";
   return "章节";
 }
 

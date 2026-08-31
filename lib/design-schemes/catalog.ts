@@ -1,8 +1,136 @@
 import type { PlatformId } from "../platforms/types";
-import type { DesignScheme, DesignSchemeId } from "./types";
+import type {
+  ContentLayout,
+  ContentLayoutId,
+  DesignScheme,
+  DesignSchemeId,
+  VisualTheme,
+  VisualThemeId,
+} from "./types";
 
 const ALL_PLATFORMS: PlatformId[] = ["wechat", "xiaohongshu", "douyinImage", "douyinLongform"];
-const EDITORIAL_PALETTE = { primary: "#A33A35", secondary: "#D8CCC4", background: "#FCFBF8", text: "#211F1D" } as const;
+
+const SYSTEM_FONT = "-apple-system, BlinkMacSystemFont, Helvetica Neue, PingFang SC, Hiragino Sans GB, Microsoft YaHei, Arial, sans-serif";
+const SERIF_FONT = "STSong, Songti SC, SimSun, serif";
+
+export const VISUAL_THEMES: Record<VisualThemeId, VisualTheme> = {
+  editorial: {
+    id: "editorial",
+    name: "A 编辑部简约",
+    description: "适合知识、观点和行业分析。用编辑网格、发丝线和留白承载完整论证。",
+    colors: {
+      primary: "#8E302B",
+      secondary: "#C9BBB0",
+      accent: "#A33A35",
+      background: "#FBF9F5",
+      surface: "#FFFDF9",
+      text: "#20201E",
+      muted: "#6B6660",
+      highlight: "#F0E8E0",
+    },
+    typography: { titleFamily: SYSTEM_FONT, bodyFamily: SYSTEM_FONT, focusFamily: SERIF_FONT, titleScale: 1.06, headingScale: 1, bodyScale: 1, lineHeight: 1.78 },
+    spacing: { pageMargin: 84, titleGap: 54, sectionGap: 42, paragraphGap: 34 },
+    decoration: { radius: 4, borderWidth: 1, shadow: "none", ruleStyle: "hairline" },
+    blockVariants: { title: "editorial", heading: "numbered", focus: "underline", quote: "rail" },
+  },
+  informationCard: {
+    id: "informationCard",
+    name: "B 高能信息卡",
+    description: "适合教程、清单、工具推荐和避坑。用大数字、单结论和信号黄建立扫读节奏。",
+    colors: {
+      primary: "#111111",
+      secondary: "#F4C542",
+      accent: "#F4C542",
+      background: "#F8F8F4",
+      surface: "#FFFFFF",
+      text: "#171717",
+      muted: "#5D5D58",
+      highlight: "#FFF2B8",
+    },
+    typography: { titleFamily: SYSTEM_FONT, bodyFamily: SYSTEM_FONT, focusFamily: SYSTEM_FONT, titleScale: 1.08, headingScale: 1.04, bodyScale: 0.96, lineHeight: 1.64 },
+    spacing: { pageMargin: 76, titleGap: 42, sectionGap: 30, paragraphGap: 26 },
+    decoration: { radius: 6, borderWidth: 2, shadow: "0 8px 0 rgba(17,17,17,0.06)", ruleStyle: "block" },
+    blockVariants: { title: "stacked", heading: "bar", focus: "card", quote: "signal" },
+  },
+  storyMagazine: {
+    id: "storyMagazine",
+    name: "C 故事杂志",
+    description: "适合案例、个人经历和品牌故事。用章节、转折、对照和尾声形成舒展叙事。",
+    colors: {
+      primary: "#7A3E4B",
+      secondary: "#93A39A",
+      accent: "#7A3E4B",
+      background: "#F5F0EA",
+      surface: "#FBF8F4",
+      text: "#2F292B",
+      muted: "#716A68",
+      highlight: "#E4ECE7",
+    },
+    typography: { titleFamily: SERIF_FONT, bodyFamily: SYSTEM_FONT, focusFamily: SERIF_FONT, titleScale: 1.08, headingScale: 1, bodyScale: 1, lineHeight: 1.86 },
+    spacing: { pageMargin: 86, titleGap: 64, sectionGap: 52, paragraphGap: 38 },
+    decoration: { radius: 0, borderWidth: 1, shadow: "none", ruleStyle: "solid" },
+    blockVariants: { title: "display", heading: "chapter", focus: "pullQuote", quote: "editorial" },
+  },
+};
+
+export const CONTENT_LAYOUTS: Record<ContentLayoutId, ContentLayout> = {
+  editorial: {
+    id: "editorial",
+    name: "章节论证",
+    contentTypes: ["opinionAnalysis", "productIntroduction"],
+    density: "medium",
+    pageSequence: ["cover", "intro", "argument", "quote", "summary", "callToAction"],
+    blockRules: [
+      { role: "intro", maxChars: 220, maxBlocks: 2 },
+      { role: "argument", maxChars: 360, maxBlocks: 3 },
+      { role: "quote", maxChars: 150, maxBlocks: 1 },
+    ],
+    paginationRules: { longformCharacterBudget: { wechat: 188, douyinLongform: 132 }, cardCharacterBudget: { xiaohongshu: 340, douyinImage: 250 }, cardMaxUnits: { xiaohongshu: 5, douyinImage: 6 }, shortPageThreshold: 0.34, allowSplitLongParagraphs: true },
+  },
+  checklist: {
+    id: "checklist",
+    name: "问题—步骤—行动",
+    contentTypes: ["checklistGuide", "knowledgeTutorial"],
+    density: "high",
+    pageSequence: ["cover", "intro", "step", "checklist", "warning", "summary", "callToAction"],
+    blockRules: [
+      { role: "step", maxChars: 250, maxBlocks: 2 },
+      { role: "checklist", maxChars: 280, maxBlocks: 4 },
+      { role: "warning", maxChars: 180, maxBlocks: 1 },
+    ],
+    paginationRules: { longformCharacterBudget: { wechat: 176, douyinLongform: 124 }, cardCharacterBudget: { xiaohongshu: 300, douyinImage: 220 }, cardMaxUnits: { xiaohongshu: 4, douyinImage: 5 }, shortPageThreshold: 0.3, allowSplitLongParagraphs: true },
+  },
+  data: {
+    id: "data",
+    name: "结论—依据—边界",
+    contentTypes: ["dataInsight"],
+    density: "high",
+    pageSequence: ["cover", "argument", "evidence", "comparison", "transition", "conclusion"],
+    blockRules: [
+      { role: "evidence", maxChars: 260, maxBlocks: 3 },
+      { role: "comparison", maxChars: 240, maxBlocks: 2 },
+      { role: "conclusion", maxChars: 180, maxBlocks: 1 },
+    ],
+    paginationRules: { longformCharacterBudget: { wechat: 172, douyinLongform: 120 }, cardCharacterBudget: { xiaohongshu: 310, douyinImage: 225 }, cardMaxUnits: { xiaohongshu: 2, douyinImage: 2 }, shortPageThreshold: 0.32, allowSplitLongParagraphs: true },
+  },
+  story: {
+    id: "story",
+    name: "冲突—经过—转折—尾声",
+    contentTypes: ["caseReview", "storyNarrative", "experienceSharing"],
+    density: "low",
+    pageSequence: ["cover", "intro", "conflict", "chapter", "transition", "comparison", "epilogue"],
+    blockRules: [
+      { role: "conflict", maxChars: 230, maxBlocks: 2 },
+      { role: "transition", maxChars: 180, maxBlocks: 1 },
+      { role: "epilogue", maxChars: 240, maxBlocks: 2 },
+    ],
+    paginationRules: { longformCharacterBudget: { wechat: 204, douyinLongform: 142 }, cardCharacterBudget: { xiaohongshu: 360, douyinImage: 225 }, cardMaxUnits: { xiaohongshu: 5, douyinImage: 6 }, shortPageThreshold: 0.28, allowSplitLongParagraphs: true },
+  },
+};
+
+const EDITORIAL_PALETTE = { primary: VISUAL_THEMES.editorial.colors.primary, secondary: VISUAL_THEMES.editorial.colors.secondary, background: VISUAL_THEMES.editorial.colors.background, text: VISUAL_THEMES.editorial.colors.text } as const;
+const CARD_PALETTE = { primary: VISUAL_THEMES.informationCard.colors.primary, secondary: VISUAL_THEMES.informationCard.colors.secondary, background: VISUAL_THEMES.informationCard.colors.background, text: VISUAL_THEMES.informationCard.colors.text } as const;
+const STORY_PALETTE = { primary: VISUAL_THEMES.storyMagazine.colors.primary, secondary: VISUAL_THEMES.storyMagazine.colors.secondary, background: VISUAL_THEMES.storyMagazine.colors.background, text: VISUAL_THEMES.storyMagazine.colors.text } as const;
 
 export const DESIGN_SCHEMES: Record<DesignSchemeId, DesignScheme> = {
   knowledgeMinimal: {
@@ -13,6 +141,8 @@ export const DESIGN_SCHEMES: Record<DesignSchemeId, DesignScheme> = {
     platforms: ALL_PLATFORMS,
     density: "均衡",
     layoutVariant: "editorial",
+    themeId: "editorial",
+    contentLayoutId: "editorial",
     palette: { ...EDITORIAL_PALETTE },
     typography: { titleScale: 1.06, headingScale: 1, bodyScale: 1, lineHeight: 1.78 },
     structure: ["编辑导语", "章节论证", "独立重点句", "结论回收"],
@@ -32,6 +162,8 @@ export const DESIGN_SCHEMES: Record<DesignSchemeId, DesignScheme> = {
     platforms: ALL_PLATFORMS,
     density: "紧凑",
     layoutVariant: "data",
+    themeId: "editorial",
+    contentLayoutId: "data",
     palette: { ...EDITORIAL_PALETTE },
     typography: { titleScale: 1.02, headingScale: 1, bodyScale: 0.96, lineHeight: 1.68 },
     structure: ["数据结论", "证据网格", "对比解释", "判断边界"],
@@ -45,14 +177,16 @@ export const DESIGN_SCHEMES: Record<DesignSchemeId, DesignScheme> = {
   },
   checklistGuide: {
     id: "checklistGuide",
-    name: "行动清单",
-    description: "保留大数字、单结论页、步骤页和动作页，用编辑部字体与留白统一呈现。",
+    name: "B 高能信息卡",
+    description: "用大数字、单结论页、步骤页和动作页组织教程与清单，黑白底色配信号黄。",
     contentTypes: ["checklistGuide", "knowledgeTutorial"],
     platforms: ALL_PLATFORMS,
     density: "均衡",
     layoutVariant: "checklist",
-    palette: { ...EDITORIAL_PALETTE },
-    typography: { titleScale: 1.02, headingScale: 1.08, bodyScale: 0.96, lineHeight: 1.68 },
+    themeId: "informationCard",
+    contentLayoutId: "checklist",
+    palette: { ...CARD_PALETTE },
+    typography: { titleScale: 1.08, headingScale: 1.04, bodyScale: 0.96, lineHeight: 1.64 },
     structure: ["任务定义", "编号步骤", "风险提醒", "执行清单"],
     platformRules: {
       wechat: { purpose: "可执行教程", structure: ["目标", "步骤", "提醒", "清单"], maxContentBlocks: 36 },
@@ -64,14 +198,16 @@ export const DESIGN_SCHEMES: Record<DesignSchemeId, DesignScheme> = {
   },
   storyNarrative: {
     id: "storyNarrative",
-    name: "故事专刊",
-    description: "保留章节、冲突、转折、对照和尾声页，以编辑部网格建立连续叙事节奏。",
+    name: "C 故事杂志",
+    description: "以章节、冲突、转折、对照和尾声页承载案例与个人经历，保留舒展叙事。",
     contentTypes: ["storyNarrative", "caseReview", "experienceSharing", "productIntroduction"],
     platforms: ALL_PLATFORMS,
     density: "舒展",
     layoutVariant: "story",
-    palette: { ...EDITORIAL_PALETTE },
-    typography: { titleScale: 1.08, headingScale: 1, bodyScale: 1, lineHeight: 1.84 },
+    themeId: "storyMagazine",
+    contentLayoutId: "story",
+    palette: { ...STORY_PALETTE },
+    typography: { titleScale: 1.08, headingScale: 1, bodyScale: 1, lineHeight: 1.86 },
     structure: ["场景封面", "冲突出现", "关键转折", "结果回收"],
     platformRules: {
       wechat: { purpose: "沉浸叙事", structure: ["场景", "冲突", "过程", "回收"], maxContentBlocks: 36 },
@@ -89,6 +225,27 @@ export function getDesignScheme(id: DesignSchemeId) {
   return DESIGN_SCHEMES[id];
 }
 
+export const VISUAL_THEME_LIST = Object.values(VISUAL_THEMES);
+
+export function getVisualTheme(id: VisualThemeId) {
+  return VISUAL_THEMES[id];
+}
+
+export function getContentLayout(id: ContentLayoutId) {
+  return CONTENT_LAYOUTS[id];
+}
+
+export function schemeIdForVisualTheme(id: VisualThemeId): DesignSchemeId {
+  if (id === "informationCard") return "checklistGuide";
+  if (id === "storyMagazine") return "storyNarrative";
+  return "knowledgeMinimal";
+}
+
+export function schemeIdForVisualThemeAndLayout(themeId: VisualThemeId, layoutId: ContentLayoutId): DesignSchemeId {
+  if (themeId === "editorial" && layoutId === "data") return "dataInsight";
+  return schemeIdForVisualTheme(themeId);
+}
+
 export function getAlternativeSchemes(id: DesignSchemeId, count = 2, contentType?: string) {
   return DESIGN_SCHEME_LIST
     .filter((scheme) => scheme.id !== id)
@@ -96,17 +253,21 @@ export function getAlternativeSchemes(id: DesignSchemeId, count = 2, contentType
     .slice(0, count);
 }
 
-export function cardPresetForScheme(id: DesignSchemeId) {
+export function cardPresetForScheme(id: DesignSchemeId, layoutId?: ContentLayoutId) {
   const scheme = DESIGN_SCHEMES[id];
+  const theme = VISUAL_THEMES[scheme.themeId];
   return {
-    variant: scheme.layoutVariant,
-    background: scheme.palette.background,
-    title: scheme.palette.primary,
-    body: scheme.palette.text,
-    rule: scheme.palette.secondary,
-    highlight: "#F6F0EC",
-    dots: `${scheme.palette.primary}38`,
-    surface: "#FFFFFF",
-    muted: `${scheme.palette.text}A3`,
+    variant: layoutId ?? scheme.contentLayoutId,
+    background: theme.colors.background,
+    title: theme.colors.primary,
+    body: theme.colors.text,
+    rule: theme.colors.secondary,
+    highlight: theme.colors.highlight,
+    dots: `${theme.colors.primary}38`,
+    surface: theme.colors.surface,
+    muted: `${theme.colors.muted}A3`,
+    fontFamily: theme.typography.bodyFamily,
+    focusFontFamily: theme.typography.focusFamily,
+    radius: theme.decoration.radius,
   };
 }

@@ -4,6 +4,7 @@ export { buildPlatformArticle } from "./platform-adapter";
 export { buildPlatformDesignPlans } from "./platform-planner";
 export { designPlanSchema } from "./schemas";
 export { CONTENT_TYPE_IDS, GENERATION_MODE_IDS, PAGE_PLAN_KINDS } from "./types";
+export { CONTENT_LAYOUT_IDS } from "../design-schemes";
 export type {
   ContentBlockRole,
   ContentBlueprint,
@@ -20,6 +21,9 @@ export type {
   PagePlanKind,
   PlannedContentBlock,
   PlatformDesignPlan,
+  PlatformRenderer,
+  RenderValidationResult,
   SourceFact,
   TypographyTokens,
 } from "./types";
+export type { BrandOverride, ContentLayout, ContentLayoutId, VisualThemeId } from "../design-schemes";

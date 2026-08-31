@@ -1,6 +1,7 @@
 import type { BlockType, InlineStyle, StyleTemplate, TemplateKey } from "./article-types";
 
 const baoyuFont = "-apple-system-font, BlinkMacSystemFont, Helvetica Neue, PingFang SC, Hiragino Sans GB, Microsoft YaHei UI, Microsoft YaHei, Arial, sans-serif";
+const storySerifFont = "STSong, Songti SC, SimSun, serif";
 
 const colorPresets = {
   blue: "#0F4C81",
@@ -515,16 +516,39 @@ function createRecommendedTemplate(options: {
   };
 }
 
-function createChecklistTemplate(): StyleTemplate {
+function createEditorialTemplate(): StyleTemplate {
   const base = createRecommendedTemplate({
-    key: "zhenyiChecklist",
-    name: "行动清单",
-    variant: "business",
+    key: "zhenyiKnowledgeMinimal",
+    name: "编辑部简约",
+    variant: "knowledge",
     primary: "#A33A35",
     accent: "#D8CCC4",
     softBg: "#F6F0EC",
     border: "#E4DAD4",
     muted: "#746C67",
+    description: "编辑部式长文：大留白、左对齐层级和克制强调。",
+    audience: "知识教程、行业观点、深度分析",
+  });
+  return {
+    ...base,
+    blocks: {
+      ...base.blocks,
+      quote: { ...base.blocks.quote, "font-family": storySerifFont },
+      golden: { ...base.blocks.golden, "font-family": storySerifFont },
+    },
+  };
+}
+
+function createChecklistTemplate(): StyleTemplate {
+  const base = createRecommendedTemplate({
+    key: "zhenyiChecklist",
+    name: "行动清单",
+    variant: "business",
+    primary: "#111111",
+    accent: "#F4C542",
+    softBg: "#FFF2B8",
+    border: "#E2D37A",
+    muted: "#5D5D58",
     description: "以编号、动作和风险提醒组织教程与清单。",
     audience: "步骤教程、工具清单、避坑指南",
   });
@@ -540,7 +564,7 @@ function createChecklistTemplate(): StyleTemplate {
         "background-color": "transparent",
         border: "none",
         "border-left": "none",
-        "border-bottom": "3px solid #D8CCC4",
+        "border-bottom": "3px solid #F4C542",
         "border-radius": "0",
         "font-size": "23px",
       },
@@ -548,30 +572,30 @@ function createChecklistTemplate(): StyleTemplate {
         ...base.blocks.section,
         margin: "36px 0 16px",
         padding: "9px 12px",
-        color: "#FFFFFF",
-        "background-color": "#A33A35",
+        color: "#111111",
+        "background-color": "#F4C542",
         "border-radius": "4px",
       },
       list: {
         ...base.blocks.list,
         padding: "18px 18px 18px 22px",
-        "background-color": "#F6F0EC",
-        border: "1px solid #E4DAD4",
-        "border-left": "5px solid #A33A35",
+        "background-color": "#FFF2B8",
+        border: "1px solid #E2D37A",
+        "border-left": "5px solid #F4C542",
         "border-radius": "4px",
       },
       golden: {
         ...base.blocks.golden,
         color: "#211F1D",
-        "background-color": "#F6F0EC",
-        border: "1px solid #D8CCC4",
+        "background-color": "#FFF2B8",
+        border: "1px solid #E2D37A",
         "border-radius": "4px",
       },
       cta: {
         ...base.blocks.cta,
         color: "#211F1D",
-        "background-color": "#F6F0EC",
-        border: "1px solid #D8CCC4",
+        "background-color": "#FFFFFF",
+        border: "2px solid #F4C542",
         "border-radius": "4px",
       },
     },
@@ -660,28 +684,28 @@ function createStoryMagazineTemplate(): StyleTemplate {
     key: "zhenyiStoryMagazine",
     name: "故事专刊",
     variant: "knowledge",
-    primary: "#A33A35",
-    accent: "#D8CCC4",
-    softBg: "#F6F0EC",
-    border: "#E4DAD4",
-    muted: "#746C67",
+    primary: "#7A3E4B",
+    accent: "#93A39A",
+    softBg: "#E4ECE7",
+    border: "#C8D2CB",
+    muted: "#716A68",
     description: "以场景、章节转折和留白承载经历与案例复盘。",
     audience: "人物故事、个人经历、案例复盘",
   });
-  const editorialFont = baoyuFont;
+  const editorialFont = storySerifFont;
   return {
     ...base,
     fontFamily: base.fontFamily,
     visual: { ...base.visual, listSymbol: "—", quoteSymbol: "“", ctaPrefix: "尾声" },
-    container: { ...base.container, "background-color": "#FCFBF8", padding: "18px 14px" },
+    container: { ...base.container, "background-color": "#FBF8F4", padding: "18px 14px" },
     blocks: {
       ...base.blocks,
       title: {
         ...base.blocks.title,
         margin: "26px 0 42px",
         padding: "0 0 18px",
-        color: "#211F1D",
-        "border-bottom": "1px solid #D8CCC4",
+        color: "#7A3E4B",
+        "border-bottom": "1px solid #93A39A",
         "font-family": editorialFont,
         "font-size": "25px",
         "line-height": "1.5",
@@ -691,7 +715,7 @@ function createStoryMagazineTemplate(): StyleTemplate {
         margin: "22px 0 34px",
         padding: "0 0 0 18px",
         "background-color": "transparent",
-        "border-left": "3px solid #A33A35",
+        "border-left": "3px solid #93A39A",
         "border-radius": "0",
         "font-family": editorialFont,
         "font-size": "17px",
@@ -701,10 +725,10 @@ function createStoryMagazineTemplate(): StyleTemplate {
         ...base.blocks.section,
         margin: "48px 0 20px",
         padding: "14px 0 6px",
-        color: "#A33A35",
+        color: "#7A3E4B",
         "background-color": "transparent",
         "border-left": "none",
-        "border-top": "1px solid #D8CCC4",
+        "border-top": "1px solid #93A39A",
         "border-bottom": "none",
         "font-family": editorialFont,
         "font-size": "20px",
@@ -714,11 +738,11 @@ function createStoryMagazineTemplate(): StyleTemplate {
         ...base.blocks.quote,
         margin: "30px 0",
         padding: "20px 22px",
-        color: "#4F4742",
-        "background-color": "#F6F0EC",
+        color: "#4B4546",
+        "background-color": "#E4ECE7",
         "border-left": "none",
-        "border-top": "1px solid #D8CCC4",
-        "border-bottom": "1px solid #D8CCC4",
+        "border-top": "1px solid #93A39A",
+        "border-bottom": "1px solid #93A39A",
         "border-radius": "0",
         "font-family": editorialFont,
       },
@@ -726,17 +750,17 @@ function createStoryMagazineTemplate(): StyleTemplate {
         ...base.blocks.golden,
         margin: "34px 0",
         padding: "18px 0 18px 20px",
-        color: "#A33A35",
+        color: "#7A3E4B",
         "background-color": "transparent",
         border: "none",
-        "border-left": "4px solid #D8CCC4",
+        "border-left": "4px solid #93A39A",
         "border-radius": "0",
         "font-family": editorialFont,
       },
       summary: {
         ...base.blocks.summary,
-        "background-color": "#F6F0EC",
-        border: "1px solid #E4DAD4",
+        "background-color": "#E4ECE7",
+        border: "1px solid #C8D2CB",
         "border-radius": "4px",
       },
     },
@@ -744,18 +768,7 @@ function createStoryMagazineTemplate(): StyleTemplate {
 }
 
 export const styleTemplates: Record<TemplateKey, StyleTemplate> = {
-  zhenyiKnowledgeMinimal: createRecommendedTemplate({
-    key: "zhenyiKnowledgeMinimal",
-    name: "编辑部简约",
-    variant: "knowledge",
-    primary: "#A33A35",
-    accent: "#D8CCC4",
-    softBg: "#F6F0EC",
-    border: "#E4DAD4",
-    muted: "#746C67",
-    description: "编辑部式长文：大留白、左对齐层级和克制强调。",
-    audience: "知识教程、行业观点、深度分析",
-  }),
+  zhenyiKnowledgeMinimal: createEditorialTemplate(),
   zhenyiBusinessCase: createRecommendedTemplate({
     key: "zhenyiBusinessCase",
     name: "臻一 商务案例",

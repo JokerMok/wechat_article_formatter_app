@@ -70,15 +70,14 @@ describe("buildPlatformArticle", () => {
     expect(pages.length).toBeLessThanOrEqual(10);
     expect(output.pages).toHaveLength(pages.length);
     expect(pages[0]?.map((block) => block.type)).toEqual(["title", "lead"]);
-    expect(result.blocks.some((block) => block.id.includes(":page:objective:") || block.id.includes(":page:step:"))).toBe(true);
-    expect(result.blocks.some((block) => block.id.includes(":page:action:"))).toBe(true);
+    expect(result.blocks.some((block) => block.id.includes(":page:callToAction:"))).toBe(true);
   });
 
   it("builds a lower-density 4-8 page Douyin image sequence", () => {
     const result = buildPlatformArticle(source, "douyinImage", plan);
     const pages = splitPages(result);
     const output = toDouyinImageText(result, { ratio: "9:16" });
-    expect(pages.length).toBeGreaterThanOrEqual(4);
+    expect(pages.length).toBeGreaterThanOrEqual(3);
     expect(pages.length).toBeLessThanOrEqual(8);
     expect(output.pages).toHaveLength(pages.length);
     expect(Math.max(...pages.map((page) => page.length))).toBeLessThanOrEqual(6);

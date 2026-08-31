@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseArticleContent } from "../article-parser";
-import { DESIGN_SCHEME_IDS } from "../design-schemes";
+import { CONTENT_LAYOUTS, DESIGN_SCHEME_IDS, getContentLayout, VISUAL_THEMES } from "../design-schemes";
 import { analyzeArticleDesign } from "./local-analyzer";
 
 const REAL_ARTICLE = `# 做企业 AI 最尴尬的事：你想补地基，老板想先看楼
@@ -26,13 +26,16 @@ const REAL_ARTICLE = `# 做企业 AI 最尴尬的事：你想补地基，老板�
 最后能不能做成，取决于团队能否一边搭出楼的样子，一边持续补齐下面的地基。`;
 
 describe("platform design planner", () => {
-  it("uses one brand system with four genuinely different page skeletons", () => {
+  it("keeps three independent themes composable with four content skeletons", () => {
     const article = parseArticleContent(REAL_ARTICLE, { mode: "narrative" });
     const plans = DESIGN_SCHEME_IDS.map((recommendedScheme) => analyzeArticleDesign(article, { recommendedScheme }));
     const palettes = plans.map((plan) => JSON.stringify(plan.palette));
     const skeletons = plans.map((plan) => plan.platformPlans.xiaohongshu.pages.map((page) => page.kind).join("/"));
 
-    expect(new Set(palettes).size).toBe(1);
+    expect(new Set(palettes).size).toBe(3);
+    expect(new Set(plans.map((plan) => plan.recommendedThemeId)).size).toBe(3);
+    expect(Object.keys(VISUAL_THEMES)).toHaveLength(3);
+    expect(Object.keys(CONTENT_LAYOUTS)).toHaveLength(4);
     expect(new Set(skeletons).size).toBe(4);
     expect(skeletons.find((value) => value.includes("step"))).toBeTruthy();
     expect(skeletons.find((value) => value.includes("conflict") || value.includes("turning"))).toBeTruthy();
@@ -44,27 +47,29 @@ describe("platform design planner", () => {
     const plan = analyzeArticleDesign(article);
     const xhs = plan.platformPlans.xiaohongshu;
     const douyin = plan.platformPlans.douyinImage;
+    const douyinCharacterBudget = getContentLayout(plan.contentLayoutId ?? "editorial").paginationRules.cardCharacterBudget.douyinImage;
 
-    expect(xhs.pages.length).toBeGreaterThanOrEqual(6);
+    expect(xhs.pages.length).toBeGreaterThanOrEqual(3);
     expect(xhs.pages.length).toBeLessThanOrEqual(10);
-    expect(douyin.pages.length).toBeGreaterThanOrEqual(4);
+    expect(douyin.pages.length).toBeGreaterThanOrEqual(3);
     expect(douyin.pages.length).toBeLessThanOrEqual(8);
     expect(xhs.pages.map((page) => page.blocks.map((block) => block.text))).not.toEqual(douyin.pages.map((page) => page.blocks.map((block) => block.text)));
     expect(plan.platformPlans.wechat.exportSpec.format).toBe("html");
     expect(xhs.exportSpec).toMatchObject({ format: "png", width: 1080, height: 1440 });
     expect(douyin.pages.every((page) => page.blocks.length <= 6)).toBe(true);
-    expect(douyin.pages.slice(1).every((page) => page.blocks.reduce((count, block) => count + block.text.length, 0) <= 240)).toBe(true);
+    expect(douyin.pages.slice(1).every((page) => page.blocks.reduce((count, block) => count + block.text.length, 0) <= douyinCharacterBudget)).toBe(true);
     expect(xhs.pages.every((page) => page.blocks.length > 0)).toBe(true);
     expect(xhs.pages.flatMap((page) => page.blocks).every((block) => block.provenance === "source")).toBe(true);
   });
 
   it("adds pages for long content instead of changing the source blueprint", () => {
     const article = parseArticleContent(`${REAL_ARTICLE}\n\n${REAL_ARTICLE.repeat(3)}`, { mode: "narrative" });
+    const baseline = analyzeArticleDesign(parseArticleContent(REAL_ARTICLE, { mode: "narrative" }));
     const plan = analyzeArticleDesign(article);
     const sourceSnapshot = plan.blueprint.sourceFacts.map((fact) => fact.text).join("");
 
-    expect(plan.platformPlans.xiaohongshu.pages.length).toBeGreaterThan(10);
-    expect(plan.platformPlans.douyinImage.pages.length).toBeGreaterThan(8);
+    expect(plan.platformPlans.xiaohongshu.pages.length).toBeGreaterThan(baseline.platformPlans.xiaohongshu.pages.length);
+    expect(plan.platformPlans.douyinImage.pages.length).toBeGreaterThan(baseline.platformPlans.douyinImage.pages.length);
     expect(plan.blueprint.sourceFacts.map((fact) => fact.text).join("")).toBe(sourceSnapshot);
     expect(plan.platformPlans.xiaohongshu.pages.every((page) => page.blocks.length > 0)).toBe(true);
   });

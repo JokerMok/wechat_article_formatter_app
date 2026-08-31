@@ -1,5 +1,6 @@
+import type { UnifiedArticleContent } from "../content";
 import type { PlatformId } from "../platforms/types";
-import type { DesignDensity, DesignSchemeId } from "../design-schemes";
+import type { BrandOverride, ContentLayout, ContentLayoutId, DesignDensity, DesignSchemeId, VisualThemeId } from "../design-schemes";
 
 export const CONTENT_TYPE_IDS = [
   "knowledgeTutorial",
@@ -53,14 +54,18 @@ export type ContentBlueprint = {
 
 export const PAGE_PLAN_KINDS = [
   "cover",
+  "intro",
   "opening",
   "section",
+  "argument",
   "point",
   "quote",
   "objective",
   "step",
+  "checklist",
   "warning",
   "action",
+  "callToAction",
   "keyMetric",
   "evidence",
   "comparison",
@@ -68,8 +73,11 @@ export const PAGE_PLAN_KINDS = [
   "boundary",
   "conflict",
   "turning",
+  "transition",
   "chapter",
   "summary",
+  "conclusion",
+  "epilogue",
   "ending",
 ] as const;
 
@@ -104,6 +112,9 @@ export type TypographyTokens = {
   headingScale: number;
   bodyScale: number;
   lineHeight: number;
+  titleFamily?: string;
+  bodyFamily?: string;
+  focusFamily?: string;
 };
 
 export type ExportSpec = {
@@ -117,12 +128,26 @@ export type PlatformDesignPlan = {
   schemaVersion: 1;
   platform: PlatformId;
   visualPresetId: DesignSchemeId;
+  themeId?: VisualThemeId;
+  layoutId?: ContentLayoutId;
   title: string;
   publishCopy: string;
   palette: DesignPalette;
   typography: TypographyTokens;
+  brandOverride?: BrandOverride;
   pages: PagePlan[];
   exportSpec: ExportSpec;
+};
+
+export type RenderValidationResult = {
+  valid: boolean;
+  issues: string[];
+};
+
+export type PlatformRenderer<TOutput = unknown> = {
+  platform: PlatformId;
+  render: (source: UnifiedArticleContent, plan: PlatformDesignPlan) => TOutput;
+  validate: (result: TOutput) => RenderValidationResult;
 };
 
 export type DesignPlanBlock = {
@@ -141,6 +166,10 @@ export type DesignPlan = {
   tone: ContentTone;
   recommendedPlatforms: PlatformId[];
   recommendedScheme: DesignSchemeId;
+  recommendedThemeId?: VisualThemeId;
+  contentLayoutId?: ContentLayoutId;
+  contentLayout?: ContentLayout;
+  brandOverride?: BrandOverride;
   visualStyle: string;
   palette: {
     primary: string;
@@ -148,12 +177,7 @@ export type DesignPlan = {
     background: string;
     text: string;
   };
-  typography: {
-    titleScale: number;
-    headingScale: number;
-    bodyScale: number;
-    lineHeight: number;
-  };
+  typography: TypographyTokens;
   density: DesignDensity;
   coverStrategy: string;
   blockOrder: DesignPlanBlock[];

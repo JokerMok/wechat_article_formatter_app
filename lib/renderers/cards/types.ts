@@ -32,6 +32,7 @@ export type TextMeasurer = {
 
 export type CardTypography = {
   fontFamily: string;
+  focusFontFamily?: string;
   titleFontSize: number;
   headingFontSize: number;
   bodyFontSize: number;

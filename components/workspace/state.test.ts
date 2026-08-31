@@ -38,6 +38,7 @@ import {
   PROJECT_BACKUP_IMAGE_NOTICE,
 } from "./state";
 import { mergeAdjacentCardPages, moveCardImagePage, splitCardImagePageAfterElement, type CardLayoutPage, type CardLayoutResult } from "../../lib/renderers/cards";
+import { parseArticleContent } from "../../lib/article-parser";
 import type { DraftHistory } from "./types";
 
 function cardPage(id: string, text: string): CardLayoutPage {
@@ -131,6 +132,24 @@ describe("workspace state", () => {
     expect(after.templateKey).toBe("zhenyiChecklist");
     expect(after.content).toEqual(before.content);
     expect(after.status).toBe("edited");
+  });
+
+  it("uses the new recommendation for an untouched draft and keeps a manual theme", () => {
+    const initial = createWorkspaceState("# 初始标题\n\n初始正文。");
+    const story = createWorkspaceState(`# 我第一次做项目，先做出来的不是系统
+
+第一次接手时问题很多，后来经过调整，最后完成了交付。`);
+    const source = parseArticleContent(story.sourceMarkdown, { mode: "knowledge" });
+
+    const recommended = regeneratePlatformDraft(initial.platforms.xiaohongshu, source, initial.ai, story.designPlan);
+    expect(recommended.schemeId).toBe("storyNarrative");
+    expect(recommended.themeId).toBe("storyMagazine");
+    expect(recommended.layoutId).toBe("story");
+
+    const manuallyStyled = applyDesignSchemeToDraft(initial.platforms.xiaohongshu, "checklistGuide");
+    const preserved = regeneratePlatformDraft(manuallyStyled, source, initial.ai, story.designPlan);
+    expect(preserved.schemeId).toBe("checklistGuide");
+    expect(preserved.themeId).toBe("informationCard");
   });
 
   it("edits only the selected platform draft", () => {

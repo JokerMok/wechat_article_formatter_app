@@ -651,7 +651,7 @@ function styleForEntry(kind: FlowEntry["kind"], typography: CardTypography): Tex
   }
   if (kind === "focus") {
     return {
-      fontFamily: typography.fontFamily,
+      fontFamily: typography.focusFontFamily ?? typography.fontFamily,
       fontSize: typography.focusFontSize,
       fontWeight: 700,
       lineHeight: Math.round(typography.focusFontSize * typography.lineSpacing),
@@ -772,8 +772,8 @@ function applyPageSkeleton(page: CardLayoutPage): CardLayoutPage {
   const available = page.safeArea.height - contentHeight;
   if (available <= 0) return page;
 
-  const centered = page.pageKind === "cover" || page.pageKind === "summary" || page.pageKind === "ending";
-  const lowered = page.pageKind === "turning" || page.pageKind === "quote" || page.pageKind === "keyMetric";
+  const centered = page.pageKind === "cover" || page.pageKind === "summary" || page.pageKind === "ending" || page.pageKind === "conclusion" || page.pageKind === "epilogue";
+  const lowered = page.pageKind === "turning" || page.pageKind === "transition" || page.pageKind === "quote" || page.pageKind === "keyMetric";
   const compact = contentHeight <= page.safeArea.height * 0.68;
   const targetTop = centered
     ? page.safeArea.y + Math.round(available * 0.5)

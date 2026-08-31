@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseArticleContent } from "../article-parser";
-import { DESIGN_SCHEMES } from "../design-schemes";
+import { DESIGN_SCHEMES, VISUAL_THEMES } from "../design-schemes";
 import { analyzeArticleDesign, detectContentType } from "./local-analyzer";
 import { designPlanSchema } from "./schemas";
 
@@ -58,13 +58,56 @@ describe("analyzeArticleDesign", () => {
     expect(detectContentType(parseArticleContent(markdown, { mode }))).toBe(expected);
   });
 
+  it.each([
+    ["editorial", "editorial", "# 一个行业判断\n\n我认为，本质不是工具多少，而是流程是否清楚。"],
+    ["informationCard", "checklist", "# 发布清单\n\n- 检查标题\n- 核对来源\n\n按步骤完成发布。"],
+    ["storyMagazine", "story", "# 一次项目经历\n\n第一次接手时问题很多，后来经过调整，最后完成交付。"],
+    ["editorial", "data", "# 数据复盘\n\n报告显示，使用比例达到42%，但这个数字不能外推。"],
+  ] as const)("recommends the %s theme and %s layout for the content type", (themeId, layoutId, markdown) => {
+    const plan = analyzeArticleDesign(parseArticleContent(markdown, { mode: "knowledge" }));
+    expect(plan.recommendedThemeId).toBe(themeId);
+    expect(plan.contentLayoutId).toBe(layoutId);
+    expect(plan.platformPlans.xiaohongshu.themeId).toBe(themeId);
+    expect(plan.platformPlans.xiaohongshu.layoutId).toBe(layoutId);
+  });
+
+  it("does not mistake generic business words for a story", () => {
+    const article = parseArticleContent(`# 企业 AI 落地，先补哪一块基础
+
+很多团队第一次做企业 AI，都会先讨论模型和界面。真正决定项目能不能进入业务的，通常是资料是否能被找到、理解和复用。
+
+## 基础能力要可复用
+
+产品文档、客户问答和业务口径往往散落在不同文件夹里。没有统一来源，模型即使能回答，也很难保证稳定。
+
+最后，应用应该在真实使用中暴露问题，再把问题变成下一轮基础建设。`, { mode: "knowledge" });
+
+    const plan = analyzeArticleDesign(article);
+    expect(plan.contentType).toBe("opinionAnalysis");
+    expect(plan.recommendedThemeId).toBe("editorial");
+    expect(plan.contentLayoutId).toBe("editorial");
+  });
+
+  it("keeps an explicit checklist ahead of a trailing narrative word", () => {
+    const article = parseArticleContent(`# 发布前检查清单
+
+按步骤核对标题、来源和图片。最后再检查是否存在空白页。`, { mode: "knowledge" });
+
+    const plan = analyzeArticleDesign(article);
+    expect(plan.contentType).toBe("checklistGuide");
+    expect(plan.recommendedThemeId).toBe("informationCard");
+    expect(plan.contentLayoutId).toBe("checklist");
+  });
+
   it("uses four structurally distinct schemes with user-facing metadata", () => {
     const schemes = Object.values(DESIGN_SCHEMES);
     expect(schemes).toHaveLength(4);
     expect(new Set(schemes.map((scheme) => scheme.name)).size).toBe(4);
     expect(new Set(schemes.map((scheme) => scheme.layoutVariant)).size).toBe(4);
     expect(new Set(schemes.map((scheme) => scheme.structure.join("/"))).size).toBe(4);
-    expect(new Set(schemes.map((scheme) => JSON.stringify(scheme.palette))).size).toBe(1);
+    expect(new Set(schemes.map((scheme) => JSON.stringify(scheme.palette))).size).toBe(3);
+    expect(new Set(schemes.map((scheme) => scheme.themeId)).size).toBe(3);
+    expect(Object.values(VISUAL_THEMES).every((theme) => theme.colors.primary && theme.typography.bodyFamily)).toBe(true);
     expect(schemes.every((scheme) => scheme.description && scheme.platforms.length > 0)).toBe(true);
   });
 

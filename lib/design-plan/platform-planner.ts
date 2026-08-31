@@ -1,5 +1,5 @@
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../content";
-import type { DesignScheme } from "../design-schemes";
+import { getContentLayout, getVisualTheme, type ContentLayoutId, type DesignScheme, type VisualThemeId } from "../design-schemes";
 import type { PlatformId } from "../platforms/types";
 import { cleanPublishingText, isGenericStructureHeading, publicationBlocks } from "./content-filter";
 import type {
@@ -24,21 +24,19 @@ type PageSeed = {
   characterCount: number;
 };
 
-const CARD_CHARACTER_BUDGET: Record<"xiaohongshu" | "douyinImage", number> = {
-  xiaohongshu: 320,
-  douyinImage: 240,
-};
-
 export function buildPlatformDesignPlans(
   source: UnifiedArticleContent,
   blueprint: ContentBlueprint,
   scheme: DesignScheme,
+  selection: { themeId?: VisualThemeId; contentLayoutId?: ContentLayoutId } = {},
 ): Record<PlatformId, PlatformDesignPlan> {
+  const theme = getVisualTheme(selection.themeId ?? scheme.themeId);
+  const layout = getContentLayout(selection.contentLayoutId ?? scheme.contentLayoutId);
   return {
-    wechat: buildLongformPlan(source, blueprint, scheme, "wechat"),
-    xiaohongshu: buildCardPlan(source, blueprint, scheme, "xiaohongshu"),
-    douyinImage: buildCardPlan(source, blueprint, scheme, "douyinImage"),
-    douyinLongform: buildLongformPlan(source, blueprint, scheme, "douyinLongform"),
+    wechat: buildLongformPlan(source, blueprint, scheme, theme, layout, "wechat"),
+    xiaohongshu: buildCardPlan(source, blueprint, scheme, theme, layout, "xiaohongshu"),
+    douyinImage: buildCardPlan(source, blueprint, scheme, theme, layout, "douyinImage"),
+    douyinLongform: buildLongformPlan(source, blueprint, scheme, theme, layout, "douyinLongform"),
   };
 }
 
@@ -46,10 +44,12 @@ function buildLongformPlan(
   source: UnifiedArticleContent,
   blueprint: ContentBlueprint,
   scheme: DesignScheme,
+  theme: ReturnType<typeof getVisualTheme>,
+  layout: ReturnType<typeof getContentLayout>,
   platform: "wechat" | "douyinLongform",
 ): PlatformDesignPlan {
   const units = collectSourceUnits(source);
-  const grouped = groupLongformUnits(units.flatMap((unit) => splitUnit(unit, platform === "wechat" ? 168 : 118)));
+  const grouped = groupLongformUnits(units.flatMap((unit) => splitUnit(unit, layout.paginationRules.longformCharacterBudget[platform])));
   const pages: PagePlan[] = [];
   const title = blueprint.titleCandidates[0] || source.title || "未命名文章";
   const titleSourceId = source.blocks.find((block) => block.type === "title")?.id;
@@ -58,7 +58,7 @@ function buildLongformPlan(
   ]));
 
   grouped.forEach((group, index) => {
-    const kind = longformPageKind(scheme.layoutVariant, group, index, grouped.length);
+    const kind = longformPageKind(layout.id, group, index, grouped.length);
     pages.push(createPage(platform, index + 1, kind, group));
   });
 
@@ -72,10 +72,12 @@ function buildLongformPlan(
     schemaVersion: 1,
     platform,
     visualPresetId: scheme.id,
+    themeId: theme.id,
+    layoutId: layout.id,
     title,
     publishCopy: units.map((unit) => unit.text).join("\n\n"),
-    palette: { ...scheme.palette },
-    typography: { ...scheme.typography },
+    palette: { primary: theme.colors.primary, secondary: theme.colors.secondary, background: theme.colors.background, text: theme.colors.text },
+    typography: { ...scheme.typography, titleFamily: theme.typography.titleFamily, bodyFamily: theme.typography.bodyFamily, focusFamily: theme.typography.focusFamily },
     pages,
     exportSpec: platform === "wechat" ? { format: "html" } : { format: "text" },
   };
@@ -85,6 +87,8 @@ function buildCardPlan(
   source: UnifiedArticleContent,
   blueprint: ContentBlueprint,
   scheme: DesignScheme,
+  theme: ReturnType<typeof getVisualTheme>,
+  layout: ReturnType<typeof getContentLayout>,
   platform: "xiaohongshu" | "douyinImage",
 ): PlatformDesignPlan {
   const units = collectSourceUnits(source);
@@ -110,10 +114,15 @@ function buildCardPlan(
     }
   }
 
-  const seeds = packUnits(units, CARD_CHARACTER_BUDGET[platform], platform === "xiaohongshu" ? 4 : 6);
+  const seeds = packUnits(
+    units,
+    layout.paginationRules.cardCharacterBudget[platform],
+    layout.paginationRules.cardMaxUnits[platform],
+    layout.paginationRules.shortPageThreshold,
+  );
   const pages: PagePlan[] = [createPage(platform, 0, "cover", coverBlocks)];
   seeds.forEach((seed, index) => {
-    const kind = cardPageKind(scheme.layoutVariant, seed, index, seeds.length);
+    const kind = cardPageKind(layout.id, seed, index, seeds.length);
     pages.push(createPage(platform, index + 1, kind, seed.units));
   });
 
@@ -121,10 +130,12 @@ function buildCardPlan(
     schemaVersion: 1,
     platform,
     visualPresetId: scheme.id,
+    themeId: theme.id,
+    layoutId: layout.id,
     title,
     publishCopy: units.map((unit) => unit.text).join("\n\n"),
-    palette: { ...scheme.palette },
-    typography: { ...scheme.typography },
+    palette: { primary: theme.colors.primary, secondary: theme.colors.secondary, background: theme.colors.background, text: theme.colors.text },
+    typography: { ...scheme.typography, titleFamily: theme.typography.titleFamily, bodyFamily: theme.typography.bodyFamily, focusFamily: theme.typography.focusFamily },
     pages,
     exportSpec: platform === "xiaohongshu"
       ? { format: "png", width: 1080, height: 1440, aspectRatio: "3:4" }
@@ -177,7 +188,7 @@ function groupLongformUnits(units: SourceUnit[]): SourceUnit[][] {
   return groups.length ? groups : [[]];
 }
 
-function packUnits(units: SourceUnit[], characterBudget: number, maxUnits: number): PageSeed[] {
+function packUnits(units: SourceUnit[], characterBudget: number, maxUnits: number, shortPageThreshold: number): PageSeed[] {
   const expanded = units.flatMap((unit) => splitUnit(unit, characterBudget));
   const pages: PageSeed[] = [];
   let current: PageSeed = { units: [], characterCount: 0 };
@@ -189,14 +200,25 @@ function packUnits(units: SourceUnit[], characterBudget: number, maxUnits: numbe
 
   for (const unit of expanded) {
     const unitLength = unit.text.length;
-    const startsSection = unit.role === "heading" && current.units.length > 0;
     const exceeds = current.units.length > 0 && current.characterCount + unitLength > characterBudget;
-    if (startsSection || exceeds || current.units.length >= maxUnits) push();
+    if (exceeds || current.units.length >= maxUnits) push();
     current.units.push(unit);
     current.characterCount += unitLength;
     if (unit.role === "focus" && current.characterCount >= characterBudget * 0.55) push();
   }
   push();
+  if (pages.length > 1) {
+    const last = pages[pages.length - 1]!;
+    const previous = pages[pages.length - 2]!;
+    const canMerge = last.characterCount / characterBudget < shortPageThreshold
+      && previous.characterCount + last.characterCount <= characterBudget
+      && previous.units.length + last.units.length <= maxUnits;
+    if (canMerge) {
+      previous.units.push(...last.units);
+      previous.characterCount += last.characterCount;
+      pages.pop();
+    }
+  }
   return pages;
 }
 
@@ -252,7 +274,7 @@ function compactCoverSubtitle(text: string, maxLength: number) {
 }
 
 function cardPageKind(
-  variant: DesignScheme["layoutVariant"],
+  variant: DesignScheme["contentLayoutId"],
   seed: PageSeed,
   index: number,
   total: number,
@@ -261,38 +283,41 @@ function cardPageKind(
   const hasQuote = seed.units.some((unit) => unit.sourceType === "quote" || unit.sourceType === "golden");
   const hasSummary = seed.units.some((unit) => unit.sourceType === "summary" || unit.sourceType === "cta");
   if (variant === "checklist") {
-    if (index === 0) return "objective";
+    if (index === 0) return "intro";
     if (hasQuote || /注意|避坑|风险|不要|错误/u.test(text)) return "warning";
-    if (hasSummary || index === total - 1) return "action";
+    if (hasSummary || index === total - 1) return "callToAction";
     return "step";
   }
   if (variant === "data") {
-    if (/\d+(?:\.\d+)?\s*(?:%|％|倍|万|亿|元|人|次|个|项|条|类|月|年|天)/u.test(text)) return "keyMetric";
+    if (index === 0) return /\d+(?:\.\d+)?\s*(?:%|％|倍|万|亿|元|人|次|个|项|条|类|月|年|天)/u.test(text) ? "keyMetric" : "evidence";
+    if (index === total - 1) return /边界|范围|不能|不可|不代表|不等于|无法|仅说明|只是/u.test(text) ? "boundary" : "conclusion";
     if (/对比|相比|同比|环比|高于|低于/u.test(text)) return "comparison";
-    if (hasSummary || index === total - 1) return "boundary";
-    return index === 0 ? "evidence" : "interpretation";
+    if (/边界|范围|不能|不可|不代表|不等于|无法|仅说明|只是/u.test(text)) return "boundary";
+    if (/\d+(?:\.\d+)?\s*(?:%|％|倍|万|亿|元|人|次|个|项|条|类|月|年|天)/u.test(text)) return "keyMetric";
+    return "interpretation";
   }
   if (variant === "story") {
-    if (index === 0) return "opening";
-    if (hasSummary || index === total - 1) return "ending";
+    if (hasSummary || index === total - 1) return "epilogue";
     if (/但是|但|问题|冲突|没想到|却/u.test(text)) return "conflict";
-    if (/后来|于是|直到|转折|改变/u.test(text) || index === Math.floor(total / 2)) return "turning";
+    if (index === 0) return "intro";
+    if (/后来|于是|直到|转折|改变/u.test(text) || index === Math.floor(total / 2)) return "transition";
     return "chapter";
   }
-  if (index === 0) return "opening";
+  if (index === 0) return "intro";
   if (hasQuote) return "quote";
-  if (hasSummary || index === total - 1) return "summary";
-  return seed.units.some((unit) => unit.role === "heading") ? "section" : "point";
+  if (hasSummary || index === total - 1) return "conclusion";
+  return seed.units.some((unit) => unit.role === "heading") ? "argument" : "point";
 }
 
 function longformPageKind(
-  variant: DesignScheme["layoutVariant"],
+  variant: DesignScheme["contentLayoutId"],
   units: SourceUnit[],
   index: number,
   total: number,
 ): PagePlanKind {
   const seed = { units, characterCount: units.reduce((count, unit) => count + unit.text.length, 0) };
-  return cardPageKind(variant, seed, index, total);
+  const kind = cardPageKind(variant, seed, index, total);
+  return kind;
 }
 
 function createPage(platform: PlatformId, index: number, kind: PagePlanKind, units: Array<SourceUnit | PlannedContentBlock>): PagePlan {
