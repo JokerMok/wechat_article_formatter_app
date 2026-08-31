@@ -62,6 +62,7 @@ export function drawCardImagePage(ctx: CardImageCanvasContext, page: CardLayoutP
   ctx.textBaseline = "top";
   ctx.textAlign = "left";
   drawPageFrame(ctx, page, preset);
+  drawPageKindAccent(ctx, page, preset);
 
   for (const node of page.nodes) {
     drawNode(ctx, node, preset, options);
@@ -150,7 +151,7 @@ function drawPageFrame(ctx: CardImageCanvasContext, page: CardLayoutPage, preset
     ctx.fillRect(page.safeArea.x, page.safeArea.y - 36, page.safeArea.width, 3);
     ctx.fillStyle = preset.muted;
     ctx.font = "600 22px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
-    ctx.fillText(`EDITORIAL  /  ${String(page.pageNumber).padStart(2, "0")}`, page.safeArea.x, labelY);
+    ctx.fillText(`编辑部  /  ${String(page.pageNumber).padStart(2, "0")}`, page.safeArea.x, labelY);
     return;
   }
 
@@ -162,7 +163,7 @@ function drawPageFrame(ctx: CardImageCanvasContext, page: CardLayoutPage, preset
     ctx.fillText(String(page.pageNumber).padStart(2, "0"), page.safeArea.x + page.safeArea.width - 104, labelY - 36);
     ctx.fillStyle = preset.muted;
     ctx.font = "700 20px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
-    ctx.fillText("ACTION LIST", page.safeArea.x, labelY + 20);
+    ctx.fillText(page.pageKind === "warning" ? "避坑提醒" : page.pageKind === "action" ? "执行清单" : "行动清单", page.safeArea.x, labelY + 20);
     return;
   }
 
@@ -173,7 +174,7 @@ function drawPageFrame(ctx: CardImageCanvasContext, page: CardLayoutPage, preset
     ctx.fillStyle = preset.title;
     ctx.fillRect(page.safeArea.x, page.safeArea.y - 36, page.safeArea.width, 4);
     ctx.font = "700 21px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
-    ctx.fillText(`INSIGHT ${String(page.pageNumber).padStart(2, "0")}`, page.safeArea.x, labelY);
+    ctx.fillText(`数据编辑部  ${String(page.pageNumber).padStart(2, "0")}`, page.safeArea.x, labelY);
     return;
   }
 
@@ -181,8 +182,54 @@ function drawPageFrame(ctx: CardImageCanvasContext, page: CardLayoutPage, preset
   ctx.fillRect(page.safeArea.x, page.safeArea.y - 34, 72, 3);
   ctx.fillRect(page.safeArea.x, page.safeArea.y - 34, 2, page.safeArea.height + 52);
   ctx.fillStyle = preset.title;
-  ctx.font = "600 22px Songti SC, STSong, SimSun, serif";
-  ctx.fillText(`CHAPTER  ${String(page.pageNumber).padStart(2, "0")}`, page.safeArea.x + 20, labelY);
+  ctx.font = "600 22px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+  ctx.fillText(`${storyLabel(page.pageKind)}  ${String(page.pageNumber).padStart(2, "0")}`, page.safeArea.x + 20, labelY);
+}
+
+function drawPageKindAccent(ctx: CardImageCanvasContext, page: CardLayoutPage, preset: CardCanvasPreset) {
+  if (page.pageKind === "cover") {
+    ctx.fillStyle = preset.rule;
+    ctx.fillRect(page.safeArea.x, page.safeArea.y + page.safeArea.height - 20, Math.min(160, page.safeArea.width * 0.22), 3);
+    return;
+  }
+  if (page.pageKind === "warning") {
+    ctx.strokeStyle = preset.rule;
+    ctx.setLineDash([10, 10]);
+    ctx.strokeRect(page.safeArea.x - 22, page.safeArea.y + 20, page.safeArea.width + 44, page.safeArea.height - 40);
+    ctx.setLineDash([]);
+    return;
+  }
+  if (page.pageKind === "keyMetric") {
+    const metric = page.nodes.map((node) => node.text).join(" ").match(/\d+(?:\.\d+)?\s*(?:%|％|倍|万|亿|元|人|次|个|项|条|类|月|年|天)?/u)?.[0];
+    if (!metric) return;
+    ctx.fillStyle = `${preset.title}18`;
+    ctx.font = "800 118px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(metric, page.safeArea.x + page.safeArea.width, page.safeArea.y + 14);
+    ctx.textAlign = "left";
+    return;
+  }
+  if (page.pageKind === "turning") {
+    ctx.fillStyle = preset.title;
+    ctx.fillRect(page.safeArea.x, page.safeArea.y + 46, 72, 7);
+    ctx.fillStyle = preset.muted;
+    ctx.font = "600 22px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+    ctx.fillText("转折", page.safeArea.x + 90, page.safeArea.y + 34);
+    return;
+  }
+  if (page.pageKind === "ending" || page.pageKind === "summary") {
+    ctx.fillStyle = preset.rule;
+    const width = Math.min(180, page.safeArea.width * 0.24);
+    ctx.fillRect(page.canvas.width / 2 - width / 2, page.safeArea.y + page.safeArea.height - 16, width, 3);
+  }
+}
+
+function storyLabel(kind: CardLayoutPage["pageKind"]) {
+  if (kind === "conflict") return "冲突";
+  if (kind === "turning") return "转折";
+  if (kind === "ending") return "尾声";
+  if (kind === "opening") return "开场";
+  return "章节";
 }
 
 function drawPageIndicator(ctx: CardImageCanvasContext, page: CardLayoutPage, preset: CardCanvasPreset) {

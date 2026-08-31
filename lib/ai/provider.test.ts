@@ -64,7 +64,11 @@ describe("OpenAICompatibleProvider", () => {
   });
 
   it("TEST-007 generates validated platform versions without exposing secrets in diagnostics", async () => {
-    const fetchMock = vi.fn(async () => jsonResponse(validFixture));
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      void input;
+      void init;
+      return jsonResponse(validFixture);
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await generatePlatformVersions({
@@ -99,6 +103,29 @@ describe("OpenAICompatibleProvider", () => {
     const requestBody = JSON.parse(String((init as RequestInit | undefined)?.body)) as { messages: Array<{ content: string }> };
     expect(requestBody.messages[1]?.content).toContain('"sourceText"');
     expect(requestBody.messages[1]?.content).not.toContain('"startLine"');
+  });
+
+  it("keeps source wording when layout-only mode is selected even if the model rewrites it", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      void input;
+      void init;
+      return jsonResponse(validFixture);
+    });
+    const result = await generatePlatformVersions({
+      provider: new OpenAICompatibleProvider({ ...baseProviderConfig, fetchImpl: fetchMock }),
+      source,
+      sourceVersionId: "source-layout-only",
+      generationMode: "layoutOnly",
+      platforms: ["wechat", "xiaohongshu"],
+      now: () => "2026-08-21T00:00:00.000Z",
+    });
+
+    expectOk(result);
+    expect(result.designPlan.generationMode).toBe("layoutOnly");
+    expect(result.versions.wechat?.title).toBe("知识库重构");
+    expect(result.versions.wechat?.content.blocks.map((block) => block.plainText).join("\n")).toContain("资料散落在不同地方。");
+    expect(result.versions.wechat?.content.blocks.map((block) => block.plainText).join("\n")).not.toContain("先做可编辑版本");
+    expect(result.changes.some((change) => change.field === "title")).toBe(false);
   });
 
   it("TEST-008 keeps existing content on schema errors and returns fallback versions", async () => {
@@ -687,10 +714,10 @@ describe("OpenAICompatibleProvider", () => {
     expect(result.designPlan).toMatchObject({
       contentType: "checklistGuide",
       recommendedScheme: "checklistGuide",
-      visualStyle: "高能清单",
+      visualStyle: "行动清单",
       recommendedTitle: "企业知识库整理清单",
     });
-    expect(result.designPlan.palette.primary).toBe("#0E5B4B");
+    expect(result.designPlan.palette.primary).toBe("#A33A35");
   });
 
   it("falls back to the local design plan when AI design fields are illegal", async () => {

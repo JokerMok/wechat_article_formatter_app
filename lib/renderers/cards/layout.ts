@@ -746,13 +746,54 @@ function pageSortKey(id: string) {
 function numberPages(pages: PageDraft[], aspectRatio: CardAspectRatio): CardLayoutPage[] {
   const totalPages = pages.length;
   const ids = getUniquePageIds(pages);
-  return pages.map((page, index) => ({
+  return pages.map((page, index) => applyPageSkeleton({
     ...page,
     id: ids[index],
+    pageKind: page.pageKind ?? inferPageKind(page),
     pageNumber: index + 1,
     totalPages,
     aspectRatio,
   }));
+}
+
+function inferPageKind(page: Pick<CardLayoutPage, "nodes">): CardLayoutPage["pageKind"] {
+  for (const node of page.nodes) {
+    const match = node.blockId.match(/:page:([A-Za-z]+):\d+:block:/u);
+    if (match?.[1]) return match[1] as CardLayoutPage["pageKind"];
+  }
+  return undefined;
+}
+
+function applyPageSkeleton(page: CardLayoutPage): CardLayoutPage {
+  if (!page.pageKind || page.nodes.length === 0 || page.manual || page.locked) return page;
+  const top = Math.min(...page.nodes.map((node) => node.y));
+  const bottom = Math.max(...page.nodes.map((node) => node.y + node.height));
+  const contentHeight = bottom - top;
+  const available = page.safeArea.height - contentHeight;
+  if (available <= 0) return page;
+
+  const centered = page.pageKind === "cover" || page.pageKind === "summary" || page.pageKind === "ending";
+  const lowered = page.pageKind === "turning" || page.pageKind === "quote" || page.pageKind === "keyMetric";
+  const compact = contentHeight <= page.safeArea.height * 0.68;
+  const targetTop = centered
+    ? page.safeArea.y + Math.round(available * 0.5)
+    : lowered
+      ? page.safeArea.y + Math.round(available * 0.46)
+      : compact
+        ? page.safeArea.y + Math.round(available * 0.42)
+        : top;
+  const delta = Math.max(0, targetTop - top);
+  if (!delta) return page;
+
+  return {
+    ...page,
+    nodes: page.nodes.map((node) => ({
+      ...node,
+      y: node.y + delta,
+      lines: node.lines.map((line) => ({ ...line, y: line.y + delta })),
+      image: node.image ? { ...node.image, y: node.image.y + delta } : undefined,
+    })),
+  };
 }
 
 export function ensureUniqueCardPageIds(pages: CardLayoutPage[]): CardLayoutPage[] {

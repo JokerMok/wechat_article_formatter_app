@@ -33,7 +33,7 @@ export function DesignPlanDrawer(props: {
   const isCardPlatform = props.activePlatform === "xiaohongshu" || props.activePlatform === "douyinImage";
   const visibleSchemes = [
     DESIGN_SCHEMES[props.plan.recommendedScheme],
-    ...getAlternativeSchemes(props.plan.recommendedScheme, 2, props.plan.contentType),
+    ...getAlternativeSchemes(props.plan.recommendedScheme, 3, props.plan.contentType),
   ];
 
   if (!props.open) return null;
@@ -67,6 +67,14 @@ export function DesignPlanDrawer(props: {
             )}
           </div>
           <p className="mt-2 text-xs leading-5 text-[#496157]">{props.plan.recommendationReason}</p>
+          <p className="mt-2 border-t border-[#cfe0d6] pt-2 text-xs leading-5 text-[#496157]">
+            {props.plan.generationMode === "layoutOnly" ? "仅排版：保留原文措辞，只调整结构与视觉。" : "传播力优化：允许优化表达，并保留修改摘要。"}
+          </p>
+          {!!props.plan.modificationSummary.length && (
+            <ul className="mt-2 space-y-1 text-xs leading-5 text-[#496157]">
+              {props.plan.modificationSummary.map((item) => <li key={item}>· {item}</li>)}
+            </ul>
+          )}
           {props.draft.schemeId !== props.plan.recommendedScheme && (
             <Button type="button" size="sm" variant="outline" className="mt-3" onClick={() => setPendingScheme(props.plan.recommendedScheme)}>
               <RotateCcw className="h-4 w-4" /> 恢复推荐方案
@@ -80,6 +88,10 @@ export function DesignPlanDrawer(props: {
               key={scheme.id}
               scheme={scheme}
               title={props.plan.recommendedTitle}
+              sample={props.plan.keyPoints[0] ?? props.plan.coreMessage}
+              recommendation={scheme.contentTypes.includes(props.plan.contentType)
+                ? "适合当前识别出的内容结构"
+                : `适合${scheme.structure.slice(0, 2).join("、")}型内容`}
               active={scheme.id === props.draft.schemeId}
               favorite={props.favoriteSchemeIds.includes(scheme.id)}
               recent={props.recentSchemeIds.includes(scheme.id)}
@@ -105,7 +117,7 @@ export function DesignPlanDrawer(props: {
             <div className="mt-4 grid gap-4">
               <DrawerRange label="边距" value={props.layout.margin} min={48} max={140} step={2} onChange={(margin) => props.onLayoutChange({ margin })} />
               <DrawerRange label="标题字号" value={props.layout.titleFontSize} min={48} max={92} step={1} onChange={(titleFontSize) => props.onLayoutChange({ titleFontSize })} />
-              <DrawerRange label="正文字号" value={props.layout.bodyFontSize} min={25} max={44} step={1} onChange={(bodyFontSize) => props.onLayoutChange({ bodyFontSize })} />
+              <DrawerRange label="正文字号" value={props.layout.bodyFontSize} min={30} max={44} step={1} onChange={(bodyFontSize) => props.onLayoutChange({ bodyFontSize })} />
               <DrawerRange label="行距" value={props.layout.lineSpacing} min={1.1} max={1.8} step={0.05} onChange={(lineSpacing) => props.onLayoutChange({ lineSpacing })} />
               <DrawerRange label="段距" value={props.layout.paragraphSpacing} min={18} max={64} step={1} onChange={(paragraphSpacing) => props.onLayoutChange({ paragraphSpacing })} />
             </div>
@@ -143,6 +155,8 @@ export function DesignPlanDrawer(props: {
 function SchemeCard(props: {
   scheme: DesignScheme;
   title: string;
+  sample: string;
+  recommendation: string;
   active: boolean;
   favorite: boolean;
   recent: boolean;
@@ -151,12 +165,13 @@ function SchemeCard(props: {
 }) {
   return (
     <article className={cn("grid grid-cols-[96px_1fr] gap-3 rounded-md border bg-white p-3", props.active ? "border-[#17633d] ring-1 ring-[#17633d]/15" : "border-[#dfe5e1]") }>
-      <SchemeThumbnail scheme={props.scheme} title={props.title} />
+      <SchemeThumbnail scheme={props.scheme} title={props.title} sample={props.sample} />
       <div className="min-w-0">
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
             <h3 className="font-semibold">{props.scheme.name}</h3>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">{props.scheme.description}</p>
+            <p className="mt-1 text-[11px] font-medium text-[#6f4b47]">{props.recommendation}</p>
           </div>
           <Button type="button" size="icon" variant="ghost" className="h-8 w-8" onClick={props.onToggleFavorite} aria-label={props.favorite ? `取消收藏${props.scheme.name}` : `收藏${props.scheme.name}`}>
             <Star className={cn("h-4 w-4", props.favorite && "fill-[#b48028] text-[#b48028]")} />
@@ -178,12 +193,12 @@ function SchemeCard(props: {
   );
 }
 
-function SchemeThumbnail({ scheme, title }: { scheme: DesignScheme; title: string }) {
+function SchemeThumbnail({ scheme, title, sample }: { scheme: DesignScheme; title: string; sample: string }) {
   const frame = "relative aspect-[3/4] overflow-hidden rounded border p-2";
   if (scheme.layoutVariant === "checklist") {
     return (
       <div className={frame} style={{ background: scheme.palette.background, borderColor: scheme.palette.secondary }}>
-        <div className="text-[7px] font-bold" style={{ color: scheme.palette.primary }}>ACTION LIST</div>
+        <div className="text-[7px] font-bold" style={{ color: scheme.palette.primary }}>行动清单</div>
         <div className="absolute right-2 top-1 text-2xl font-black" style={{ color: scheme.palette.secondary }}>03</div>
         <div className="mt-5 line-clamp-2 text-[8px] font-extrabold leading-[1.3]" style={{ color: scheme.palette.text }}>{title}</div>
         {[1, 2, 3].map((item) => (
@@ -192,6 +207,7 @@ function SchemeThumbnail({ scheme, title }: { scheme: DesignScheme; title: strin
             <span className="h-1 flex-1" style={{ background: scheme.palette.secondary }} />
           </div>
         ))}
+        <div className="mt-2 line-clamp-2 text-[6px] leading-[1.45]" style={{ color: scheme.palette.text }}>{sample}</div>
       </div>
     );
   }
@@ -200,11 +216,10 @@ function SchemeThumbnail({ scheme, title }: { scheme: DesignScheme; title: strin
       <div className={frame} style={{ background: scheme.palette.background, borderColor: scheme.palette.secondary }}>
         <div className="grid h-full grid-cols-2 gap-px" style={{ background: `${scheme.palette.secondary}55` }}>
           <div className="col-span-2 bg-white/90 p-1.5">
-            <div className="text-[6px] font-bold" style={{ color: scheme.palette.primary }}>INSIGHT 01</div>
+            <div className="text-[6px] font-bold" style={{ color: scheme.palette.primary }}>数据编辑部 01</div>
             <div className="mt-1 line-clamp-2 text-[8px] font-extrabold leading-tight" style={{ color: scheme.palette.text }}>{title}</div>
           </div>
-          <div className="bg-white/90 p-1"><b className="text-sm" style={{ color: scheme.palette.primary }}>68%</b><i className="mt-1 block h-1 w-3/4" style={{ background: scheme.palette.secondary }} /></div>
-          <div className="bg-white/90 p-1"><b className="text-sm" style={{ color: scheme.palette.primary }}>2.4x</b><i className="mt-1 block h-1 w-2/3" style={{ background: scheme.palette.secondary }} /></div>
+          <div className="col-span-2 bg-white/90 p-1 text-[6px] leading-[1.4]" style={{ color: scheme.palette.text }}>{sample}</div>
         </div>
       </div>
     );
@@ -213,22 +228,24 @@ function SchemeThumbnail({ scheme, title }: { scheme: DesignScheme; title: strin
     return (
       <div className={frame} style={{ background: scheme.palette.background, borderColor: scheme.palette.secondary }}>
         <div className="absolute bottom-2 left-3 top-2 w-px" style={{ background: scheme.palette.secondary }} />
-        <div className="pl-2 text-[6px] font-semibold" style={{ color: scheme.palette.primary }}>CHAPTER 01</div>
-        <div className="mt-6 line-clamp-3 pl-2 font-serif text-[10px] font-bold leading-[1.45]" style={{ color: scheme.palette.text }}>{title}</div>
+        <div className="pl-2 text-[6px] font-semibold" style={{ color: scheme.palette.primary }}>章节 01</div>
+        <div className="mt-6 line-clamp-3 pl-2 text-[10px] font-bold leading-[1.45]" style={{ color: scheme.palette.text }}>{title}</div>
         <div className="ml-2 mt-4 h-px w-10" style={{ background: scheme.palette.secondary }} />
         <div className="ml-2 mt-3 h-1 w-5/6" style={{ background: `${scheme.palette.text}44` }} />
         <div className="ml-2 mt-1 h-1 w-3/4" style={{ background: `${scheme.palette.text}33` }} />
+        <div className="ml-2 mt-2 line-clamp-2 text-[6px] leading-[1.45]" style={{ color: scheme.palette.text }}>{sample}</div>
       </div>
     );
   }
   return (
     <div className={frame} style={{ background: scheme.palette.background, borderColor: scheme.palette.secondary }}>
-      <div className="text-[6px] font-semibold" style={{ color: `${scheme.palette.text}88` }}>EDITORIAL / 01</div>
+      <div className="text-[6px] font-semibold" style={{ color: `${scheme.palette.text}88` }}>编辑部 / 01</div>
       <div className="mt-2 h-px w-full" style={{ background: scheme.palette.secondary }} />
       <div className="mt-5 line-clamp-3 text-[9px] font-extrabold leading-[1.35]" style={{ color: scheme.palette.text }}>{title}</div>
       <div className="mt-4 h-1 w-10" style={{ background: scheme.palette.primary }} />
       <div className="mt-3 h-1 w-full" style={{ background: `${scheme.palette.text}33` }} />
       <div className="mt-1 h-1 w-4/5" style={{ background: `${scheme.palette.text}26` }} />
+      <div className="mt-2 line-clamp-2 text-[6px] leading-[1.45]" style={{ color: scheme.palette.text }}>{sample}</div>
     </div>
   );
 }

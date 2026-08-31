@@ -3,7 +3,19 @@ import { getDesignScheme, type DesignSchemeId } from "../design-schemes";
 import { collectTags, renderBlockText, stableChecksum } from "../platforms/platform-profiles";
 import type { PlatformId } from "../platforms/types";
 import { cleanPublishingText, isGenericStructureHeading, isWeakPublishingText, publicationBlocks } from "./content-filter";
-import type { ContentBlockRole, ContentTone, ContentType, DesignPlan, DesignPlanBlock } from "./types";
+import { buildPlatformDesignPlans } from "./platform-planner";
+import type {
+  ContentBlockRole,
+  ContentBlueprint,
+  ContentSection,
+  ContentSectionPurpose,
+  ContentTone,
+  ContentType,
+  DesignPlan,
+  DesignPlanBlock,
+  GenerationMode,
+  SourceFact,
+} from "./types";
 
 type ContentRule = { id: ContentType; pattern: RegExp; weight: number };
 
@@ -11,7 +23,7 @@ const CONTENT_RULES: ContentRule[] = [
   { id: "knowledgeTutorial", pattern: /教程|入门|指南|怎么做|如何|操作|配置|使用方法|实操|流程/, weight: 3 },
   { id: "checklistGuide", pattern: /清单|攻略|避坑|检查项|注意事项|步骤|工具推荐|要点/, weight: 4 },
   { id: "opinionAnalysis", pattern: /我认为|真正关键|本质|不是.+而是|观点|判断|为什么|反常识|核心问题/, weight: 3 },
-  { id: "dataInsight", pattern: /数据|报告|趋势|增长|下降|同比|环比|调查|比例|统计|样本|\d+(?:\.\d+)?%/, weight: 4 },
+  { id: "dataInsight", pattern: /数据|报告|趋势|增长|下降|同比|环比|调查|比例|统计|样本|\d+(?:\.\d+)?\s*(?:%|％|倍|万|亿|元|人|次|个|项|条|类|月|年|天)/, weight: 4 },
   { id: "caseReview", pattern: /案例|复盘|项目|客户|交付|实施|问题|解决方案|结果|验收/, weight: 3 },
   { id: "storyNarrative", pattern: /那天|后来|第一次|当时|直到|没想到|故事|经历|转折|最后/, weight: 3 },
   { id: "productIntroduction", pattern: /产品|功能|能力|适用场景|选型|配置建议|版本|服务/, weight: 3 },
@@ -40,11 +52,17 @@ export const CONTENT_TYPE_LABELS: Record<ContentType, string> = {
   experienceSharing: "经验分享",
 };
 
-export function analyzeArticleDesign(content: UnifiedArticleContent): DesignPlan {
+export type AnalyzeArticleDesignOptions = {
+  generationMode?: GenerationMode;
+  recommendedScheme?: DesignSchemeId;
+};
+
+export function analyzeArticleDesign(content: UnifiedArticleContent, options: AnalyzeArticleDesignOptions = {}): DesignPlan {
   const sourceRevision = stableChecksum(content.sourceText);
   const publishableContent = { ...content, blocks: publicationBlocks(content) };
   const contentType = detectContentType(content);
-  const recommendedScheme = CONTENT_TYPE_SCHEME[contentType];
+  const generationMode = options.generationMode ?? "layoutOnly";
+  const recommendedScheme = options.recommendedScheme ?? CONTENT_TYPE_SCHEME[contentType];
   const scheme = getDesignScheme(recommendedScheme);
   const title = cleanTitle(content.title || firstMeaningfulText(publishableContent, ["title", "section", "paragraph"]) || "未命名文章", 72);
   const coreMessage = cleanLine(firstMeaningfulText(publishableContent, ["summary", "golden", "quote", "lead", "paragraph"]) || title, 280);
@@ -57,12 +75,33 @@ export function analyzeArticleDesign(content: UnifiedArticleContent): DesignPlan
   const publishableText = publishableContent.blocks.map((block) => renderBlockText(block) ?? "").join("\n");
   const targetAudience = detectAudience(publishableText);
   const tags = collectTags(publishableContent, 8);
-  const titleCandidates = buildTitleCandidates(title, contentType, keyPoints.length);
-  const callToAction = cleanLine(firstMeaningfulText(content, ["cta"]) || defaultCallToAction(contentType), 180);
+  const titleCandidates = generationMode === "layoutOnly" ? [title] : buildTitleCandidates(title, contentType, keyPoints.length);
+  const sourceCallToAction = cleanLine(firstMeaningfulText(content, ["cta"]), 180);
+  const callToAction = generationMode === "layoutOnly" ? sourceCallToAction : sourceCallToAction || defaultCallToAction(contentType);
+  const recommendedTitle = titleCandidates[0] ?? title;
+  const modificationSummary = generationMode === "layoutOnly"
+    ? []
+    : ["提供标题候选并保留原题", "提炼开头钩子和核心信息", "按平台阅读习惯调整内容顺序", "保留原文事实、限定条件和人工编辑"];
+  const blueprint: ContentBlueprint = {
+    schemaVersion: 1,
+    generationMode,
+    contentType,
+    targetAudience,
+    sourceFacts: buildSourceFacts(publishableContent),
+    coreMessage,
+    titleCandidates,
+    openingHook,
+    sections: buildContentSections(publishableContent, contentType),
+    conclusion,
+    ...(callToAction ? { callToAction } : {}),
+    modificationSummary,
+  };
+  const platformPlans = buildPlatformDesignPlans(content, blueprint, scheme);
 
   return {
     schemaVersion: 1,
     sourceRevision,
+    generationMode,
     contentType,
     targetAudience,
     coreMessage,
@@ -83,12 +122,70 @@ export function analyzeArticleDesign(content: UnifiedArticleContent): DesignPlan
     callToAction,
     recommendationReason: recommendationReasonFor(contentType, scheme.name),
     titleCandidates,
-    recommendedTitle: titleCandidates[0],
+    recommendedTitle,
     openingHook,
     keyPoints,
     conclusion,
     tags,
+    blueprint,
+    platformPlans,
+    modificationSummary,
   };
+}
+
+function buildSourceFacts(content: UnifiedArticleContent): SourceFact[] {
+  return content.blocks.flatMap((block, index) => {
+    if (block.type === "pageBreak" || block.type === "divider" || block.type === "code" || block.type === "image") return [];
+    const values = block.type === "list"
+      ? block.items
+      : block.type === "card"
+        ? [[block.title, block.body].filter(Boolean).join("：")]
+        : [block.text];
+    return values.map(cleanPublishingText).filter(Boolean).map((text, valueIndex) => ({
+      id: `fact-${index + 1}-${valueIndex + 1}`,
+      text,
+      sourceBlockIds: [block.id],
+    }));
+  });
+}
+
+function buildContentSections(content: UnifiedArticleContent, contentType: ContentType): ContentSection[] {
+  const sections: ContentSection[] = [];
+  let current: ContentSection | undefined;
+  for (const block of content.blocks) {
+    if (block.type === "title" || block.type === "pageBreak" || block.type === "divider" || block.type === "code") continue;
+    if (block.type === "section" || block.type === "subsection") {
+      current = {
+        id: `section-${sections.length + 1}`,
+        title: cleanPublishingText(block.text),
+        purpose: sectionPurpose(contentType, sections.length),
+        sourceBlockIds: [block.id],
+      };
+      sections.push(current);
+      continue;
+    }
+    if (!current) {
+      current = {
+        id: "section-1",
+        purpose: "opening",
+        sourceBlockIds: [],
+      };
+      sections.push(current);
+    }
+    current.sourceBlockIds.push(block.id);
+  }
+  if (sections.length > 1) sections[sections.length - 1]!.purpose = "conclusion";
+  return sections;
+}
+
+function sectionPurpose(contentType: ContentType, index: number): ContentSectionPurpose {
+  if (index === 0) return "opening";
+  if (contentType === "checklistGuide" || contentType === "knowledgeTutorial") return "step";
+  if (contentType === "dataInsight") return "evidence";
+  if (contentType === "caseReview" || contentType === "storyNarrative" || contentType === "experienceSharing") {
+    return index === 1 ? "conflict" : "turning";
+  }
+  return "argument";
 }
 
 export function detectContentType(content: UnifiedArticleContent): ContentType {

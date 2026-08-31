@@ -82,10 +82,49 @@ function buildIntroText(blocks: RenderableBlock[], blocksMaxWords: number) {
   return clampText(firstParagraph?.text ?? "", blocksMaxWords * 2);
 }
 
+function selectLongformIntro(blocks: RenderableBlock[], targetWords: number) {
+  const lead = blocks.find((block) => block.kind === "lead");
+  if (lead?.text) {
+    return { text: clampText(lead.text, targetWords * 2), sourceBlockId: lead.blockId, remainder: "" };
+  }
+
+  const source = blocks.find((block) => block.kind === "paragraph")
+    ?? blocks.find((block) => block.kind === "section");
+  if (!source?.text) return { text: "", sourceBlockId: undefined, remainder: "" };
+
+  const maxChars = Math.max(1, targetWords * 2);
+  const normalized = source.text.trim();
+  if (normalized.length <= maxChars) {
+    return { text: normalized, sourceBlockId: source.blockId, remainder: "" };
+  }
+
+  const extendedLimit = Math.min(normalized.length, maxChars + Math.min(12, Math.ceil(maxChars * 0.3)));
+  const sentenceEnd = [...normalized.slice(0, extendedLimit).matchAll(/[。！？；]/gu)].at(-1);
+  const sentenceCut = sentenceEnd?.index === undefined ? 0 : sentenceEnd.index + sentenceEnd[0].length;
+  const commaCut = Math.max(normalized.lastIndexOf("，", maxChars - 1), normalized.lastIndexOf(",", maxChars - 1)) + 1;
+  const cut = sentenceCut >= Math.ceil(maxChars * 0.65)
+    ? sentenceCut
+    : commaCut >= Math.ceil(maxChars * 0.55)
+      ? commaCut
+      : maxChars;
+
+  return {
+    text: normalized.slice(0, cut).trim(),
+    sourceBlockId: source.blockId,
+    remainder: normalized.slice(cut).trim(),
+  };
+}
+
 function buildLongformBody(blocks: RenderableBlock[], profile: DouyinLongformProfile) {
-  const bodyBlocks = blocks.filter((block) => block.kind !== "title" && block.kind !== "lead" && block.kind !== "cta");
-  const bodyText = bodyBlocks.map((block) => block.text).join("\n\n");
-  const intro = buildIntroText(blocks, profile.introTargetWords);
+  const introSelection = selectLongformIntro(blocks, profile.introTargetWords);
+  const bodyBlocks = blocks
+    .filter((block) => block.kind !== "title" && block.kind !== "lead" && block.kind !== "cta")
+    .flatMap((block) => {
+      if (block.blockId !== introSelection.sourceBlockId) return [block];
+      return introSelection.remainder ? [{ ...block, text: introSelection.remainder }] : [];
+    });
+  const bodyText = renderLongformBodyText(bodyBlocks);
+  const intro = introSelection.text;
   const ending = (() => {
     const endingCandidate = blocks.findLast((block) => block.kind === "summary" || block.kind === "cta" || block.kind === "section");
     return clampText(endingCandidate?.text ?? intro, profile.endingTargetWords);
@@ -104,6 +143,18 @@ function buildLongformBody(blocks: RenderableBlock[], profile: DouyinLongformPro
     highlights: highlights.length ? highlights : fallbackHighlight ? [clampText(fallbackHighlight.text, 48)] : [],
   };
 };
+
+function renderLongformBodyText(blocks: RenderableBlock[]) {
+  let listIndex = 0;
+  return blocks.map((block) => {
+    if (block.kind === "list") {
+      listIndex += 1;
+      return `${listIndex}. ${block.text.replace(/^\d+\.\s*/u, "")}`;
+    }
+    listIndex = 0;
+    return block.text;
+  }).join("\n\n");
+}
 
 export type DouyinImageOptions = {
   ratio?: DouyinImageRatio;

@@ -2,6 +2,7 @@ import type { PlatformId } from "../platforms/types";
 import type { DesignScheme, DesignSchemeId } from "./types";
 
 const ALL_PLATFORMS: PlatformId[] = ["wechat", "xiaohongshu", "douyinImage", "douyinLongform"];
+const EDITORIAL_PALETTE = { primary: "#A33A35", secondary: "#D8CCC4", background: "#FCFBF8", text: "#211F1D" } as const;
 
 export const DESIGN_SCHEMES: Record<DesignSchemeId, DesignScheme> = {
   knowledgeMinimal: {
@@ -12,7 +13,7 @@ export const DESIGN_SCHEMES: Record<DesignSchemeId, DesignScheme> = {
     platforms: ALL_PLATFORMS,
     density: "均衡",
     layoutVariant: "editorial",
-    palette: { primary: "#B23A32", secondary: "#E8D8D1", background: "#FCFBF8", text: "#1E1E1C" },
+    palette: { ...EDITORIAL_PALETTE },
     typography: { titleScale: 1.06, headingScale: 1, bodyScale: 1, lineHeight: 1.78 },
     structure: ["编辑导语", "章节论证", "独立重点句", "结论回收"],
     platformRules: {
@@ -25,14 +26,14 @@ export const DESIGN_SCHEMES: Record<DesignSchemeId, DesignScheme> = {
   },
   dataInsight: {
     id: "dataInsight",
-    name: "数据洞察",
-    description: "先呈现有来源的数据与结论，再用规整网格说明对比、依据和判断。",
+    name: "数据编辑部",
+    description: "沿用编辑部网格，以关键数字、证据、对比和边界构成独立的数据骨架。",
     contentTypes: ["dataInsight"],
     platforms: ALL_PLATFORMS,
     density: "紧凑",
     layoutVariant: "data",
-    palette: { primary: "#155E75", secondary: "#D4A72C", background: "#F6FAFA", text: "#153238" },
-    typography: { titleScale: 1, headingScale: 0.98, bodyScale: 0.95, lineHeight: 1.66 },
+    palette: { ...EDITORIAL_PALETTE },
+    typography: { titleScale: 1.02, headingScale: 1, bodyScale: 0.96, lineHeight: 1.68 },
     structure: ["数据结论", "证据网格", "对比解释", "判断边界"],
     platformRules: {
       wechat: { purpose: "可信解读", structure: ["结论", "数据", "解释", "边界"], maxContentBlocks: 36 },
@@ -44,14 +45,14 @@ export const DESIGN_SCHEMES: Record<DesignSchemeId, DesignScheme> = {
   },
   checklistGuide: {
     id: "checklistGuide",
-    name: "高能清单",
-    description: "用大数字和明确动作拆解步骤、工具与避坑点，方便快速扫读和执行。",
+    name: "行动清单",
+    description: "保留大数字、单结论页、步骤页和动作页，用编辑部字体与留白统一呈现。",
     contentTypes: ["checklistGuide", "knowledgeTutorial"],
     platforms: ALL_PLATFORMS,
     density: "均衡",
     layoutVariant: "checklist",
-    palette: { primary: "#0E5B4B", secondary: "#E8C547", background: "#F8F8F2", text: "#172B25" },
-    typography: { titleScale: 1, headingScale: 1.08, bodyScale: 0.96, lineHeight: 1.68 },
+    palette: { ...EDITORIAL_PALETTE },
+    typography: { titleScale: 1.02, headingScale: 1.08, bodyScale: 0.96, lineHeight: 1.68 },
     structure: ["任务定义", "编号步骤", "风险提醒", "执行清单"],
     platformRules: {
       wechat: { purpose: "可执行教程", structure: ["目标", "步骤", "提醒", "清单"], maxContentBlocks: 36 },
@@ -63,13 +64,13 @@ export const DESIGN_SCHEMES: Record<DesignSchemeId, DesignScheme> = {
   },
   storyNarrative: {
     id: "storyNarrative",
-    name: "故事杂志",
-    description: "用强封面、章节转折和更舒展的图文节奏承载经历、案例与复盘。",
+    name: "故事专刊",
+    description: "保留章节、冲突、转折、对照和尾声页，以编辑部网格建立连续叙事节奏。",
     contentTypes: ["storyNarrative", "caseReview", "experienceSharing", "productIntroduction"],
     platforms: ALL_PLATFORMS,
     density: "舒展",
     layoutVariant: "story",
-    palette: { primary: "#7B3F4A", secondary: "#D5B88E", background: "#FCF8F3", text: "#33282A" },
+    palette: { ...EDITORIAL_PALETTE },
     typography: { titleScale: 1.08, headingScale: 1, bodyScale: 1, lineHeight: 1.84 },
     structure: ["场景封面", "冲突出现", "关键转折", "结果回收"],
     platformRules: {
@@ -103,7 +104,7 @@ export function cardPresetForScheme(id: DesignSchemeId) {
     title: scheme.palette.primary,
     body: scheme.palette.text,
     rule: scheme.palette.secondary,
-    highlight: scheme.palette.secondary,
+    highlight: "#F6F0EC",
     dots: `${scheme.palette.primary}38`,
     surface: "#FFFFFF",
     muted: `${scheme.palette.text}A3`,

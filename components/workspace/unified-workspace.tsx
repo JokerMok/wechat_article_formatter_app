@@ -26,7 +26,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Toggle } from "@/components/ui/toggle";
 import { copyRichText } from "@/lib/copy-rich-text";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "@/lib/content";
-import type { DesignPlan } from "@/lib/design-plan";
+import { analyzeArticleDesign, type DesignPlan, type GenerationMode } from "@/lib/design-plan";
 import { cardPresetForScheme, DESIGN_SCHEMES, type DesignSchemeId } from "@/lib/design-schemes";
 import type { PlatformId } from "@/lib/platforms/types";
 import {
@@ -296,9 +296,7 @@ export default function UnifiedWorkspace() {
     const densityScale = scheme.density === "舒展" ? 1.12 : scheme.density === "紧凑" ? 0.86 : 1;
     const lineHeightScale = scheme.typography.lineHeight / 1.78;
     const topOffset = scheme.layoutVariant === "story" ? 90 : scheme.layoutVariant === "checklist" ? 74 : 64;
-    const fontFamily = scheme.layoutVariant === "story"
-      ? "Songti SC, STSong, SimSun, Georgia, serif"
-      : "-apple-system, BlinkMacSystemFont, Helvetica Neue, PingFang SC, Microsoft YaHei, Arial, sans-serif";
+    const fontFamily = "-apple-system, BlinkMacSystemFont, Helvetica Neue, PingFang SC, Microsoft YaHei, Arial, sans-serif";
     const targetPages = activePlatform === "xiaohongshu"
       ? workspace.designPlan.pagination.xiaohongshuTargetPages
       : workspace.designPlan.pagination.douyinImageTargetPages;
@@ -741,6 +739,7 @@ export default function UnifiedWorkspace() {
         provider,
         source: sourceArticle,
         sourceVersionId: workspaceRef.current.sourceRevision,
+        generationMode: workspaceRef.current.designPlan.generationMode,
         platforms: [platform],
         existingVersions: platformVersionsFromDrafts(workspaceRef.current.platforms),
         signal: controller.signal,
@@ -916,9 +915,8 @@ export default function UnifiedWorkspace() {
   }
 
   function insertAsset(asset: AssetPlaceholder) {
-    updateWorkspace({
-      sourceMarkdown: `${workspace.sourceMarkdown.trimEnd()}\n\n![${asset.fileName.replace(/\.[^.]+$/, "")}](asset:${asset.id})\n`,
-    });
+    const sourceMarkdown = `${workspaceRef.current.sourceMarkdown.trimEnd()}\n\n![${asset.fileName.replace(/\.[^.]+$/, "")}](asset:${asset.id})\n`;
+    replaceWorkspace(updateWorkspaceSource(workspaceRef.current, sourceMarkdown));
     setMode("source");
     setStatusMessage("图片已插入源文，重新生成后同步到平台预览");
   }
@@ -1025,20 +1023,17 @@ export default function UnifiedWorkspace() {
     const current = workspaceRef.current;
     const currentDraft = current.platforms[activePlatform];
     const scheme = DESIGN_SCHEMES[schemeId];
+    const structuralPlan = analyzeArticleDesign(sourceArticle, {
+      generationMode: current.designPlan.generationMode,
+      recommendedScheme: schemeId,
+    });
     const replacement = mode === "visual"
       ? applyDesignSchemeToDraft(currentDraft, schemeId)
       : regeneratePlatformDraft(
           { ...currentDraft, schemeId, templateKey: scheme.templateKey },
           sourceArticle,
           { ...current.ai, mode: "deterministic" },
-          {
-            ...current.designPlan,
-            recommendedScheme: schemeId,
-            visualStyle: scheme.name,
-            palette: { ...scheme.palette },
-            typography: { ...scheme.typography },
-            density: scheme.density,
-          },
+          structuralPlan,
         );
     const merged = applyPlatformDraftReplacements({
       drafts: current.platforms,
@@ -1052,6 +1047,19 @@ export default function UnifiedWorkspace() {
     setHistory(merged.histories);
     setWorkspace(next);
     setStatusMessage(mode === "visual" ? `已应用“${scheme.name}”视觉，平台文案未改变` : `已按“${scheme.name}”重排当前平台`);
+  }
+
+  function changeGenerationMode(generationMode: GenerationMode) {
+    if (generationMode === workspaceRef.current.designPlan.generationMode) return;
+    const current = workspaceRef.current;
+    const designPlan = analyzeArticleDesign(sourceArticle, {
+      generationMode,
+      recommendedScheme: current.designPlan.recommendedScheme,
+    });
+    updateWorkspace({ designPlan, sourceRevision: designPlan.sourceRevision });
+    setStatusMessage(generationMode === "layoutOnly"
+      ? "已切换为仅排版；再次生成时不会改写标题、观点和事实"
+      : "已切换为传播力优化；再次生成前会保护人工编辑稿");
   }
 
   function toggleFavoriteScheme(schemeId: DesignSchemeId) {
@@ -1189,6 +1197,7 @@ export default function UnifiedWorkspace() {
             onCopyCard={(page) => void copyCardPng(page)}
             onExportPackage={() => void exportCardPackage()}
             aiMode={workspace.ai.mode}
+            generationMode={workspace.designPlan.generationMode}
             aiBaseUrl={workspace.ai.baseUrl}
             aiModel={workspace.ai.model}
             aiRunState={aiRunState}
@@ -1211,6 +1220,7 @@ export default function UnifiedWorkspace() {
                 },
               });
             }}
+            onGenerationModeChange={changeGenerationMode}
             onAiBaseUrlChange={(baseUrl) => updateWorkspace({ ai: { ...workspace.ai, baseUrl } })}
             onAiModelChange={(model) => updateWorkspace({ ai: { ...workspace.ai, model } })}
             onSessionApiKeyChange={setSessionApiKey}
@@ -1437,6 +1447,7 @@ function PreviewPanel(props: {
   onCopyCard: (page: CardLayoutPage) => void;
   onExportPackage: () => void;
   aiMode: "deterministic" | "hosted" | "custom";
+  generationMode: GenerationMode;
   aiBaseUrl: string;
   aiModel: string;
   aiRunState: "idle" | "generating" | "error";
@@ -1445,6 +1456,7 @@ function PreviewPanel(props: {
   statusMessage: string;
   sessionApiKey: string;
   onAiModeChange: (mode: "deterministic" | "hosted" | "custom") => void;
+  onGenerationModeChange: (mode: GenerationMode) => void;
   onAiBaseUrlChange: (value: string) => void;
   onAiModelChange: (value: string) => void;
   onSessionApiKeyChange: (value: string) => void;
@@ -1471,7 +1483,19 @@ function PreviewPanel(props: {
           </Button>
         </div>
 
-        <div className="mt-2 grid grid-cols-3 gap-1 rounded-md bg-[#edf1ee] p-1" role="group" aria-label="生成模式">
+        <div className="mt-3">
+          <div className="mb-1 text-[11px] font-medium text-[#4c6659]">内容处理</div>
+          <div className="grid grid-cols-2 gap-1 rounded-md bg-[#edf1ee] p-1" role="group" aria-label="内容处理方式">
+            <Toggle className="h-7 w-full px-1 text-[11px]" pressed={props.generationMode === "layoutOnly"} onPressedChange={() => props.onGenerationModeChange("layoutOnly")}>仅排版</Toggle>
+            <Toggle className="h-7 w-full px-1 text-[11px]" pressed={props.generationMode === "reachOptimized"} onPressedChange={() => props.onGenerationModeChange("reachOptimized")}>传播力优化</Toggle>
+          </div>
+          <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+            {props.generationMode === "layoutOnly" ? "保持原文措辞和观点，只做结构、分页与视觉处理。" : "允许优化标题、开头和顺序；生成后提供修改摘要。"}
+          </p>
+        </div>
+
+        <div className="mt-2 text-[11px] font-medium text-[#4c6659]">生成引擎</div>
+        <div className="mt-1 grid grid-cols-3 gap-1 rounded-md bg-[#edf1ee] p-1" role="group" aria-label="生成引擎">
           <Toggle className="h-7 w-full px-1 text-[11px]" pressed={props.aiMode === "deterministic"} onPressedChange={() => props.onAiModeChange("deterministic")}>本地</Toggle>
           <Toggle className="h-7 w-full px-1 text-[11px]" pressed={props.aiMode === "hosted"} onPressedChange={() => props.onAiModeChange("hosted")}>服务端 AI</Toggle>
           <Toggle className="h-7 w-full px-1 text-[11px]" pressed={props.aiMode === "custom"} onPressedChange={() => props.onAiModeChange("custom")}>自定义接口</Toggle>
@@ -1547,6 +1571,7 @@ function WechatPreview(props: { html: string; onBlur: (html: string) => void; on
         </Button>
       </div>
       <div
+        data-wechat-preview
         className="preview-editor min-h-[720px] rounded-md border bg-white p-5 shadow-sm"
         contentEditable
         suppressContentEditableWarning
@@ -1559,7 +1584,7 @@ function WechatPreview(props: { html: string; onBlur: (html: string) => void; on
 
 function LongformPreview({ draft }: { draft: PlatformDraft }) {
   return (
-    <div className="mx-auto max-w-[390px] rounded-md border bg-white p-5 shadow-sm">
+    <div data-longform-preview className="mx-auto max-w-[390px] rounded-md border bg-white p-5 shadow-sm">
       <h1 className="text-xl font-semibold leading-snug">{draft.title}</h1>
       {draft.meta.intro && <p className="mt-4 border-l-4 border-[#20201d] pl-3 text-sm leading-7">{draft.meta.intro}</p>}
       <div className="mt-5 whitespace-pre-wrap text-sm leading-7">{draft.meta.body}</div>
@@ -1772,7 +1797,7 @@ function CardPreviewFrame(props: { page: CardLayoutPage; preset: ReturnType<type
     return (
       <>
         <div className="absolute" style={{ left: page.safeArea.x, top: labelY, width: 76, height: 8, background: preset.title }} />
-        <div className="absolute text-[20px] font-bold" style={{ left: page.safeArea.x, top: labelY + 20, color: preset.muted }}>ACTION LIST</div>
+        <div className="absolute text-[20px] font-bold" style={{ left: page.safeArea.x, top: labelY + 20, color: preset.muted }}>行动清单</div>
         <div className="absolute text-[86px] font-extrabold leading-none" style={{ right: page.safeArea.right, top: labelY - 36, color: preset.rule }}>{String(page.pageNumber).padStart(2, "0")}</div>
       </>
     );
@@ -1784,7 +1809,7 @@ function CardPreviewFrame(props: { page: CardLayoutPage; preset: ReturnType<type
           <div key={column} className="absolute" style={{ left: page.safeArea.x + (page.safeArea.width / 4) * column, top: page.safeArea.y - 28, width: 1, height: page.safeArea.height + 56, background: `${preset.rule}3D` }} />
         ))}
         <div className="absolute" style={{ left: page.safeArea.x, top: page.safeArea.y - 36, width: page.safeArea.width, height: 4, background: preset.title }} />
-        <div className="absolute text-[21px] font-bold" style={{ left: page.safeArea.x, top: labelY, color: preset.title }}>INSIGHT {String(page.pageNumber).padStart(2, "0")}</div>
+        <div className="absolute text-[21px] font-bold" style={{ left: page.safeArea.x, top: labelY, color: preset.title }}>数据编辑部 {String(page.pageNumber).padStart(2, "0")}</div>
       </>
     );
   }
@@ -1793,14 +1818,14 @@ function CardPreviewFrame(props: { page: CardLayoutPage; preset: ReturnType<type
       <>
         <div className="absolute" style={{ left: page.safeArea.x, top: page.safeArea.y - 34, width: 72, height: 3, background: preset.rule }} />
         <div className="absolute" style={{ left: page.safeArea.x, top: page.safeArea.y - 34, width: 2, height: page.safeArea.height + 52, background: preset.rule }} />
-        <div className="absolute font-serif text-[22px] font-semibold" style={{ left: page.safeArea.x + 20, top: labelY, color: preset.title }}>CHAPTER {String(page.pageNumber).padStart(2, "0")}</div>
+        <div className="absolute text-[22px] font-semibold" style={{ left: page.safeArea.x + 20, top: labelY, color: preset.title }}>章节 {String(page.pageNumber).padStart(2, "0")}</div>
       </>
     );
   }
   return (
     <>
       <div className="absolute" style={{ left: page.safeArea.x, top: page.safeArea.y - 36, width: page.safeArea.width, height: 3, background: preset.rule }} />
-      <div className="absolute text-[22px] font-semibold" style={{ left: page.safeArea.x, top: labelY, color: preset.muted }}>EDITORIAL / {String(page.pageNumber).padStart(2, "0")}</div>
+      <div className="absolute text-[22px] font-semibold" style={{ left: page.safeArea.x, top: labelY, color: preset.muted }}>编辑部 / {String(page.pageNumber).padStart(2, "0")}</div>
     </>
   );
 }

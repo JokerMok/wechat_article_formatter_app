@@ -22,6 +22,20 @@ describe("HostedAIProvider", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ["layoutOnly", "layout-platform-variant"],
+    ["reachOptimized", "optimize-platform-variant"],
+  ] as const)("encodes %s in the server task without exposing provider settings", async (generationMode, task) => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(Object.keys(body).sort()).toEqual(["platforms", "source", "sourceRevision", "task"]);
+      expect(body.task).toBe(task);
+      return new Response(JSON.stringify({ ok: true, data: response }), { status: 200 });
+    });
+
+    await new HostedAIProvider(fetchMock).generate({ source, sourceVersionId: "v1", platforms: ["wechat"], generationMode });
+  });
+
   it("uses the browser global fetch and keeps an un-aborted signal live", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       expect(input).toBe("/api/ai/generate");

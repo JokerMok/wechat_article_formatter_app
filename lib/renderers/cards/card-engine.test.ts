@@ -75,6 +75,22 @@ function measuringSpy(base: TextMeasurer) {
 }
 
 describe("card image layout engine", () => {
+  it("balances compact semantic pages inside the safe area without shrinking typography", () => {
+    const blocks = [
+      textBlock("xiaohongshu:page:conflict:3:block:title", "section", "第一次汇报后，方向变了"),
+      textBlock("xiaohongshu:page:conflict:3:block:body", "paragraph", "短页仍要保留清楚的上下阅读节奏。"),
+    ];
+
+    const result = layoutCardPages(article(blocks), createApproximateTextMeasurer(), { aspectRatio: "3:4" });
+    const page = result.pages[0];
+    const firstNode = page.nodes[0];
+
+    expect(page.pageKind).toBe("conflict");
+    expect(firstNode.y).toBeGreaterThan(page.safeArea.y + 200);
+    expect(firstNode.style?.fontSize).toBe(42);
+    expect(result.overflow).toEqual([]);
+  });
+
   it("TEST-013 remeasures and reflows every affected page when font and spacing change", () => {
     const blocks = [
       textBlock("title", "title", "字号变化必须触发完整重排"),

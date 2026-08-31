@@ -2,7 +2,7 @@ import type { TemplateKey } from "../../lib/article-types";
 import { parseArticleContent } from "../../lib/article-parser";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../../lib/content";
 import { unifiedArticleContentSchema } from "../../lib/content/schemas";
-import { analyzeArticleDesign, buildPlatformArticle, designPlanSchema, type DesignPlan } from "../../lib/design-plan";
+import { analyzeArticleDesign, buildPlatformArticle, designPlanSchema, PAGE_PLAN_KINDS, type DesignPlan, type PagePlanKind } from "../../lib/design-plan";
 import { DESIGN_SCHEMES, normalizeDesignSchemeId, type DesignSchemeId } from "../../lib/design-schemes";
 import { toDouyinImageText, toDouyinLongform } from "../../lib/platforms/douyin";
 import type { PlatformId, PlatformVersion, PlatformVersionMap } from "../../lib/platforms/types";
@@ -491,7 +491,7 @@ export function markAiConfigurationIncomplete(state: WorkspacePersistedState, mi
 
 export function updateWorkspaceSource(state: WorkspacePersistedState, sourceMarkdown: string): WorkspacePersistedState {
   const article = parseSourceMarkdown(sourceMarkdown);
-  const designPlan = analyzeArticleDesign(article);
+  const designPlan = analyzeArticleDesign(article, { generationMode: state.designPlan.generationMode });
   return {
     ...state,
     sourceMarkdown,
@@ -847,6 +847,7 @@ type CardLayoutImageValue = NonNullable<CardLayoutNodeValue["image"]>;
 type CardOverflowIssueValue = CardLayoutPage["overflow"][number];
 
 const CARD_LAYOUT_NODE_KINDS = new Set<CardLayoutNodeKindValue>(["title", "heading", "body", "focus", "image"]);
+const CARD_PAGE_KINDS = new Set<PagePlanKind>(PAGE_PLAN_KINDS);
 const CARD_OVERFLOW_TYPES = new Set<CardOverflowIssueValue["type"]>(["vertical", "horizontal"]);
 const CARD_OVERFLOW_EDGES = new Set<NonNullable<CardOverflowIssueValue["edge"]>>(["top", "right", "bottom", "left"]);
 
@@ -947,6 +948,7 @@ function readCardLayoutPage(value: unknown): CardLayoutPage[] {
   return [
     {
       id: value.id,
+      ...(CARD_PAGE_KINDS.has(value.pageKind as PagePlanKind) ? { pageKind: value.pageKind as PagePlanKind } : {}),
       pageNumber,
       totalPages,
       aspectRatio: value.aspectRatio,

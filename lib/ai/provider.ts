@@ -2,7 +2,16 @@ import { z } from "zod";
 import { parseArticleContent } from "../article-parser";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../content";
 import { unifiedArticleContentSchema } from "../content";
-import { analyzeArticleDesign, CONTENT_TYPE_IDS, designPlanSchema, type ContentType, type DesignPlan } from "../design-plan";
+import {
+  analyzeArticleDesign,
+  buildPlatformArticle,
+  buildPlatformDesignPlans,
+  CONTENT_TYPE_IDS,
+  designPlanSchema,
+  type ContentType,
+  type DesignPlan,
+  type GenerationMode,
+} from "../design-plan";
 import { DESIGN_SCHEME_IDS, getDesignScheme, type DesignSchemeId } from "../design-schemes";
 import type { PlatformId, PlatformVersion, PlatformVersionMap } from "../platforms/types";
 
@@ -104,6 +113,7 @@ export type GeneratePlatformVersionsOptions = {
   provider?: AIProvider;
   source: UnifiedArticleContent;
   sourceVersionId?: string;
+  generationMode?: GenerationMode;
   platforms?: PlatformId[];
   existingVersions?: PlatformVersionMap;
   signal?: AbortSignal;
@@ -140,6 +150,7 @@ export type OpenAICompatibleProviderConfig = {
 export type ProviderGenerateOptions = {
   source: UnifiedArticleContent;
   sourceVersionId?: string;
+  generationMode?: GenerationMode;
   platforms: PlatformId[];
   signal?: AbortSignal;
 };
@@ -231,7 +242,7 @@ export class OpenAICompatibleProvider {
           "content-type": "application/json",
           authorization: `Bearer ${this.apiKey}`,
         },
-        body: JSON.stringify(this.buildRequestBody(options.source, options.platforms)),
+        body: JSON.stringify(this.buildRequestBody(options.source, options.platforms, options.generationMode ?? "layoutOnly")),
         signal: abortController.signal,
       });
       throwIfAborted();
@@ -263,7 +274,7 @@ export class OpenAICompatibleProvider {
         throw this.schemaError(["Assistant content is not valid JSON."], responseDiagnostics);
       }
 
-      const sanitized = sanitizeGeneratedResponse(parsedContent.value, options.source);
+      const sanitized = sanitizeGeneratedResponse(parsedContent.value, options.source, options.generationMode ?? "layoutOnly");
       const generated = generatedResponseSchema.safeParse(sanitized);
       if (!generated.success) {
         throw this.schemaError(compactZodIssues(generated.error), responseDiagnostics);
@@ -290,7 +301,7 @@ export class OpenAICompatibleProvider {
     }
   }
 
-  private buildRequestBody(source: UnifiedArticleContent, platforms: PlatformId[]) {
+  private buildRequestBody(source: UnifiedArticleContent, platforms: PlatformId[], generationMode: GenerationMode) {
     return {
       model: this.model,
       temperature: 0.2,
@@ -301,7 +312,7 @@ export class OpenAICompatibleProvider {
         {
           role: "system",
           content:
-            `Return only JSON with schemaVersion:1, designPlan, and drafts[]. designPlan may contain only contentType, targetAudience, coreMessage, recommendedTitle, titleCandidates, openingHook, keyPoints, conclusion, callToAction, recommendedScheme, and recommendationReason. contentType must be one of ${CONTENT_TYPE_IDS.join(",")}; recommendedScheme must be one of ${DESIGN_SCHEME_IDS.join(",")}. Each draft must include platform, title, summary, highlights, tags, optional cover, and content. content must be plain article text or Markdown, never nested JSON, HTML, CSS, or script. ${platformGenerationInstruction(platforms, source.sourceText.length)} Preserve source facts and important limitations; do not invent data, cases, people, policies, quotes, or outcomes.`,
+            `Return only JSON with schemaVersion:1, designPlan, and drafts[]. designPlan may contain only contentType, targetAudience, coreMessage, recommendedTitle, titleCandidates, openingHook, keyPoints, conclusion, callToAction, recommendedScheme, recommendationReason, and modificationSummary. contentType must be one of ${CONTENT_TYPE_IDS.join(",")}; recommendedScheme must be one of ${DESIGN_SCHEME_IDS.join(",")}. Each draft must include platform, title, summary, highlights, tags, optional cover, and content. content must be plain article text or Markdown, never nested JSON, HTML, CSS, or script. ${generationInstruction(generationMode)} ${platformGenerationInstruction(platforms, source.sourceText.length)} Preserve source facts and important limitations; do not invent data, cases, people, policies, quotes, or outcomes.`,
         },
         {
           role: "user",
@@ -372,11 +383,20 @@ function platformGenerationInstruction(platforms: PlatformId[], sourceLength: nu
   }
 }
 
+function generationInstruction(mode: GenerationMode) {
+  return mode === "layoutOnly"
+    ? "Layout-only mode: preserve the original title, wording, facts, conclusions, qualifiers, and order. Only identify structure and platform presentation; do not add a call to action or new conclusion."
+    : "Reach-optimized mode: you may improve title candidates, opening hook, order, repetition, summary, and platform expression. Include a concise modificationSummary and never overwrite or contradict source facts.";
+}
+
 export async function generatePlatformVersions(options: GeneratePlatformVersionsOptions): Promise<GeneratePlatformVersionsResult> {
   const platforms = options.platforms ?? [...aiPlatformIds];
+  // Keep the provider API backward compatible. The workspace always passes an
+  // explicit mode; older integrations without this field retain AI rewriting.
+  const generationMode = options.generationMode ?? "reachOptimized";
   const now = options.now?.() ?? new Date().toISOString();
   const fallbackVersions = buildFallbackPlatformVersions(options.source, platforms, now);
-  const fallbackDesignPlan = analyzeArticleDesign(options.source);
+  const fallbackDesignPlan = analyzeArticleDesign(options.source, { generationMode });
   const currentVersions = options.existingVersions ?? {};
 
   if (!options.provider) {
@@ -403,10 +423,14 @@ export async function generatePlatformVersions(options: GeneratePlatformVersions
     const generated = await options.provider.generate({
       source: options.source,
       sourceVersionId: options.sourceVersionId,
+      generationMode,
       platforms,
       signal: options.signal,
     });
-    const generatedContent = buildGeneratedPlatformVersions(generated.response.drafts, platforms, options.source, now);
+    const designPlan = generated.response.designPlan ?? fallbackDesignPlan;
+    const generatedContent = generationMode === "layoutOnly"
+      ? buildLayoutOnlyPlatformVersions(options.source, platforms, designPlan, now)
+      : buildGeneratedPlatformVersions(generated.response.drafts, platforms, options.source, now);
     const baselineVersions = platforms.reduce<PlatformVersionMap>((baseline, platform) => {
       baseline[platform] = currentVersions[platform] ?? fallbackVersions[platform];
       return baseline;
@@ -415,7 +439,7 @@ export async function generatePlatformVersions(options: GeneratePlatformVersions
     return {
       ok: true,
       versions: generatedContent.versions,
-      designPlan: generated.response.designPlan ?? fallbackDesignPlan,
+      designPlan,
       diagnostics: {
         ...generated.diagnostics,
         details: [...(generated.diagnostics.details ?? []), ...generatedContent.factCheckWarnings],
@@ -551,6 +575,29 @@ function buildGeneratedPlatformVersions(
   }
 
   return { versions, factCheckWarnings };
+}
+
+function buildLayoutOnlyPlatformVersions(
+  source: UnifiedArticleContent,
+  platforms: PlatformId[],
+  designPlan: DesignPlan,
+  updatedAt: string,
+): { versions: PlatformVersionMap; factCheckWarnings: string[] } {
+  const versions: PlatformVersionMap = {};
+  for (const platform of platforms) {
+    const content = buildPlatformArticle(source, platform, designPlan);
+    versions[platform] = {
+      platform,
+      status: "generated",
+      title: designPlan.platformPlans[platform].title,
+      content,
+      summary: designPlan.coreMessage,
+      highlights: [...designPlan.highlights],
+      tags: [...designPlan.tags],
+      updatedAt,
+    };
+  }
+  return { versions, factCheckWarnings: [] };
 }
 
 type PlatformVersionValue = PlatformVersion<unknown>;
@@ -702,12 +749,12 @@ function parseAssistantJson(content: string) {
   }
 }
 
-function sanitizeGeneratedResponse(value: unknown, source: UnifiedArticleContent): unknown {
+function sanitizeGeneratedResponse(value: unknown, source: UnifiedArticleContent, generationMode: GenerationMode): unknown {
   if (!isRecord(value) || !Array.isArray(value.drafts)) {
     return value;
   }
 
-  const designPlan = sanitizeGeneratedDesignPlan(value.designPlan, source);
+  const designPlan = sanitizeGeneratedDesignPlan(value.designPlan, source, generationMode);
   return {
     ...value,
     ...(designPlan ? { designPlan } : {}),
@@ -715,32 +762,58 @@ function sanitizeGeneratedResponse(value: unknown, source: UnifiedArticleContent
   };
 }
 
-function sanitizeGeneratedDesignPlan(value: unknown, source: UnifiedArticleContent): DesignPlan | undefined {
+function sanitizeGeneratedDesignPlan(value: unknown, source: UnifiedArticleContent, generationMode: GenerationMode): DesignPlan | undefined {
   if (!isRecord(value)) return undefined;
 
-  const fallback = analyzeArticleDesign(source);
+  const fallback = analyzeArticleDesign(source, { generationMode });
   const contentType = isContentType(value.contentType) ? value.contentType : fallback.contentType;
   const recommendedScheme = isDesignScheme(value.recommendedScheme) ? value.recommendedScheme : fallback.recommendedScheme;
   const scheme = getDesignScheme(recommendedScheme);
-  const titleCandidates = safePlanTextArray(value.titleCandidates, fallback.titleCandidates, 3, 80);
-  const keyPoints = safePlanTextArray(value.keyPoints, fallback.keyPoints, 5, 300);
+  const canRewrite = generationMode === "reachOptimized";
+  const titleCandidates = canRewrite ? safePlanTextArray(value.titleCandidates, fallback.titleCandidates, 3, 80) : fallback.titleCandidates;
+  const keyPoints = canRewrite ? safePlanTextArray(value.keyPoints, fallback.keyPoints, 5, 300) : fallback.keyPoints;
+  const recommendedTitle = canRewrite
+    ? safePlanText(value.recommendedTitle, titleCandidates[0] ?? fallback.recommendedTitle, 80)
+    : fallback.recommendedTitle;
+  const openingHook = canRewrite ? safePlanText(value.openingHook, fallback.openingHook, 300) : fallback.openingHook;
+  const conclusion = canRewrite ? safePlanText(value.conclusion, fallback.conclusion, 500) : fallback.conclusion;
+  const callToAction = canRewrite ? safePlanText(value.callToAction, fallback.callToAction, 240) : fallback.callToAction;
+  const modificationSummary = canRewrite
+    ? safePlanTextArray(value.modificationSummary, fallback.modificationSummary, 8, 180)
+    : [];
+  const blueprint = {
+    ...fallback.blueprint,
+    contentType,
+    targetAudience: safePlanText(value.targetAudience, fallback.targetAudience, 120),
+    coreMessage: canRewrite ? safePlanText(value.coreMessage, fallback.coreMessage, 500) : fallback.coreMessage,
+    titleCandidates,
+    openingHook,
+    conclusion,
+    ...(callToAction ? { callToAction } : { callToAction: undefined }),
+    modificationSummary,
+  };
+  const platformPlans = buildPlatformDesignPlans(source, blueprint, scheme);
   const candidate: DesignPlan = {
     ...fallback,
     contentType,
     targetAudience: safePlanText(value.targetAudience, fallback.targetAudience, 120),
-    coreMessage: safePlanText(value.coreMessage, fallback.coreMessage, 500),
+    generationMode,
+    coreMessage: blueprint.coreMessage,
     recommendedScheme,
     visualStyle: scheme.name,
     palette: { ...scheme.palette },
     typography: { ...scheme.typography },
     density: scheme.density,
     titleCandidates,
-    recommendedTitle: safePlanText(value.recommendedTitle, titleCandidates[0] ?? fallback.recommendedTitle, 80),
-    openingHook: safePlanText(value.openingHook, fallback.openingHook, 300),
+    recommendedTitle,
+    openingHook,
     keyPoints,
-    conclusion: safePlanText(value.conclusion, fallback.conclusion, 500),
-    callToAction: safePlanText(value.callToAction, fallback.callToAction, 240),
+    conclusion,
+    callToAction,
     recommendationReason: safePlanText(value.recommendationReason, fallback.recommendationReason, 300),
+    blueprint,
+    platformPlans,
+    modificationSummary,
   };
   const parsed = designPlanSchema.safeParse(candidate);
   return parsed.success ? parsed.data : undefined;

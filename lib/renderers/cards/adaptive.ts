@@ -21,19 +21,21 @@ export function layoutCardPagesToTarget(
 
   let best = initial;
   let bestScale = 1;
-  for (const scale of [0.94, 0.88, 0.82, 0.76]) {
+  // Density may tighten slightly, but page count is allowed to grow. Text on a
+  // 1080px social card must never be reduced to thumbnail-sized body copy.
+  for (const scale of [0.96, 0.92, 0.88]) {
     const typography = options.typography ?? {};
     const candidate = layoutCardPages(source, measurer, {
       ...options,
       typography: {
         ...typography,
-        titleFontSize: scaled(typography.titleFontSize, scale, 48),
-        headingFontSize: scaled(typography.headingFontSize, scale, 30),
-        bodyFontSize: scaled(typography.bodyFontSize, scale, 25),
-        focusFontSize: scaled(typography.focusFontSize, scale, 25),
-        lineSpacing: Math.max(1.2, (typography.lineSpacing ?? 1.35) - (1 - scale) * 0.45),
-        paragraphSpacing: scaled(typography.paragraphSpacing, scale, 22),
-        titleSpacing: scaled(typography.titleSpacing, scale, 30),
+        titleFontSize: scaled(typography.titleFontSize, scale, 54),
+        headingFontSize: scaled(typography.headingFontSize, scale, 34),
+        bodyFontSize: scaled(typography.bodyFontSize, scale, 30),
+        focusFontSize: scaled(typography.focusFontSize, scale, 31),
+        lineSpacing: Math.max(1.28, (typography.lineSpacing ?? 1.35) - (1 - scale) * 0.28),
+        paragraphSpacing: scaled(typography.paragraphSpacing, scale, 26),
+        titleSpacing: scaled(typography.titleSpacing, scale, 34),
       },
     });
 

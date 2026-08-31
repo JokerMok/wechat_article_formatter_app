@@ -126,6 +126,27 @@ describe("toDouyinImageText & toDouyinLongform", () => {
     expect(output.highlights).not.toContain(output.intro);
   });
 
+  it("moves the opening paragraph into the intro without duplicating or dropping its remainder", () => {
+    const opening = "刚开始做企业 AI 项目时，我的第一反应不是先做一个看起来很酷的智能体，而是先把公司的资料整理出来。";
+    const content = parseArticleContent(`# 项目复盘\n\n${opening}\n\n## 后续判断\n\n正文继续说明后续判断。`);
+    const output = toDouyinLongform(content);
+    const combined = `${output.intro}${output.body}`.replace(/\s+/gu, "");
+
+    expect(output.body).not.toContain(opening.slice(0, 18));
+    expect(combined).toContain(opening.replace(/\s+/gu, ""));
+    expect(`${output.intro}\n${output.body}`.match(/刚开始做企业 AI 项目时/gu)).toHaveLength(1);
+  });
+
+  it("renumbers consecutive planned list blocks in longform output", () => {
+    const content = parseArticleContent(`# 复盘清单\n\n- 第一条\n\n- 第二条\n\n- 第三条`);
+    const output = toDouyinLongform(content);
+
+    expect(output.body).toContain("1. 第一条");
+    expect(output.body).toContain("2. 第二条");
+    expect(output.body).toContain("3. 第三条");
+    expect(output.body.match(/1\. /gu)).toHaveLength(1);
+  });
+
   it("uses the centralized intro target from the selected versioned profile", () => {
     const content = parseArticleContent(
       `这是一段足够长的普通正文，用来验证导语目标长度确实来自所选的平台 profile，而不是转换器内部的固定数字，并且继续补充内容以确保解析器将它识别为段落，而不是文章标题。`

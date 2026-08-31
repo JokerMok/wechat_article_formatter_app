@@ -24,15 +24,15 @@ describe("buildPlatformArticle", () => {
 总结：先做小闭环，再逐步扩大范围。`, { mode: "knowledge" });
   const plan = analyzeArticleDesign(source);
 
-  it("keeps WeChat reasoning in source order and adds an editorial ending", () => {
+  it("keeps WeChat reasoning in source order without adding an unsolicited CTA", () => {
     const result = buildPlatformArticle(source, "wechat", plan);
     const text = result.blocks.map(blockText).join("\n");
     expect(text.indexOf("先选择一个高频流程")).toBeLessThan(text.indexOf("再补知识基础"));
     expect(text.indexOf("再补知识基础")).toBeLessThan(text.indexOf("最后检查边界"));
-    expect(result.blocks.some((block) => block.type === "cta")).toBe(true);
+    expect(result.blocks.some((block) => block.type === "cta")).toBe(false);
   });
 
-  it("does not repeat the opening paragraph and converts generic headings for publication", () => {
+  it("does not repeat the opening paragraph or rewrite source headings in layout-only mode", () => {
     const article = parseArticleContent(`# 项目复盘
 
 ## 核心信息
@@ -48,8 +48,8 @@ describe("buildPlatformArticle", () => {
     const texts = result.blocks.map(blockText);
 
     expect(texts.filter((text) => text === "先确认现场问题，再整理证据和行动边界。")).toHaveLength(1);
-    expect(texts).not.toContain("核心信息");
-    expect(texts).not.toContain("内容结构");
+    expect(texts).toContain("核心信息");
+    expect(texts).toContain("内容结构");
     expect(result.blocks.some((block) => block.type === "list")).toBe(true);
   });
 
@@ -62,16 +62,16 @@ describe("buildPlatformArticle", () => {
     expect(paragraphs.map((block) => block.text).join("")).toBe(paragraph);
   });
 
-  it("builds a 6-10 page Xiaohongshu sequence with explicit page roles", () => {
+  it("builds a compact Xiaohongshu sequence with explicit page roles", () => {
     const result = buildPlatformArticle(source, "xiaohongshu", plan);
     const pages = splitPages(result);
     const output = toXiaohongshuImageText(result);
-    expect(pages.length).toBeGreaterThanOrEqual(6);
+    expect(pages.length).toBeGreaterThanOrEqual(3);
     expect(pages.length).toBeLessThanOrEqual(10);
     expect(output.pages).toHaveLength(pages.length);
     expect(pages[0]?.map((block) => block.type)).toEqual(["title", "lead"]);
-    expect(pages.at(-1)?.some((block) => block.type === "summary")).toBe(true);
-    expect(pages.at(-1)?.some((block) => block.type === "cta")).toBe(true);
+    expect(result.blocks.some((block) => block.id.includes(":page:objective:") || block.id.includes(":page:step:"))).toBe(true);
+    expect(result.blocks.some((block) => block.id.includes(":page:action:"))).toBe(true);
   });
 
   it("builds a lower-density 4-8 page Douyin image sequence", () => {
@@ -81,7 +81,8 @@ describe("buildPlatformArticle", () => {
     expect(pages.length).toBeGreaterThanOrEqual(4);
     expect(pages.length).toBeLessThanOrEqual(8);
     expect(output.pages).toHaveLength(pages.length);
-    expect(Math.max(...pages.map((page) => page.length))).toBeLessThanOrEqual(2);
+    expect(Math.max(...pages.map((page) => page.length))).toBeLessThanOrEqual(6);
+    expect(pages.slice(1).every((page) => page.reduce((count, block) => count + blockText(block).length, 0) <= 240)).toBe(true);
   });
 
   it("keeps cover titles compact for long source titles", () => {
@@ -113,8 +114,8 @@ describe("buildPlatformArticle", () => {
 旧模型输出不能直接当作训练真值，必须经过人工复核。`, { mode: "knowledge" });
     const result = buildPlatformArticle(article, "xiaohongshu", analyzeArticleDesign(article));
     const pageBodies = splitPages(result)
-      .slice(2, -2)
-      .flatMap((page) => page.filter((block) => block.type === "paragraph").map(blockText));
+      .slice(1)
+      .flatMap((page) => page.filter((block) => block.type !== "section" && block.type !== "title").map(blockText));
     const counts = new Map(pageBodies.map((text) => [text, pageBodies.filter((candidate) => candidate === text).length]));
     expect(Math.max(...counts.values())).toBe(1);
     expect(pageBodies.filter((text) => text.includes("旧模型输出"))).toHaveLength(1);

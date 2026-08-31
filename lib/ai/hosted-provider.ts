@@ -27,7 +27,11 @@ export class HostedAIProvider implements AIProvider {
     let requestBody: string;
     try {
       requestBody = JSON.stringify({
-        task: "generate-platform-variant",
+        task: options.generationMode === undefined
+          ? "generate-platform-variant"
+          : options.generationMode === "reachOptimized"
+            ? "optimize-platform-variant"
+            : "layout-platform-variant",
         sourceRevision: options.sourceVersionId,
         source: options.source,
         platforms: options.platforms,

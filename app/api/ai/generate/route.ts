@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 export const maxDuration = 120;
 
 const requestSchema = z.strictObject({
-  task: z.literal("generate-platform-variant"),
+  task: z.enum(["generate-platform-variant", "layout-platform-variant", "optimize-platform-variant"]),
   sourceRevision: z.union([z.string(), z.number()]).optional(),
   source: unifiedArticleContentSchema,
   platforms: z.array(z.enum(aiPlatformIds)).min(1).max(aiPlatformIds.length).refine((platforms) => new Set(platforms).size === platforms.length),
@@ -44,6 +44,7 @@ export async function POST(request: Request) {
     const input: ProviderGenerateOptions = {
       source: parsed.data.source,
       sourceVersionId: parsed.data.sourceRevision === undefined ? undefined : String(parsed.data.sourceRevision),
+      generationMode: parsed.data.task === "layout-platform-variant" ? "layoutOnly" : "reachOptimized",
       platforms: parsed.data.platforms,
       signal: request.signal,
     };

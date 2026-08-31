@@ -5,7 +5,7 @@ import { analyzeArticleDesign, detectContentType } from "./local-analyzer";
 import { designPlanSchema } from "./schemas";
 
 describe("analyzeArticleDesign", () => {
-  it("recommends a checklist plan and keeps every generated claim traceable to source text", () => {
+  it("defaults to layout-only and keeps every planned source fact traceable", () => {
     const article = parseArticleContent(`# 企业 AI 落地清单
 
 先选一个高频、重复、容易验收的流程。
@@ -22,11 +22,27 @@ describe("analyzeArticleDesign", () => {
 
     expect(plan.contentType).toBe("checklistGuide");
     expect(plan.recommendedScheme).toBe("checklistGuide");
-    expect(plan.titleCandidates).toHaveLength(3);
+    expect(plan.generationMode).toBe("layoutOnly");
+    expect(plan.titleCandidates).toEqual(["企业 AI 落地清单"]);
+    expect(plan.callToAction).toBe("");
     expect(plan.keyPoints).toContain("整理标准答案");
     expect(plan.highlights).toContain("先做小闭环，再扩大范围。");
     expect(plan.blockOrder.map((block) => block.blockId)).toEqual(article.blocks.map((block) => block.id));
+    expect(plan.blueprint.sourceFacts.every((fact) => fact.sourceBlockIds.every((id) => article.blocks.some((block) => block.id === id)))).toBe(true);
+    expect(plan.platformPlans.xiaohongshu.pages.every((page) => page.blocks.every((block) => block.provenance === "source"))).toBe(true);
     expect(designPlanSchema.safeParse(plan).success).toBe(true);
+  });
+
+  it("separates reach optimization from layout-only and records expression changes", () => {
+    const article = parseArticleContent("# 企业 AI 落地清单\n\n先选一个高频流程，再逐步扩大范围。", { mode: "knowledge" });
+    const layoutOnly = analyzeArticleDesign(article);
+    const optimized = analyzeArticleDesign(article, { generationMode: "reachOptimized" });
+
+    expect(layoutOnly.recommendedTitle).toBe("企业 AI 落地清单");
+    expect(layoutOnly.modificationSummary).toEqual([]);
+    expect(optimized.titleCandidates).toHaveLength(3);
+    expect(optimized.modificationSummary.length).toBeGreaterThan(0);
+    expect(optimized.platformPlans.xiaohongshu.pages.flatMap((page) => page.blocks).some((block) => block.provenance === "expressionOptimization")).toBe(true);
   });
 
   it.each([
@@ -48,6 +64,7 @@ describe("analyzeArticleDesign", () => {
     expect(new Set(schemes.map((scheme) => scheme.name)).size).toBe(4);
     expect(new Set(schemes.map((scheme) => scheme.layoutVariant)).size).toBe(4);
     expect(new Set(schemes.map((scheme) => scheme.structure.join("/"))).size).toBe(4);
+    expect(new Set(schemes.map((scheme) => JSON.stringify(scheme.palette))).size).toBe(1);
     expect(schemes.every((scheme) => scheme.description && scheme.platforms.length > 0)).toBe(true);
   });
 

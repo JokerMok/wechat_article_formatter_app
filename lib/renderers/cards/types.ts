@@ -1,4 +1,5 @@
 import type { UnifiedArticleContent } from "../../content";
+import type { PagePlanKind } from "../../design-plan";
 
 export type CardAspectRatio = "3:4" | "9:16";
 
@@ -117,6 +118,7 @@ export type CardOverflowIssue = {
 
 export type CardLayoutPage = {
   id: string;
+  pageKind?: PagePlanKind;
   pageNumber: number;
   totalPages: number;
   aspectRatio: CardAspectRatio;

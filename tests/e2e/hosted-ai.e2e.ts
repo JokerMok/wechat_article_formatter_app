@@ -6,8 +6,9 @@ test("hosted AI uses the real route and updates only the current platform", asyn
   const xiaohongshuTitle = await page.getByRole("button", { name: "小红书" }).count();
   expect(xiaohongshuTitle).toBe(1);
 
+  await page.getByRole("group", { name: "内容处理方式" }).getByRole("button", { name: "传播力优化" }).click();
   await page.getByText("服务端 AI", { exact: true }).click();
-  await expect(page.getByRole("group", { name: "生成模式" }).getByRole("button", { name: "服务端 AI" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("group", { name: "生成引擎" }).getByRole("button", { name: "服务端 AI" })).toHaveAttribute("aria-pressed", "true");
 
   const routeRequest = page.waitForRequest((request) => request.url().endsWith("/api/ai/generate") && request.method() === "POST");
   await page.locator("header").getByRole("button", { name: "生成当前平台" }).click();
