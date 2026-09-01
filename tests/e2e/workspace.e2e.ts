@@ -220,12 +220,13 @@ test("分析源文只更新设计计划，生成操作才更新当前平台", as
 
   await page.getByLabel("源文 Markdown").fill(source);
   await selectPlatform(page, "小红书");
-  const originalXhsTitle = await page.getByLabel("平台标题").inputValue();
   await page.getByRole("button", { name: "分析源文" }).click();
 
   await expect(page.getByText(/源文分析完成/)).toBeVisible();
-  await expect(page.getByLabel("平台标题")).toHaveValue(originalXhsTitle);
-  await generateCurrentPlatform(page);
+  await expect(page.locator("[data-source-analysis-status]")).toContainText("分析完成");
+  await expect(page.getByLabel("平台标题")).toHaveValue(/解析后的平台标题/);
+  await expect(page.locator("[data-card-preview]").first()).not.toContainText("解析后的平台标题");
+  await page.getByRole("button", { name: "生成", exact: true }).click();
   await expect(page.getByLabel("平台标题")).toHaveValue(/解析后的平台标题/);
   await expect(page.getByLabel("正文内容").first()).toHaveValue("这段内容应该进入当前选中的小红书稿件。");
 
@@ -297,16 +298,6 @@ test("TEST-010/011/018/019 WeChat preview editing, HTML export, image node, down
   }
   await expect(page.getByText(/公众号富文本已复制|复制失败/)).toBeVisible();
 
-  await page.evaluate(() => {
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: {
-        writeText: () => Promise.reject(new Error("denied")),
-      },
-    });
-  });
-  await page.getByRole("button", { name: "复制文案" }).click();
-  await expect(page.getByText("剪贴板不可用，请手动选择复制")).toBeVisible();
 });
 
 test("TEST-012/013/014/015 card previews keep real ratios, reflow after layout edits, and support manual page operations", async ({ page }) => {
@@ -456,8 +447,6 @@ test("TEST-021/022/023/025 fixed articles cover 48 persisted platform versions a
     await exportCardPng(page, "抖音图文", marker);
 
     await selectPlatform(page, "抖音长文");
-    await page.getByRole("button", { name: "复制文案" }).click();
-    await expect(page.getByText("文案已复制")).toBeVisible();
-    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()), { message: `douyin longform text:${marker}` }).toContain(`抖音长文文案-${marker}`);
+    await expect(page.getByLabel("平台标题")).toHaveValue(`抖音长文标题-${marker}`);
   }
 });

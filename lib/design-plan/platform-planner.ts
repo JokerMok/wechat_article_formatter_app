@@ -297,9 +297,9 @@ function cardPageKind(
     return "interpretation";
   }
   if (variant === "story") {
+    if (index === 0) return "intro";
     if (hasSummary || index === total - 1) return "epilogue";
     if (/但是|但|问题|冲突|没想到|却/u.test(text)) return "conflict";
-    if (index === 0) return "intro";
     if (/后来|于是|直到|转折|改变/u.test(text) || index === Math.floor(total / 2)) return "transition";
     return "chapter";
   }

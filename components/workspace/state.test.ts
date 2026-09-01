@@ -22,6 +22,7 @@ import {
   pushDraftRedoHistory,
   readPersistedWorkspace,
   regeneratePlatformDraft,
+  resolveDesignSchemeApplication,
   resolveRegenerationPlatforms,
   sanitizeWechatHtml,
   serializeWorkspace,
@@ -32,6 +33,7 @@ import {
   updatePlatformRatio,
   updatePlatformTitle,
   updateWorkspaceSource,
+  updateWorkspaceSourceDraft,
   withLockedCardPage,
   withManualCardPages,
   withWechatHtmlOverride,
@@ -39,6 +41,7 @@ import {
 } from "./state";
 import { mergeAdjacentCardPages, moveCardImagePage, splitCardImagePageAfterElement, type CardLayoutPage, type CardLayoutResult } from "../../lib/renderers/cards";
 import { parseArticleContent } from "../../lib/article-parser";
+import { analyzeArticleDesign } from "../../lib/design-plan";
 import type { DraftHistory } from "./types";
 
 function cardPage(id: string, text: string): CardLayoutPage {
@@ -123,6 +126,16 @@ describe("workspace state", () => {
     expect(next.platforms.wechat.status).toBe("edited");
   });
 
+  it("keeps source analysis explicit while editing the source draft", () => {
+    const state = createWorkspaceState("# 原标题\n\n原正文。");
+    const next = updateWorkspaceSourceDraft(state, "# 新标题\n\n新正文。\n\n## 新章节\n\n新的结构。");
+
+    expect(next.sourceRevision).not.toBe(state.sourceRevision);
+    expect(next.designPlan.sourceRevision).toBe(state.designPlan.sourceRevision);
+    expect(next.designPlan.blueprint.sourceFacts).toEqual(state.designPlan.blueprint.sourceFacts);
+    expect(next.sourceMarkdown).toContain("新标题");
+  });
+
   it("applies a visual scheme without changing platform text", () => {
     const state = createWorkspaceState("# 标题\n\n正文。");
     const before = state.platforms.wechat;
@@ -132,6 +145,81 @@ describe("workspace state", () => {
     expect(after.templateKey).toBe("zhenyiChecklist");
     expect(after.content).toEqual(before.content);
     expect(after.status).toBe("edited");
+  });
+
+  it("keeps the current layout when applying C as a visual-only change", () => {
+    const state = createWorkspaceState("# 观点标题\n\n观点正文。\n");
+    const before = { ...state.platforms.xiaohongshu, layoutId: "editorial" as const };
+    const selection = resolveDesignSchemeApplication(before, "storyNarrative", "visual", state.designPlan);
+    const after = applyDesignSchemeToDraft(before, "storyNarrative");
+
+    expect(selection).toMatchObject({ themeId: "storyMagazine", layoutId: "editorial" });
+    expect(after.themeId).toBe("storyMagazine");
+    expect(after.layoutId).toBe("editorial");
+    expect(after.content).toEqual(before.content);
+  });
+
+  it("switches C to the story layout when applying structure", () => {
+    const state = createWorkspaceState(`# 项目经历
+
+第一次接手时问题很多，资料、流程和责任边界都没有整理清楚，团队只能先靠经验推进项目。
+
+## 冲突出现
+
+当时客户希望马上看到完整结果，但我们知道基础数据还没有准备好，直接承诺会带来更大的问题。
+
+## 经过调整
+
+后来我们先做了一个能验证的小版本，把已知范围和缺失条件逐项记录下来，再根据反馈继续补齐。
+
+## 转折发生
+
+但是项目真正改变方向，是在一次复盘之后：大家开始把演示结果和生产能力分开讨论。
+
+## 最后的体会
+
+回头看，先做出一个可讨论的版本并不可怕，关键是始终记得下一步要补什么。`);
+    const before = { ...state.platforms.xiaohongshu, layoutId: "editorial" as const };
+    const selection = resolveDesignSchemeApplication(before, "storyNarrative", "structure", state.designPlan);
+    const plan = analyzeArticleDesign(parseArticleContent(state.sourceMarkdown, { mode: "knowledge" }), {
+      recommendedThemeId: selection.themeId,
+      recommendedLayoutId: selection.layoutId,
+    });
+    const after = regeneratePlatformDraft(
+      { ...before, ...selection, templateKey: "zhenyiStoryMagazine" },
+      parseArticleContent(state.sourceMarkdown, { mode: "knowledge" }),
+      state.ai,
+      plan,
+      { preserveManualSelection: false },
+    );
+
+    expect(selection).toMatchObject({ themeId: "storyMagazine", layoutId: "story" });
+    expect(after.themeId).toBe("storyMagazine");
+    expect(after.layoutId).toBe("story");
+    expect(plan.platformPlans.xiaohongshu.pages.map((page) => page.kind)).toEqual(expect.arrayContaining(["intro", "conflict", "epilogue"]));
+  });
+
+  it("switches B to the checklist layout when applying structure", () => {
+    const state = createWorkspaceState(`# 发布清单
+
+- 先检查标题是否保留核心判断
+- 再检查正文是否有清晰步骤
+- 注意不要把多个结论塞进一页
+- 检查图片是否有可用来源
+- 核对标签是否包含虚构事实
+- 最后确认发布边界和人工复核
+
+发布前还要逐项记录异常，避免遗漏关键动作。`);
+    const selection = resolveDesignSchemeApplication(state.platforms.xiaohongshu, "checklistGuide", "structure", state.designPlan);
+    const plan = analyzeArticleDesign(parseArticleContent(state.sourceMarkdown, { mode: "knowledge" }), {
+      recommendedThemeId: selection.themeId,
+      recommendedLayoutId: selection.layoutId,
+    });
+
+    expect(selection).toMatchObject({ themeId: "informationCard", layoutId: "checklist" });
+    expect(plan.platformPlans.xiaohongshu.themeId).toBe("informationCard");
+    expect(plan.platformPlans.xiaohongshu.layoutId).toBe("checklist");
+    expect(plan.platformPlans.xiaohongshu.pages.map((page) => page.kind).some((kind) => ["step", "warning", "callToAction"].includes(kind))).toBe(true);
   });
 
   it("uses the new recommendation for an untouched draft and keeps a manual theme", () => {
@@ -199,6 +287,27 @@ describe("workspace state", () => {
     expect(restored?.schemaVersion).toBe(1);
     expect(restored?.platforms.douyinImage.ratio).toBe("9:16");
     expect(Object.prototype.hasOwnProperty.call(serializeWorkspace(next), WORKSPACE_VERSION_KEY)).toBe(true);
+  });
+
+  it("uses explicit theme and layout fields when persisted scheme metadata disagrees", () => {
+    const state = createWorkspaceState("# 迁移标题\n\n迁移正文。\n");
+    const serialized = serializeWorkspace({
+      ...state,
+      platforms: {
+        ...state.platforms,
+        xiaohongshu: {
+          ...state.platforms.xiaohongshu,
+          schemeId: "knowledgeMinimal",
+          themeId: "storyMagazine",
+          layoutId: "story",
+        },
+      },
+    });
+
+    const restored = readPersistedWorkspace(serialized);
+
+    expect(restored?.platforms.xiaohongshu.themeId).toBe("storyMagazine");
+    expect(restored?.platforms.xiaohongshu.layoutId).toBe("story");
   });
 
   it("preserves manual and locked card pages through serialization", () => {

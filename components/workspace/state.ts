@@ -8,6 +8,7 @@ import { toDouyinImageText, toDouyinLongform } from "../../lib/platforms/douyin"
 import type { PlatformId, PlatformVersion, PlatformVersionMap } from "../../lib/platforms/types";
 import { createWechatPlatformVersion } from "../../lib/platforms/wechat";
 import { toXiaohongshuImageText } from "../../lib/platforms/xiaohongshu";
+import { stableChecksum } from "../../lib/platforms/platform-profiles";
 import type { CardAspectRatio, CardLayoutPage, CardLayoutResult } from "../../lib/renderers/cards";
 import type { ProjectAssetReference, ProjectBackupPayload, ProjectDocument } from "../../lib/storage";
 import { styleTemplates } from "../../lib/style-templates";
@@ -151,8 +152,9 @@ export function regeneratePlatformDraft(
   article: UnifiedArticleContent,
   ai: AiWorkspaceSettings = DEFAULT_AI_SETTINGS,
   designPlan: DesignPlan = analyzeArticleDesign(article),
+  options: { preserveManualSelection?: boolean } = {},
 ): PlatformDraft {
-  const preservesManualSelection = current.status === "edited";
+  const preservesManualSelection = options.preserveManualSelection ?? current.status === "edited";
   const schemeId = preservesManualSelection ? current.schemeId : designPlan.recommendedScheme;
   const selectedScheme = DESIGN_SCHEMES[schemeId];
   const selectedThemeId = preservesManualSelection ? current.themeId ?? selectedScheme.themeId : designPlan.recommendedThemeId ?? selectedScheme.themeId;
@@ -522,6 +524,14 @@ export function updateWorkspaceSource(state: WorkspacePersistedState, sourceMark
   };
 }
 
+export function updateWorkspaceSourceDraft(state: WorkspacePersistedState, sourceMarkdown: string): WorkspacePersistedState {
+  return {
+    ...state,
+    sourceMarkdown,
+    sourceRevision: stableChecksum(sourceMarkdown),
+  };
+}
+
 export function applyDesignSchemeToDraft(draft: PlatformDraft, schemeId: DesignSchemeId): PlatformDraft {
   const scheme = DESIGN_SCHEMES[schemeId];
   return {
@@ -534,6 +544,22 @@ export function applyDesignSchemeToDraft(draft: PlatformDraft, schemeId: DesignS
     editedWechatHtml: undefined,
     updatedAt: new Date().toISOString(),
   };
+}
+
+export function resolveDesignSchemeApplication(
+  draft: PlatformDraft,
+  schemeId: DesignSchemeId,
+  mode: "visual" | "structure",
+  currentPlan: DesignPlan,
+) {
+  const scheme = DESIGN_SCHEMES[schemeId];
+  return {
+    schemeId,
+    themeId: scheme.themeId,
+    layoutId: mode === "visual"
+      ? draft.layoutId ?? currentPlan.contentLayoutId ?? scheme.contentLayoutId
+      : scheme.contentLayoutId,
+  } satisfies Pick<PlatformDraft, "schemeId" | "themeId" | "layoutId">;
 }
 
 export function isAiProviderConfigured(ai: AiWorkspaceSettings, sessionApiKey: string) {

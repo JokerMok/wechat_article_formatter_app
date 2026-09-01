@@ -5,6 +5,7 @@ export {
   VISUAL_THEMES,
   VISUAL_THEME_LIST,
   cardPresetForScheme,
+  createCardPreset,
   getAlternativeSchemes,
   getContentLayout,
   getDesignScheme,

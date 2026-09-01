@@ -27,7 +27,7 @@ import { Toggle } from "@/components/ui/toggle";
 import { copyRichText } from "@/lib/copy-rich-text";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "@/lib/content";
 import { analyzeArticleDesign, type DesignPlan, type GenerationMode } from "@/lib/design-plan";
-import { cardPresetForScheme, DESIGN_SCHEMES, getContentLayout, getVisualTheme, type DesignSchemeId } from "@/lib/design-schemes";
+import { createCardPreset, DESIGN_SCHEMES, getContentLayout, getVisualTheme, type DesignSchemeId } from "@/lib/design-schemes";
 import type { PlatformId } from "@/lib/platforms/types";
 import {
   createApproximateTextMeasurer,
@@ -64,6 +64,7 @@ import {
   applyDesignSchemeToDraft,
   applyManualPageOrder,
   clearManualCardPages,
+  createPlatformDraft,
   createPlatformDraftSignatureMap,
   createWorkspaceState,
   describeProjectBackupExportStatus,
@@ -78,6 +79,7 @@ import {
   pushDraftRedoHistory,
   readPersistedWorkspace,
   regeneratePlatformDraft,
+  resolveDesignSchemeApplication,
   resolveRegenerationPlatforms,
   sanitizeWechatHtml,
   serializeWorkspace,
@@ -88,6 +90,7 @@ import {
   updatePlatformTags,
   updatePlatformTitle,
   updateWorkspaceSource,
+  updateWorkspaceSourceDraft,
   withLockedCardPage,
   withManualCardPages,
   withWechatHtmlOverride,
@@ -106,6 +109,14 @@ type ProjectListItem = {
 };
 
 const measurer = createApproximateTextMeasurer();
+
+function cardPresetForDraft(draft: Pick<PlatformDraft, "schemeId" | "themeId" | "layoutId">) {
+  const scheme = DESIGN_SCHEMES[draft.schemeId];
+  return createCardPreset({
+    themeId: draft.themeId ?? scheme.themeId,
+    layoutId: draft.layoutId ?? scheme.contentLayoutId,
+  });
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -277,6 +288,8 @@ export default function UnifiedWorkspace() {
   const [history, setHistory] = React.useState<Record<PlatformId, DraftHistory>>(() => createEmptyHistories());
   const historyRef = React.useRef<Record<PlatformId, DraftHistory>>(createEmptyHistories());
   const [sessionApiKey, setSessionApiKey] = React.useState("");
+  const [sourceAnalysisNotice, setSourceAnalysisNotice] = React.useState<string>();
+  const [parsedDrafts, setParsedDrafts] = React.useState<Partial<Record<PlatformId, PlatformDraft>>>({});
   const [aiRunState, setAiRunState] = React.useState<"idle" | "generating" | "error">("idle");
   const [aiStatusMessage, setAiStatusMessage] = React.useState<string | undefined>();
   const repoRef = React.useRef<ReturnType<typeof createProjectRepository> | undefined>(undefined);
@@ -287,6 +300,7 @@ export default function UnifiedWorkspace() {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const backupInputRef = React.useRef<HTMLInputElement>(null);
   const activeDraft = workspace.platforms[activePlatform];
+  const parsedDraft = parsedDrafts[activePlatform];
   const sourceArticle = React.useMemo(() => parseSourceMarkdown(workspace.sourceMarkdown), [workspace.sourceMarkdown]);
 
   const cardLayout = React.useMemo(() => {
@@ -539,6 +553,7 @@ export default function UnifiedWorkspace() {
       setProjectId(importedProject.id);
       setProjectTitle(project.title);
       replaceWorkspace(importedWorkspace);
+      clearParsedDrafts();
       replaceAssets(importedAssets.assets);
       resetPlatformHistories();
       revisionRef.current += 1;
@@ -565,6 +580,7 @@ export default function UnifiedWorkspace() {
     setProjectId(result.project.id);
     setProjectTitle(result.project.title);
     replaceWorkspace(workspaceFromDocument(result.project));
+    clearParsedDrafts();
     await hydrateAssets(result.project.assets);
     resetPlatformHistories();
     revisionRef.current = 0;
@@ -586,6 +602,7 @@ export default function UnifiedWorkspace() {
     setProjectId(project.id);
     setProjectTitle(project.title);
     replaceWorkspace(fresh);
+    clearParsedDrafts();
     replaceAssets([]);
     resetPlatformHistories();
     revisionRef.current += 1;
@@ -634,6 +651,14 @@ export default function UnifiedWorkspace() {
     setWorkspace(next);
   }
 
+  function clearParsedDrafts(platforms: PlatformId[] = [...WORKSPACE_PLATFORM_IDS]) {
+    setParsedDrafts((current) => {
+      const next = { ...current };
+      platforms.forEach((platform) => delete next[platform]);
+      return next;
+    });
+  }
+
   function updateWorkspace(patch: Partial<WorkspacePersistedState>) {
     setWorkspace((current) => {
       const next = { ...current, ...patch };
@@ -675,11 +700,38 @@ export default function UnifiedWorkspace() {
     await regeneratePlatforms([activePlatform]);
   }
 
+  async function generateCurrentPlatformFromEditor() {
+    const pending = parsedDrafts[activePlatform];
+    if (pending && workspaceRef.current.ai.mode === "deterministic") {
+      const regeneration = await confirmEditedRegeneration([activePlatform]);
+      if (!regeneration.platforms.length) {
+        setAiRunState("idle");
+        setStatusMessage("已取消生成，当前成品和解析稿均已保留");
+        return;
+      }
+      const nextDraft = {
+        ...pending,
+        sourceRevision: workspaceRef.current.sourceRevision,
+        updatedAt: nowIso(),
+      } satisfies PlatformDraft;
+      applyPlatformReplacements({ [activePlatform]: nextDraft });
+      clearParsedDrafts([activePlatform]);
+      setAiRunState("idle");
+      setAiStatusMessage(undefined);
+      setStatusMessage(`已生成${WORKSPACE_PLATFORM_LABELS[activePlatform]}成稿`);
+      return;
+    }
+    await regenerateCurrentPlatform();
+  }
+
   async function regeneratePlatforms(platforms: PlatformId[]) {
     if (!hydratedRef.current) {
       setStatusMessage("本地项目仍在恢复，请稍候再重试；当前编辑稿未改变");
       return;
     }
+
+    const currentSourceArticle = parseSourceMarkdown(workspaceRef.current.sourceMarkdown);
+    ensureCurrentDesignPlan(currentSourceArticle);
 
     if (workspace.ai.mode === "deterministic") {
       const regeneration = await confirmEditedRegeneration(platforms);
@@ -688,7 +740,8 @@ export default function UnifiedWorkspace() {
         setStatusMessage("已取消覆盖人工编辑稿，内容已保留");
         return;
       }
-      applyDeterministicRegeneration(regeneration.platforms);
+      applyDeterministicRegeneration(regeneration.platforms, currentSourceArticle);
+      clearParsedDrafts(regeneration.platforms);
       setAiRunState("idle");
       setStatusMessage(regeneration.skippedEditedPlatforms.length ? "已使用本地确定性生成，人工编辑稿已保留" : "已使用本地确定性生成");
       return;
@@ -740,7 +793,7 @@ export default function UnifiedWorkspace() {
       setStatusMessage(progressMessage);
       const result = await generatePlatformVersions({
         provider,
-        source: sourceArticle,
+        source: currentSourceArticle,
         sourceVersionId: workspaceRef.current.sourceRevision,
         generationMode: workspaceRef.current.designPlan.generationMode,
         platforms: [platform],
@@ -770,6 +823,7 @@ export default function UnifiedWorkspace() {
         historyRef.current = merged.histories;
         setHistory(merged.histories);
         setWorkspace(next);
+        clearParsedDrafts([platform]);
         skippedChangedPlatforms.push(...merged.skippedChangedPlatforms);
         continue;
       }
@@ -823,10 +877,35 @@ export default function UnifiedWorkspace() {
 
     const current = workspaceRef.current;
     const next = updateWorkspaceSource(current, current.sourceMarkdown);
+    const currentDraft = next.platforms[activePlatform];
+    const nextParsedDraft = createPlatformDraft(activePlatform, parseSourceMarkdown(next.sourceMarkdown), {
+      designPlan: next.designPlan,
+      sourceRevision: next.sourceRevision,
+      schemeId: currentDraft.schemeId,
+      themeId: currentDraft.themeId,
+      layoutId: currentDraft.layoutId,
+      templateKey: currentDraft.templateKey,
+      ratio: currentDraft.ratio,
+      lockedPageIds: currentDraft.lockedPageIds,
+      manualPages: currentDraft.manualPages,
+    });
     replaceWorkspace(next);
+    setParsedDrafts((currentDrafts) => ({ ...currentDrafts, [activePlatform]: nextParsedDraft }));
+    setSourceAnalysisNotice(`分析完成 · ${next.designPlan.blueprint.sourceFacts.length} 条内容事实 · ${getContentLayout(next.designPlan.contentLayoutId ?? DESIGN_SCHEMES[next.designPlan.recommendedScheme].contentLayoutId).name}`);
     setAiRunState("idle");
     setAiStatusMessage(undefined);
     setStatusMessage(`源文分析完成，推荐“${getVisualTheme(next.designPlan.recommendedThemeId ?? DESIGN_SCHEMES[next.designPlan.recommendedScheme].themeId).name}”；平台稿尚未覆盖`);
+  }
+
+  function ensureCurrentDesignPlan(article: UnifiedArticleContent) {
+    const current = workspaceRef.current;
+    if (current.designPlan.sourceRevision === current.sourceRevision) return current.designPlan;
+    const nextPlan = analyzeArticleDesign(article, { generationMode: current.designPlan.generationMode });
+    const next = { ...current, designPlan: nextPlan, sourceRevision: nextPlan.sourceRevision };
+    workspaceRef.current = next;
+    setWorkspace(next);
+    setSourceAnalysisNotice(`已自动分析 · ${nextPlan.blueprint.sourceFacts.length} 条内容事实 · ${getContentLayout(nextPlan.contentLayoutId ?? DESIGN_SCHEMES[nextPlan.recommendedScheme].contentLayoutId).name}`);
+    return nextPlan;
   }
 
   async function confirmEditedRegeneration(platforms: PlatformId[]) {
@@ -843,10 +922,10 @@ export default function UnifiedWorkspace() {
     setOverwriteRequest(undefined);
   }
 
-  function applyDeterministicRegeneration(platforms: PlatformId[]) {
+  function applyDeterministicRegeneration(platforms: PlatformId[], article: UnifiedArticleContent = sourceArticle) {
     const current = workspaceRef.current;
     const replacements = Object.fromEntries(
-      platforms.map((platform) => [platform, regeneratePlatformDraft(current.platforms[platform], sourceArticle, current.ai, current.designPlan)]),
+      platforms.map((platform) => [platform, regeneratePlatformDraft(current.platforms[platform], article, current.ai, current.designPlan)]),
     ) as Partial<Record<PlatformId, PlatformDraft>>;
     applyPlatformReplacements(replacements);
   }
@@ -919,9 +998,10 @@ export default function UnifiedWorkspace() {
 
   function insertAsset(asset: AssetPlaceholder) {
     const sourceMarkdown = `${workspaceRef.current.sourceMarkdown.trimEnd()}\n\n![${asset.fileName.replace(/\.[^.]+$/, "")}](asset:${asset.id})\n`;
-    replaceWorkspace(updateWorkspaceSource(workspaceRef.current, sourceMarkdown));
+    replaceWorkspace(updateWorkspaceSourceDraft(workspaceRef.current, sourceMarkdown));
     setMode("source");
-    setStatusMessage("图片已插入源文，重新生成后同步到平台预览");
+    setSourceAnalysisNotice("图片已插入源文，请先点击“分析源文”再生成当前平台");
+    setStatusMessage("图片已插入源文，请先分析后再生成当前平台");
   }
 
   async function copyWechat() {
@@ -933,22 +1013,13 @@ export default function UnifiedWorkspace() {
     }
   }
 
-  async function copyText(text: string, success: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      setStatusMessage(success);
-    } catch {
-      setStatusMessage("剪贴板不可用，请手动选择复制");
-    }
-  }
-
   function downloadWechatHtml() {
     const blob = new Blob([sanitizeWechatHtml(wechatHtml)], { type: "text/html;charset=utf-8" });
     downloadBlob(blob, `${activeDraft.title || "wechat"}.html`);
   }
 
   async function exportCardPng(page: CardLayoutPage) {
-    const blob = await renderCardPagePngBlob(page, createImageUrlByBlock(activeDraft.content, assets), { preset: cardPresetForScheme(activeDraft.schemeId, activeDraft.layoutId) });
+    const blob = await renderCardPagePngBlob(page, createImageUrlByBlock(activeDraft.content, assets), { preset: cardPresetForDraft(activeDraft) });
     if (blob) downloadBlob(blob, createCardPngFilename(activeDraft.title, activePlatform, page.pageNumber));
   }
 
@@ -962,8 +1033,8 @@ export default function UnifiedWorkspace() {
       }
       const result =
         activePlatform === "xiaohongshu"
-          ? await exportXiaohongshuPackage({ content: activeDraft.content, pages: cardLayout.pages, images: imageSources, preset: cardPresetForScheme(activeDraft.schemeId, activeDraft.layoutId) })
-          : await exportDouyinImagePackage({ content: activeDraft.content, ratio: activeDraft.ratio, pages: cardLayout.pages, images: imageSources, preset: cardPresetForScheme(activeDraft.schemeId, activeDraft.layoutId) });
+          ? await exportXiaohongshuPackage({ content: activeDraft.content, pages: cardLayout.pages, images: imageSources, preset: cardPresetForDraft(activeDraft) })
+          : await exportDouyinImagePackage({ content: activeDraft.content, ratio: activeDraft.ratio, pages: cardLayout.pages, images: imageSources, preset: cardPresetForDraft(activeDraft) });
       downloadBlob(result.zipBlob, `${activeDraft.title || "cards"}-${activePlatform}.zip`);
       setStatusMessage(`${WORKSPACE_PLATFORM_LABELS[activePlatform]}整包已导出，包含 ${result.images.length} 张 PNG 和文案清单`);
     } catch (error) {
@@ -972,7 +1043,7 @@ export default function UnifiedWorkspace() {
   }
 
   async function copyCardPng(page: CardLayoutPage) {
-    const blob = await renderCardPagePngBlob(page, createImageUrlByBlock(activeDraft.content, assets), { preset: cardPresetForScheme(activeDraft.schemeId, activeDraft.layoutId) });
+    const blob = await renderCardPagePngBlob(page, createImageUrlByBlock(activeDraft.content, assets), { preset: cardPresetForDraft(activeDraft) });
     if (!blob) return;
     try {
       await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
@@ -1026,19 +1097,20 @@ export default function UnifiedWorkspace() {
     const current = workspaceRef.current;
     const currentDraft = current.platforms[activePlatform];
     const scheme = DESIGN_SCHEMES[schemeId];
-    const selectedLayoutId = currentDraft.layoutId ?? current.designPlan.contentLayoutId ?? scheme.contentLayoutId;
+    const selection = resolveDesignSchemeApplication(currentDraft, schemeId, mode, current.designPlan);
     const structuralPlan = analyzeArticleDesign(sourceArticle, {
       generationMode: current.designPlan.generationMode,
-      recommendedThemeId: scheme.themeId,
-      recommendedLayoutId: selectedLayoutId,
+      recommendedThemeId: selection.themeId,
+      recommendedLayoutId: selection.layoutId,
     });
     const replacement = mode === "visual"
       ? applyDesignSchemeToDraft(currentDraft, schemeId)
       : regeneratePlatformDraft(
-          { ...currentDraft, schemeId, themeId: scheme.themeId, layoutId: selectedLayoutId, templateKey: scheme.templateKey },
+          { ...currentDraft, ...selection, templateKey: scheme.templateKey },
           sourceArticle,
           { ...current.ai, mode: "deterministic" },
           structuralPlan,
+          { preserveManualSelection: false },
         );
     const merged = applyPlatformDraftReplacements({
       drafts: current.platforms,
@@ -1051,6 +1123,7 @@ export default function UnifiedWorkspace() {
     historyRef.current = merged.histories;
     setHistory(merged.histories);
     setWorkspace(next);
+    clearParsedDrafts([activePlatform]);
     setStatusMessage(mode === "visual" ? `已应用“${scheme.name}”视觉，平台文案未改变` : `已按“${scheme.name}”重排当前平台`);
   }
 
@@ -1118,7 +1191,7 @@ export default function UnifiedWorkspace() {
         onPlatformChange={setActivePlatform}
         onModeChange={setMode}
         onFocusModeChange={setFocusMode}
-        onGenerate={() => void regenerateCurrentPlatform()}
+        onGenerate={() => void generateCurrentPlatformFromEditor()}
         onOpenStyles={() => setStylePanelOpen(true)}
         onNew={() => void createNewProject()}
         onSave={() => void saveProject()}
@@ -1158,7 +1231,12 @@ export default function UnifiedWorkspace() {
             sourceMarkdown={workspace.sourceMarkdown}
             article={sourceArticle}
             assets={assets}
-            onSourceChange={(sourceMarkdown) => replaceWorkspace(updateWorkspaceSource(workspaceRef.current, sourceMarkdown))}
+            analysisNotice={sourceAnalysisNotice}
+            onSourceChange={(sourceMarkdown) => {
+              replaceWorkspace(updateWorkspaceSourceDraft(workspaceRef.current, sourceMarkdown));
+              clearParsedDrafts();
+              setSourceAnalysisNotice("源文已修改，请点击“分析源文”更新结构建议");
+            }}
             onReparse={reparseCurrentPlatform}
             onPickImages={() => fileInputRef.current?.click()}
             onUpload={uploadAssets}
@@ -1170,13 +1248,21 @@ export default function UnifiedWorkspace() {
 
         <section className={cn("min-w-0 overflow-hidden border border-[#d8e1dc] bg-white lg:min-h-0", panelVisible(mode, "editor"), focusMode === "preview" && "lg:hidden")}>
           <PlatformEditor
-            draft={activeDraft}
+            draft={parsedDraft ?? activeDraft}
             plan={workspace.designPlan}
             history={history[activePlatform]}
-            onDraftChange={commitPlatform}
+            draftMode={parsedDraft ? "parsed" : "generated"}
+            generating={aiRunState === "generating"}
+            onDraftChange={(nextDraft) => {
+              if (parsedDraft) {
+                setParsedDrafts((currentDrafts) => ({ ...currentDrafts, [activePlatform]: nextDraft }));
+              } else {
+                commitPlatform(nextDraft);
+              }
+            }}
             onUndo={undoPlatform}
             onRedo={redoPlatform}
-            onCopyText={copyText}
+            onGenerate={() => void generateCurrentPlatformFromEditor()}
           />
         </section>
 
@@ -1268,6 +1354,7 @@ function SourcePanel(props: {
   sourceMarkdown: string;
   article: UnifiedArticleContent;
   assets: AssetPlaceholder[];
+  analysisNotice?: string;
   onSourceChange: (value: string) => void;
   onReparse: () => void;
   onPickImages: () => void;
@@ -1288,6 +1375,7 @@ function SourcePanel(props: {
           <div>
             <h2 className="text-sm font-semibold">源文与素材</h2>
             <p className="mt-1 text-xs text-muted-foreground">编辑源文，分析后再生成当前平台</p>
+            {props.analysisNotice && <p data-source-analysis-status role="status" className="mt-1 text-[11px] leading-4 text-[#17633d]">{props.analysisNotice}</p>}
           </div>
           <Button type="button" size="sm" variant="outline" onClick={props.onReparse}>
             <RefreshCw className="h-4 w-4" />
@@ -1345,20 +1433,20 @@ function PlatformEditor(props: {
   draft: PlatformDraft;
   plan: DesignPlan;
   history: DraftHistory;
+  draftMode: "parsed" | "generated";
+  generating: boolean;
   onDraftChange: (draft: PlatformDraft) => void;
   onUndo: () => void;
   onRedo: () => void;
-  onCopyText: (text: string, success: string) => Promise<void>;
+  onGenerate: () => void;
 }) {
-  const socialText = [props.draft.meta.caption, props.draft.meta.intro, props.draft.meta.body, props.draft.meta.ending].filter(Boolean).join("\n\n");
-
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b border-[#e3e9e5] bg-white p-4">
         <div className="flex flex-wrap items-center gap-2">
           <div>
             <div className="text-xs text-muted-foreground">{WORKSPACE_PLATFORM_LABELS[props.draft.platform]}</div>
-            <h2 className="text-base font-semibold">平台版本编辑</h2>
+            <h2 className="text-base font-semibold">{props.draftMode === "parsed" ? "源文解析结果" : "平台版本编辑"}</h2>
           </div>
           <div className="ml-auto flex gap-2">
             <Button type="button" size="sm" variant="outline" onClick={props.onUndo} disabled={!props.history.past.length} aria-label="撤销">
@@ -1426,8 +1514,9 @@ function PlatformEditor(props: {
         </div>
       </div>
       <div className="border-t border-[#e3e9e5] bg-white p-3">
-        <Button type="button" size="sm" variant="outline" onClick={() => void props.onCopyText(socialText || props.draft.title, "文案已复制")}>
-          复制文案
+        <Button type="button" size="sm" onClick={props.onGenerate} disabled={props.generating}>
+          <RefreshCw className={cn("h-4 w-4", props.generating && "animate-spin")} />
+          {props.generating ? "生成中" : "生成"}
         </Button>
       </div>
     </div>
@@ -1549,7 +1638,7 @@ function PreviewPanel(props: {
             activePlatform={props.activePlatform}
             layout={props.cardLayout}
             imageUrlByBlock={props.imageUrlByBlock}
-            preset={cardPresetForScheme(props.draft.schemeId, props.draft.layoutId)}
+            preset={cardPresetForDraft(props.draft)}
             onTogglePageLock={props.onTogglePageLock}
             onSplitPage={props.onSplitPage}
             onMergePage={props.onMergePage}
@@ -1639,7 +1728,7 @@ function CardPreview(props: {
   activePlatform: PlatformId;
   layout?: CardLayoutResult;
   imageUrlByBlock: Record<string, string>;
-  preset: ReturnType<typeof cardPresetForScheme>;
+  preset: ReturnType<typeof createCardPreset>;
   onTogglePageLock: (page: CardLayoutPage) => void;
   onSplitPage: (page: CardLayoutPage, elementId: string) => void;
   onMergePage: (page: CardLayoutPage) => void;
@@ -1797,7 +1886,7 @@ function CardPreview(props: {
 
 function cardNodeBorderStyle(
   kind: CardLayoutPage["nodes"][number]["kind"],
-  preset: ReturnType<typeof cardPresetForScheme>,
+  preset: ReturnType<typeof createCardPreset>,
 ): React.CSSProperties {
   const allSides = kind === "focus" && preset.variant === "data";
   const storyFocus = kind === "focus" && preset.variant === "story";
@@ -1823,7 +1912,7 @@ function cardNodeBorderStyle(
   };
 }
 
-function CardPreviewFrame(props: { page: CardLayoutPage; preset: ReturnType<typeof cardPresetForScheme> }) {
+function CardPreviewFrame(props: { page: CardLayoutPage; preset: ReturnType<typeof createCardPreset> }) {
   const { page, preset } = props;
   const labelY = Math.max(44, page.safeArea.y - 78);
   if (preset.variant === "checklist") {

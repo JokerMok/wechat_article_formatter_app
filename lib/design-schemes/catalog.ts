@@ -124,7 +124,7 @@ export const CONTENT_LAYOUTS: Record<ContentLayoutId, ContentLayout> = {
       { role: "transition", maxChars: 180, maxBlocks: 1 },
       { role: "epilogue", maxChars: 240, maxBlocks: 2 },
     ],
-    paginationRules: { longformCharacterBudget: { wechat: 204, douyinLongform: 142 }, cardCharacterBudget: { xiaohongshu: 360, douyinImage: 225 }, cardMaxUnits: { xiaohongshu: 5, douyinImage: 6 }, shortPageThreshold: 0.28, allowSplitLongParagraphs: true },
+    paginationRules: { longformCharacterBudget: { wechat: 204, douyinLongform: 142 }, cardCharacterBudget: { xiaohongshu: 360, douyinImage: 225 }, cardMaxUnits: { xiaohongshu: 4, douyinImage: 6 }, shortPageThreshold: 0.28, allowSplitLongParagraphs: true },
   },
 };
 
@@ -253,11 +253,10 @@ export function getAlternativeSchemes(id: DesignSchemeId, count = 2, contentType
     .slice(0, count);
 }
 
-export function cardPresetForScheme(id: DesignSchemeId, layoutId?: ContentLayoutId) {
-  const scheme = DESIGN_SCHEMES[id];
-  const theme = VISUAL_THEMES[scheme.themeId];
+export function createCardPreset({ themeId, layoutId }: { themeId: VisualThemeId; layoutId: ContentLayoutId }) {
+  const theme = VISUAL_THEMES[themeId];
   return {
-    variant: layoutId ?? scheme.contentLayoutId,
+    variant: layoutId,
     background: theme.colors.background,
     title: theme.colors.primary,
     body: theme.colors.text,
@@ -270,4 +269,10 @@ export function cardPresetForScheme(id: DesignSchemeId, layoutId?: ContentLayout
     focusFontFamily: theme.typography.focusFamily,
     radius: theme.decoration.radius,
   };
+}
+
+// Compatibility wrapper for persisted callers that still only have a scheme id.
+export function cardPresetForScheme(id: DesignSchemeId, layoutId?: ContentLayoutId) {
+  const scheme = DESIGN_SCHEMES[id];
+  return createCardPreset({ themeId: scheme.themeId, layoutId: layoutId ?? scheme.contentLayoutId });
 }
