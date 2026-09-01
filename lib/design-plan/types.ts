@@ -20,7 +20,44 @@ export type ContentBlockRole = "cover" | "hook" | "heading" | "body" | "highligh
 export const GENERATION_MODE_IDS = ["layoutOnly", "reachOptimized"] as const;
 export type GenerationMode = (typeof GENERATION_MODE_IDS)[number];
 
-export type ContentProvenance = "source" | "expressionOptimization";
+export const EDITORIAL_SECTION_ROLES = [
+  "context",
+  "claim",
+  "evidence",
+  "example",
+  "comparison",
+  "method",
+  "warning",
+  "conclusion",
+] as const;
+
+export type EditorialSectionRole = (typeof EDITORIAL_SECTION_ROLES)[number];
+
+export type EditorialSection = {
+  id: string;
+  role: EditorialSectionRole;
+  heading?: string;
+  body?: string;
+  bullets?: string[];
+  sourceBlockIds: string[];
+};
+
+/**
+ * The smallest model-facing content contract. It carries editorial intent and
+ * source traceability, while page geometry and renderable blocks stay local.
+ */
+export type EditorialPlan = {
+  schemaVersion: 1;
+  platform: PlatformId;
+  contentType: ContentType;
+  title: string;
+  hook?: string;
+  sections: EditorialSection[];
+  summary?: string;
+  tags?: string[];
+};
+
+export type ContentProvenance = "source" | "structuralSummary" | "expressionOptimization";
 
 export type SourceFact = {
   id: string;
@@ -30,24 +67,92 @@ export type SourceFact = {
 
 export type ContentSectionPurpose = "opening" | "context" | "argument" | "step" | "evidence" | "conflict" | "turning" | "conclusion";
 
+export const SEMANTIC_SECTION_ROLES = [
+  "hook",
+  "background",
+  "problem",
+  "conflict",
+  "argument",
+  "evidence",
+  "example",
+  "method",
+  "result",
+  "counterArgument",
+  "boundary",
+  "conclusion",
+  "callToAction",
+] as const;
+
+export type SemanticSectionRole = (typeof SEMANTIC_SECTION_ROLES)[number];
+export type SemanticCertainty = "certain" | "uncertain";
+
+export type DisplayHeading = {
+  text: string;
+  provenance: "source" | "expressionOptimization";
+  confidence: number;
+};
+
+export type SemanticUnit = {
+  id: string;
+  text: string;
+  sourceBlockIds: string[];
+  certainty: SemanticCertainty;
+  confidence: number;
+};
+
+export type NarrativeArc = {
+  opening: string;
+  development: string;
+  turningPoint?: string;
+  resolution?: string;
+};
+
 export type ContentSection = {
   id: string;
-  title?: string;
-  purpose: ContentSectionPurpose;
+  /** Legacy internal label. It is never rendered unless displayHeading is present. */
+  title: string;
+  role: SemanticSectionRole;
+  summary: string;
   sourceBlockIds: string[];
+  keyMessage: string;
+  importance: number;
+  canSplit: boolean;
+  recommendedPageRole: PagePlanKind;
+  titleProvenance?: Exclude<ContentProvenance, "expressionOptimization">;
+  displayHeading?: DisplayHeading;
+  /** Legacy alias retained for persisted projects and older integrations. */
+  purpose?: ContentSectionPurpose;
 };
 
 export type ContentBlueprint = {
   schemaVersion: 1;
   generationMode: GenerationMode;
+  primaryContentType: ContentType;
+  secondaryContentTypes: ContentType[];
+  centralThesis: string;
+  targetAudience: string;
+  tone: ContentTone;
+  narrativeArc: NarrativeArc;
+  sections: ContentSection[];
+  keyPoints: string[];
+  facts: SemanticUnit[];
+  opinions: SemanticUnit[];
+  examples: SemanticUnit[];
+  methods: SemanticUnit[];
+  results: SemanticUnit[];
+  counterArguments: SemanticUnit[];
+  boundaries: SemanticUnit[];
+  goldenSentences: SemanticUnit[];
+  conclusion: string;
+  topicTags: string[];
+  confidence: number;
+  warnings: string[];
+  /** Backward-compatible fields used by older saved plans and renderers. */
   contentType: ContentType;
-  targetAudience?: string;
   sourceFacts: SourceFact[];
   coreMessage: string;
   titleCandidates: string[];
   openingHook?: string;
-  sections: ContentSection[];
-  conclusion?: string;
   callToAction?: string;
   modificationSummary: string[];
 };
@@ -135,6 +240,7 @@ export type PlatformDesignPlan = {
   palette: DesignPalette;
   typography: TypographyTokens;
   brandOverride?: BrandOverride;
+  editorialPlan?: EditorialPlan;
   pages: PagePlan[];
   exportSpec: ExportSpec;
 };

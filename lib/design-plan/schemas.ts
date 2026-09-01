@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { CONTENT_LAYOUT_IDS, DESIGN_SCHEME_IDS, VISUAL_THEME_IDS } from "../design-schemes";
-import { CONTENT_TYPE_IDS, GENERATION_MODE_IDS, PAGE_PLAN_KINDS } from "./types";
+import { CONTENT_TYPE_IDS, EDITORIAL_SECTION_ROLES, GENERATION_MODE_IDS, PAGE_PLAN_KINDS, SEMANTIC_SECTION_ROLES } from "./types";
 
 const platformIdSchema = z.enum(["wechat", "xiaohongshu", "douyinImage", "douyinLongform"]);
 const schemeIdSchema = z.enum(DESIGN_SCHEME_IDS);
@@ -8,6 +8,7 @@ const visualThemeIdSchema = z.enum(VISUAL_THEME_IDS);
 const contentLayoutIdSchema = z.enum(CONTENT_LAYOUT_IDS);
 const contentTypeSchema = z.enum(CONTENT_TYPE_IDS);
 const generationModeSchema = z.enum(GENERATION_MODE_IDS);
+const editorialSectionRoleSchema = z.enum(EDITORIAL_SECTION_ROLES);
 
 const paletteSchema = z.strictObject({
   primary: z.string().min(4).max(32),
@@ -40,7 +41,25 @@ const plannedContentBlockSchema = z.strictObject({
   role: z.enum(["title", "subtitle", "heading", "body", "focus", "list", "media"]),
   text: z.string(),
   sourceBlockIds: z.array(z.string().min(1)),
-  provenance: z.enum(["source", "expressionOptimization"]),
+  provenance: z.enum(["source", "structuralSummary", "expressionOptimization"]),
+});
+
+export const editorialPlanSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  platform: platformIdSchema,
+  contentType: contentTypeSchema,
+  title: z.string().min(1).max(120),
+  hook: z.string().min(1).max(500).optional(),
+  sections: z.array(z.strictObject({
+    id: z.string().min(1).max(160),
+    role: editorialSectionRoleSchema,
+    heading: z.string().min(1).max(160).optional(),
+    body: z.string().min(1).max(12000).optional(),
+    bullets: z.array(z.string().min(1).max(500)).max(12).optional(),
+    sourceBlockIds: z.array(z.string().min(1)).min(1),
+  })).min(1).max(16),
+  summary: z.string().min(1).max(500).optional(),
+  tags: z.array(z.string().min(1).max(32)).max(8).optional(),
 });
 
 const pagePlanSchema = z.strictObject({
@@ -62,6 +81,7 @@ const platformDesignPlanSchema = z.strictObject({
   palette: paletteSchema,
   typography: typographySchema,
   brandOverride: brandOverrideSchema.optional(),
+  editorialPlan: editorialPlanSchema.optional(),
   pages: z.array(pagePlanSchema).min(1),
   exportSpec: z.strictObject({
     format: z.enum(["html", "png", "text"]),
@@ -71,11 +91,87 @@ const platformDesignPlanSchema = z.strictObject({
   }),
 });
 
-const contentBlueprintSchema = z.strictObject({
+const semanticUnitSchema = z.strictObject({
+  id: z.string().min(1).max(160),
+  text: z.string().min(1).max(1000),
+  sourceBlockIds: z.array(z.string().min(1)).min(1),
+  certainty: z.enum(["certain", "uncertain"]),
+  confidence: z.number().min(0).max(1),
+});
+
+const narrativeArcSchema = z.strictObject({
+  opening: z.string().max(500),
+  development: z.string().max(500),
+  turningPoint: z.string().max(500).optional(),
+  resolution: z.string().max(500).optional(),
+});
+
+const semanticSectionSchema = z.strictObject({
+  id: z.string().min(1).max(160),
+  title: z.string().max(160),
+  role: z.enum(SEMANTIC_SECTION_ROLES),
+  summary: z.string().max(500),
+  sourceBlockIds: z.array(z.string().min(1)),
+  keyMessage: z.string().max(500),
+  importance: z.number().min(0).max(1),
+  canSplit: z.boolean(),
+  recommendedPageRole: z.enum(PAGE_PLAN_KINDS),
+  titleProvenance: z.enum(["source", "structuralSummary"]).optional(),
+  displayHeading: z.strictObject({
+    text: z.string().min(1).max(160),
+    provenance: z.enum(["source", "expressionOptimization"]),
+    confidence: z.number().min(0).max(1),
+  }).optional(),
+  purpose: z.enum(["opening", "context", "argument", "step", "evidence", "conflict", "turning", "conclusion"]).optional(),
+});
+
+export const semanticBlueprintSchema = z.strictObject({
   schemaVersion: z.literal(1),
   generationMode: generationModeSchema,
+  primaryContentType: contentTypeSchema,
+  secondaryContentTypes: z.array(contentTypeSchema).max(CONTENT_TYPE_IDS.length),
+  centralThesis: z.string().min(1).max(500),
+  targetAudience: z.string().min(1).max(160),
+  tone: z.enum(["理性", "叙事", "实用", "轻松"]),
+  narrativeArc: narrativeArcSchema,
+  sections: z.array(semanticSectionSchema).min(1).max(32),
+  keyPoints: z.array(z.string().min(1).max(500)).max(8),
+  facts: z.array(semanticUnitSchema).max(64),
+  opinions: z.array(semanticUnitSchema).max(64),
+  examples: z.array(semanticUnitSchema).max(64),
+  methods: z.array(semanticUnitSchema).max(64),
+  results: z.array(semanticUnitSchema).max(64),
+  counterArguments: z.array(semanticUnitSchema).max(64),
+  boundaries: z.array(semanticUnitSchema).max(64),
+  goldenSentences: z.array(semanticUnitSchema).max(16),
+  conclusion: z.string().max(500),
+  topicTags: z.array(z.string().min(1).max(32)).max(12),
+  confidence: z.number().min(0).max(1),
+  warnings: z.array(z.string().min(1).max(240)).max(16),
+});
+
+export const contentBlueprintSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  generationMode: generationModeSchema,
+  primaryContentType: contentTypeSchema,
+  secondaryContentTypes: z.array(contentTypeSchema),
+  centralThesis: z.string().min(1).max(500),
+  targetAudience: z.string().min(1).max(160),
+  tone: z.enum(["理性", "叙事", "实用", "轻松"]),
+  narrativeArc: narrativeArcSchema,
+  keyPoints: z.array(z.string().min(1).max(500)).max(8),
+  facts: z.array(semanticUnitSchema).max(64),
+  opinions: z.array(semanticUnitSchema).max(64),
+  examples: z.array(semanticUnitSchema).max(64),
+  methods: z.array(semanticUnitSchema).max(64),
+  results: z.array(semanticUnitSchema).max(64),
+  counterArguments: z.array(semanticUnitSchema).max(64),
+  boundaries: z.array(semanticUnitSchema).max(64),
+  goldenSentences: z.array(semanticUnitSchema).max(16),
+  topicTags: z.array(z.string().min(1).max(32)).max(12),
+  confidence: z.number().min(0).max(1),
+  warnings: z.array(z.string().min(1).max(240)).max(16),
   contentType: contentTypeSchema,
-  targetAudience: z.string().min(1).max(120).optional(),
   sourceFacts: z.array(z.strictObject({
     id: z.string().min(1),
     text: z.string().min(1),
@@ -84,13 +180,8 @@ const contentBlueprintSchema = z.strictObject({
   coreMessage: z.string().min(1).max(500),
   titleCandidates: z.array(z.string().min(1).max(80)).min(1).max(3),
   openingHook: z.string().min(1).max(300).optional(),
-  sections: z.array(z.strictObject({
-    id: z.string().min(1),
-    title: z.string().optional(),
-    purpose: z.enum(["opening", "context", "argument", "step", "evidence", "conflict", "turning", "conclusion"]),
-    sourceBlockIds: z.array(z.string().min(1)),
-  })),
-  conclusion: z.string().min(1).max(500).optional(),
+  sections: z.array(semanticSectionSchema),
+  conclusion: z.string().min(1).max(500),
   callToAction: z.string().min(1).max(240).optional(),
   modificationSummary: z.array(z.string().min(1).max(180)).max(8),
 });

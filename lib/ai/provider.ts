@@ -8,8 +8,13 @@ import {
   buildPlatformDesignPlans,
   CONTENT_TYPE_IDS,
   designPlanSchema,
+  editorialPlanSchema,
+  migrateSemanticBlueprintSections,
+  semanticBlueprintSchema,
   type ContentType,
+  type ContentBlueprint,
   type DesignPlan,
+  type EditorialPlan,
   type GenerationMode,
 } from "../design-plan";
 import {
@@ -24,6 +29,9 @@ import {
   type DesignSchemeId,
   type VisualThemeId,
 } from "../design-schemes";
+import { validateSemanticBlueprint } from "../design-plan/semantic-analyzer";
+import { buildLocalEditorialPlan } from "../design-plan/editorial-plan";
+import { isGenericStructureHeading } from "../design-plan/content-filter";
 import type { PlatformId, PlatformVersion, PlatformVersionMap } from "../platforms/types";
 
 export const aiPlatformIds = ["wechat", "xiaohongshu", "douyinImage", "douyinLongform"] as const;
@@ -46,11 +54,18 @@ const generatedPlatformDraftSchema = z.strictObject({
   content: unifiedArticleContentSchema,
 });
 
-const generatedResponseSchema = z.strictObject({
+const legacyGeneratedResponseSchema = z.strictObject({
   schemaVersion: z.literal(1),
   designPlan: designPlanSchema.optional(),
   drafts: z.array(generatedPlatformDraftSchema).min(1).max(aiPlatformIds.length),
 });
+
+const generatedEditorialResponseSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  editorialPlans: z.array(editorialPlanSchema).min(1).max(aiPlatformIds.length),
+});
+
+const generatedResponseSchema = z.union([generatedEditorialResponseSchema, legacyGeneratedResponseSchema]);
 
 const openAIChatCompletionSchema = z.object({
   id: z.string().optional(),
@@ -168,6 +183,18 @@ export type ProviderGenerateOptions = {
 
 export type ProviderGenerateResult = {
   response: GeneratedPlatformResponse;
+  diagnostics: AIDiagnostics;
+};
+
+export type ProviderSemanticAnalyzeOptions = {
+  source: UnifiedArticleContent;
+  sourceVersionId?: string;
+  generationMode: GenerationMode;
+  signal?: AbortSignal;
+};
+
+export type ProviderSemanticAnalyzeResult = {
+  blueprint: ContentBlueprint;
   diagnostics: AIDiagnostics;
 };
 
@@ -312,6 +339,76 @@ export class OpenAICompatibleProvider {
     }
   }
 
+  async analyzeSemantic(options: ProviderSemanticAnalyzeOptions): Promise<ProviderSemanticAnalyzeResult> {
+    const diagnostics = this.baseDiagnostics(options.sourceVersionId);
+    const abortController = new AbortController();
+    let abortKind: "timeout" | "cancelled" | undefined;
+    const cancelFromCaller = () => {
+      if (abortKind) return;
+      abortKind = "cancelled";
+      if (!abortController.signal.aborted) abortController.abort(new Error("AI analysis cancelled"));
+    };
+
+    if (options.signal?.aborted) throw this.error("cancelled", "AI analysis was cancelled.", false, diagnostics);
+    options.signal?.addEventListener("abort", cancelFromCaller, { once: true });
+    const timeoutId = setTimeout(() => {
+      if (abortKind === "cancelled" || options.signal?.aborted) return;
+      abortKind = "timeout";
+      abortController.abort(new Error("AI analysis timed out"));
+    }, this.timeoutMs);
+
+    try {
+      const throwIfAborted = () => {
+        if (abortKind === "timeout") throw this.error("timeout", "AI semantic analysis timed out.", true, diagnostics);
+        if (abortKind === "cancelled" || options.signal?.aborted) throw this.error("cancelled", "AI analysis was cancelled.", false, diagnostics);
+      };
+      const response = await this.fetchImpl(this.endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${this.apiKey}` },
+        body: JSON.stringify(this.buildSemanticRequestBody(options)),
+        signal: abortController.signal,
+      });
+      throwIfAborted();
+      const responseDiagnostics = {
+        ...diagnostics,
+        status: response.status,
+        requestId: response.headers.get("x-request-id") ?? response.headers.get("x-openai-request-id") ?? undefined,
+      };
+      if (response.status === 429) throw this.error("rate_limit", "AI provider rate limit exceeded.", true, responseDiagnostics);
+      if (response.status === 401 || response.status === 403) throw this.error("unauthorized", "AI provider authentication failed.", false, responseDiagnostics);
+      if (!response.ok) throw this.error("upstream", "AI provider request failed.", response.status >= 500, responseDiagnostics);
+
+      const completion = await parseJsonResponse(response, responseDiagnostics, (info) => this.error("transport", info, true, responseDiagnostics));
+      throwIfAborted();
+      const envelope = openAIChatCompletionSchema.safeParse(completion);
+      if (!envelope.success) throw this.schemaError(["OpenAI-compatible response envelope is invalid."], responseDiagnostics);
+      const parsedContent = parseAssistantJson(envelope.data.choices[0]?.message.content ?? "");
+      if (!parsedContent.ok) throw this.schemaError(["Assistant semantic content is not valid JSON."], responseDiagnostics);
+      const parsedBlueprint = semanticBlueprintSchema.safeParse(parsedContent.value);
+      if (!parsedBlueprint.success) throw this.schemaError(compactZodIssues(parsedBlueprint.error), responseDiagnostics);
+      const fallback = analyzeArticleDesign(options.source, { generationMode: options.generationMode }).blueprint;
+      const blueprint = mergeSemanticBlueprint(parsedBlueprint.data, fallback, options.source);
+      const trace = validateSemanticBlueprint(blueprint, options.source);
+      if (!trace.ok) {
+        throw this.schemaError([
+          ...(trace.missingBlockIds.length ? [`missing source blocks: ${trace.missingBlockIds.join(",")}`] : []),
+          ...(trace.unsupportedSections.length ? [`unsupported sections: ${trace.unsupportedSections.join(",")}`] : []),
+          ...(trace.inventedUnits.length ? [`invented semantic units: ${trace.inventedUnits.join(",")}`] : []),
+          ...(trace.invalidDisplayHeadings.length ? [`invalid display headings: ${trace.invalidDisplayHeadings.join(",")}`] : []),
+        ], responseDiagnostics);
+      }
+      return { blueprint, diagnostics: responseDiagnostics };
+    } catch (error) {
+      if (abortKind === "timeout") throw this.error("timeout", "AI semantic analysis timed out.", true, diagnostics);
+      if (abortKind === "cancelled" || options.signal?.aborted) throw this.error("cancelled", "AI analysis was cancelled.", false, diagnostics);
+      if (error instanceof AIProviderError) throw error;
+      throw this.error("transport", "AI semantic analysis request failed.", true, diagnostics);
+    } finally {
+      clearTimeout(timeoutId);
+      options.signal?.removeEventListener("abort", cancelFromCaller);
+    }
+  }
+
   private buildRequestBody(source: UnifiedArticleContent, platforms: PlatformId[], generationMode: GenerationMode) {
     return {
       model: this.model,
@@ -323,13 +420,36 @@ export class OpenAICompatibleProvider {
         {
           role: "system",
           content:
-            `Return only JSON with schemaVersion:1, designPlan, and drafts[]. designPlan may contain only contentType, targetAudience, coreMessage, recommendedTitle, titleCandidates, openingHook, keyPoints, conclusion, callToAction, recommendedScheme, recommendedThemeId, contentLayoutId, recommendationReason, and modificationSummary. contentType must be one of ${CONTENT_TYPE_IDS.join(",")}; recommendedScheme must be one of ${DESIGN_SCHEME_IDS.join(",")}; recommendedThemeId, when provided, must be one of ${VISUAL_THEME_IDS.join(",")}; contentLayoutId, when provided, must be one of ${CONTENT_LAYOUT_IDS.join(",")}. Each draft must include platform, title, summary, highlights, tags, optional cover, and content. content must be plain article text or Markdown, never nested JSON, HTML, CSS, or script. ${generationInstruction(generationMode)} ${platformGenerationInstruction(platforms, source.sourceText.length)} Preserve source facts and important limitations; do not invent data, cases, people, policies, quotes, or outcomes.`,
+            `Return only JSON with schemaVersion:1 and editorialPlans[]. Each editorial plan must contain platform, contentType, title, optional hook, sections, optional summary and tags. Each section must contain id, role, sourceBlockIds, and optional heading, body or bullets. role must be one of context, claim, evidence, example, comparison, method, warning, conclusion. sourceBlockIds must refer to the supplied source blocks. Do not return designPlan, drafts, UnifiedArticleContent, HTML, CSS, JavaScript, or page geometry. ${generationInstruction(generationMode)} ${platformGenerationInstruction(platforms, source.sourceText.length)} Preserve source facts and important limitations; do not invent data, cases, people, policies, quotes, or outcomes.`,
         },
         {
           role: "user",
           content: JSON.stringify({
             platforms,
             source: buildModelSource(source),
+          }),
+        },
+      ],
+    };
+  }
+
+  private buildSemanticRequestBody(options: ProviderSemanticAnalyzeOptions) {
+    return {
+      model: this.model,
+      temperature: 0.1,
+      ...(this.maxOutputTokens ? { max_tokens: Math.min(this.maxOutputTokens, 6000) } : {}),
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: "只返回符合语义分析 Schema 的 JSON，不要返回 HTML、CSS、JavaScript 或解释文字。每个 facts、opinions、examples、methods、results、counterArguments、boundaries、goldenSentences 单元的 text 必须逐字来自对应源文块，sourceBlockIds 必须真实存在。不要把个人体验当事实，不要把作者判断当事实，不要补充源文没有的数据、人物、案例或结论。role、purpose、recommendedPageRole 和 title 仅是内部分析 metadata，不能直接写成文章标题。没有原文小标题时，title 置为空并省略 displayHeading；不要生成“先补背景”“真正的冲突”“最后总结”等导航套话。只有原文已有小标题才能使用 provenance=source 的 displayHeading；只有 reachOptimized 模式且确有表达优化时才使用 provenance=expressionOptimization。所有 displayHeading 都必须是自然、具体的对外文案。",
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            sourceRevision: options.sourceVersionId,
+            generationMode: options.generationMode,
+            source: buildSemanticModelSource(options.source),
           }),
         },
       ],
@@ -372,12 +492,52 @@ function buildModelSource(source: UnifiedArticleContent) {
     parseMode: source.parseMode,
     sourceFormat: source.sourceFormat,
     sourceText: source.sourceText,
+    blocks: source.blocks.map((block) => ({
+      id: block.id,
+      type: block.type,
+      text: block.text,
+    })),
+  };
+}
+
+function buildSemanticModelSource(source: UnifiedArticleContent) {
+  return {
+    title: source.title,
+    parseMode: source.parseMode,
+    sourceFormat: source.sourceFormat,
+    sourceText: source.sourceText,
+    blocks: source.blocks.map((block) => ({
+      id: block.id,
+      type: block.type,
+      text: block.text,
+    })),
+  };
+}
+
+function mergeSemanticBlueprint(
+  semantic: z.infer<typeof semanticBlueprintSchema>,
+  fallback: ContentBlueprint,
+  source: UnifiedArticleContent,
+): ContentBlueprint {
+  const migratedSections = migrateSemanticBlueprintSections({ ...fallback, ...semantic }, source).sections;
+  return {
+    ...fallback,
+    ...semantic,
+    sections: migratedSections,
+    contentType: semantic.primaryContentType,
+    coreMessage: semantic.centralThesis,
+    sourceFacts: semantic.facts.map((fact) => ({ id: fact.id, text: fact.text, sourceBlockIds: [...fact.sourceBlockIds] })),
+    titleCandidates: fallback.titleCandidates,
+    openingHook: semantic.narrativeArc.opening || fallback.openingHook,
+    conclusion: semantic.conclusion || fallback.conclusion,
+    callToAction: fallback.callToAction,
+    modificationSummary: fallback.modificationSummary,
   };
 }
 
 function platformGenerationInstruction(platforms: PlatformId[], sourceLength: number) {
   if (platforms.length !== 1) {
-    return "Keep each draft concise and platform-specific.";
+    return "Keep each editorial plan concise and platform-specific.";
   }
 
   switch (platforms[0]) {
@@ -386,9 +546,9 @@ function platformGenerationInstruction(platforms: PlatformId[], sourceLength: nu
         ? "For WeChat, preserve the core reasoning but compress long source material to roughly 5000 Chinese characters; do not repeat the source unnecessarily."
         : "For WeChat, preserve the source article's complete reasoning and necessary body paragraphs without repeating the source unnecessarily.";
     case "xiaohongshu":
-      return "For Xiaohongshu, rewrite as a concise, readable post with a strong hook, key points, and practical takeaway; target roughly 600-1200 Chinese characters.";
+      return "For Xiaohongshu, organize a concise, readable sequence with a strong hook, one key point per page, and a practical takeaway; target roughly 600-1200 Chinese characters.";
     case "douyinImage":
-      return "For Douyin image-text, write 5-9 short card-ready blocks separated by blank lines, with one clear point per block and roughly 40-90 Chinese characters per block.";
+      return "For Douyin image-text, organize 5-9 short card-ready sections with one clear point per section and roughly 40-90 Chinese characters per section.";
     case "douyinLongform":
       return "For Douyin longform, rewrite as a compact narrative with a hook, progression, and conclusion; target roughly 800-1600 Chinese characters.";
   }
@@ -438,10 +598,20 @@ export async function generatePlatformVersions(options: GeneratePlatformVersions
       platforms,
       signal: options.signal,
     });
-    const designPlan = generated.response.designPlan ?? fallbackDesignPlan;
-    const generatedContent = generationMode === "layoutOnly"
-      ? buildLayoutOnlyPlatformVersions(options.source, platforms, designPlan, now)
-      : buildGeneratedPlatformVersions(generated.response.drafts, platforms, options.source, now);
+    let designPlan: DesignPlan;
+    let generatedContent: { versions: PlatformVersionMap; factCheckWarnings: string[] };
+    if ("editorialPlans" in generated.response) {
+      const effectivePlans = generated.response.editorialPlans.map((plan) => generationMode === "layoutOnly"
+        ? buildLocalEditorialPlan(options.source, fallbackDesignPlan.blueprint, plan.platform)
+        : plan);
+      designPlan = designPlanWithEditorialPlans(options.source, fallbackDesignPlan, effectivePlans);
+      generatedContent = buildEditorialPlatformVersions(effectivePlans, platforms, options.source, designPlan, generationMode, now);
+    } else {
+      designPlan = generated.response.designPlan ?? fallbackDesignPlan;
+      generatedContent = generationMode === "layoutOnly"
+        ? buildLayoutOnlyPlatformVersions(options.source, platforms, designPlan, now)
+        : buildGeneratedPlatformVersions(generated.response.drafts, platforms, options.source, now);
+    }
     const baselineVersions = platforms.reduce<PlatformVersionMap>((baseline, platform) => {
       baseline[platform] = currentVersions[platform] ?? fallbackVersions[platform];
       return baseline;
@@ -586,6 +756,100 @@ function buildGeneratedPlatformVersions(
   }
 
   return { versions, factCheckWarnings };
+}
+
+function buildEditorialPlatformVersions(
+  plans: EditorialPlan[],
+  platforms: PlatformId[],
+  source: UnifiedArticleContent,
+  designPlan: DesignPlan,
+  generationMode: GenerationMode,
+  updatedAt: string,
+): { versions: PlatformVersionMap; factCheckWarnings: string[] } {
+  const byPlatform = new Map(plans.map((plan) => [plan.platform, plan]));
+  const versions: PlatformVersionMap = {};
+  const factCheckWarnings: string[] = [];
+
+  for (const platform of platforms) {
+    const requestedPlan = byPlatform.get(platform);
+    if (!requestedPlan) {
+      throw new AIProviderError({
+        code: "schema",
+        message: "AI provider response is missing a requested platform.",
+        retryable: false,
+        diagnostics: {
+          provider: "openai-compatible",
+          model: "unknown",
+          errorCode: "schema",
+          details: [`missing platform: ${platform}`],
+        },
+      });
+    }
+
+    const plan = generationMode === "layoutOnly"
+      ? buildLocalEditorialPlan(source, designPlan.blueprint, platform)
+      : requestedPlan;
+    const factCheck = validateGeneratedFacts(editorialPlanText(plan), source);
+    if (!factCheck.ok) {
+      if (factCheck.unsupportedNumbers.length > 0) {
+        factCheckWarnings.push(`${platform}:fact_check_warning:unsupported_number_count:${factCheck.unsupportedNumbers.length}`);
+      }
+      if (factCheck.unsupportedQuotes.length > 0) {
+        factCheckWarnings.push(`${platform}:fact_check_warning:unsupported_quote_count:${factCheck.unsupportedQuotes.length}`);
+      }
+    }
+
+    const summary = plan.summary || plan.sections.map((section) => section.body || section.bullets?.join("；") || "").find(Boolean) || designPlan.coreMessage;
+    const highlights = plan.sections
+      .flatMap((section) => [...(section.bullets ?? []), section.body ?? ""])
+      .map((text) => firstSentenceForMetadata(text))
+      .filter(Boolean)
+      .slice(0, 5);
+    versions[platform] = {
+      platform,
+      status: "generated",
+      title: plan.title,
+      content: buildPlatformArticle(source, platform, designPlan),
+      summary,
+      highlights: highlights.length ? highlights : [summary],
+      tags: plan.tags?.length ? [...plan.tags] : [...designPlan.tags],
+      cover: platform === "douyinImage" ? { title: plan.title, subtitle: summary } : undefined,
+      updatedAt,
+    };
+  }
+
+  return { versions, factCheckWarnings };
+}
+
+function designPlanWithEditorialPlans(
+  source: UnifiedArticleContent,
+  base: DesignPlan,
+  generatedPlans: EditorialPlan[],
+): DesignPlan {
+  const generatedByPlatform = new Map(generatedPlans.map((plan) => [plan.platform, plan]));
+  const editorialPlans = {
+    wechat: generatedByPlatform.get("wechat") ?? buildLocalEditorialPlan(source, base.blueprint, "wechat"),
+    xiaohongshu: generatedByPlatform.get("xiaohongshu") ?? buildLocalEditorialPlan(source, base.blueprint, "xiaohongshu"),
+    douyinImage: generatedByPlatform.get("douyinImage") ?? buildLocalEditorialPlan(source, base.blueprint, "douyinImage"),
+    douyinLongform: generatedByPlatform.get("douyinLongform") ?? buildLocalEditorialPlan(source, base.blueprint, "douyinLongform"),
+  } satisfies Record<PlatformId, EditorialPlan>;
+  const scheme = getDesignScheme(base.recommendedScheme);
+  return {
+    ...base,
+    platformPlans: buildPlatformDesignPlans(source, base.blueprint, scheme, {
+      themeId: base.recommendedThemeId ?? scheme.themeId,
+      contentLayoutId: base.contentLayoutId ?? scheme.contentLayoutId,
+      editorialPlans,
+    }),
+  };
+}
+
+function editorialPlanText(plan: EditorialPlan) {
+  return [plan.title, plan.hook ?? "", ...plan.sections.flatMap((section) => [section.heading ?? "", section.body ?? "", ...(section.bullets ?? [])]), plan.summary ?? ""].join("\n");
+}
+
+function firstSentenceForMetadata(value: string) {
+  return value.split(/(?<=[。！？；])/u).map((part) => part.trim()).find(Boolean) ?? value.trim();
 }
 
 function buildLayoutOnlyPlatformVersions(
@@ -761,6 +1025,12 @@ function parseAssistantJson(content: string) {
 }
 
 function sanitizeGeneratedResponse(value: unknown, source: UnifiedArticleContent, generationMode: GenerationMode): unknown {
+  if (isRecord(value) && Array.isArray(value.editorialPlans)) {
+    return {
+      schemaVersion: 1,
+      editorialPlans: value.editorialPlans.map((plan) => sanitizeEditorialPlan(plan, source, generationMode)),
+    };
+  }
   if (!isRecord(value) || !Array.isArray(value.drafts)) {
     return value;
   }
@@ -771,6 +1041,65 @@ function sanitizeGeneratedResponse(value: unknown, source: UnifiedArticleContent
     ...(designPlan ? { designPlan } : {}),
     drafts: value.drafts.map((draft) => sanitizeGeneratedDraft(draft, source.parseMode, source.title)),
   };
+}
+
+function sanitizeEditorialPlan(value: unknown, source: UnifiedArticleContent, generationMode: GenerationMode): unknown {
+  if (!isRecord(value)) return value;
+  const platform = value.platform;
+  const fallback = typeof platform === "string" && isPlatformId(platform)
+    ? buildLocalEditorialPlan(source, analyzeArticleDesign(source, { generationMode }).blueprint, platform)
+    : undefined;
+  const validSourceIds = new Set(source.blocks.map((block) => block.id));
+  const sections = Array.isArray(value.sections)
+    ? value.sections.flatMap((item, index) => {
+        if (!isRecord(item) || typeof item.id !== "string" || !isEditorialSectionRole(item.role)) return [];
+        const sourceBlockIds = Array.isArray(item.sourceBlockIds)
+          ? item.sourceBlockIds.filter((id): id is string => typeof id === "string" && validSourceIds.has(id))
+          : [];
+        if (!sourceBlockIds.length) return [];
+        const heading = sanitizeEditorialText(item.heading, 160);
+        const body = sanitizeEditorialText(item.body, 12000);
+        const bullets = Array.isArray(item.bullets)
+          ? item.bullets.map((bullet) => sanitizeEditorialText(bullet, 500)).filter((bullet): bullet is string => Boolean(bullet)).slice(0, 12)
+          : undefined;
+        return [{
+          id: item.id || `editorial-section-${index + 1}`,
+          role: item.role,
+          ...(heading && !isGenericStructureHeading(heading) ? { heading } : {}),
+          ...(body ? { body } : {}),
+          ...(bullets?.length ? { bullets } : {}),
+          sourceBlockIds: [...new Set(sourceBlockIds)],
+        }];
+      })
+    : [];
+  if (!fallback || typeof platform !== "string" || !isPlatformId(platform)) return value;
+  const candidate = {
+    schemaVersion: 1 as const,
+    platform,
+    contentType: isContentType(value.contentType) ? value.contentType : fallback.contentType,
+    title: sanitizeEditorialText(value.title, 120) || fallback.title,
+    hook: sanitizeEditorialText(value.hook, 500),
+    sections: sections.length ? sections : fallback.sections,
+    summary: sanitizeEditorialText(value.summary, 500),
+    tags: Array.isArray(value.tags)
+      ? value.tags.map((tag) => sanitizeEditorialText(tag, 32)).filter((tag): tag is string => Boolean(tag)).slice(0, 8)
+      : fallback.tags,
+  };
+  return editorialPlanSchema.safeParse(candidate).success ? candidate : value;
+}
+
+function sanitizeEditorialText(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string" || containsPresentationSyntax(value)) return undefined;
+  const sanitized = sanitizeGeneratedText(value).slice(0, maxLength).trim();
+  return sanitized || undefined;
+}
+
+function isPlatformId(value: string): value is PlatformId {
+  return (aiPlatformIds as readonly string[]).includes(value);
+}
+
+function isEditorialSectionRole(value: unknown): value is EditorialPlan["sections"][number]["role"] {
+  return ["context", "claim", "evidence", "example", "comparison", "method", "warning", "conclusion"].includes(value as string);
 }
 
 function sanitizeGeneratedDesignPlan(value: unknown, source: UnifiedArticleContent, generationMode: GenerationMode): DesignPlan | undefined {

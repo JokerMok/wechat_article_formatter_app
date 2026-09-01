@@ -29,7 +29,7 @@ describe("analyzeArticleDesign", () => {
     expect(plan.highlights).toContain("先做小闭环，再扩大范围。");
     expect(plan.blockOrder.map((block) => block.blockId)).toEqual(article.blocks.map((block) => block.id));
     expect(plan.blueprint.sourceFacts.every((fact) => fact.sourceBlockIds.every((id) => article.blocks.some((block) => block.id === id)))).toBe(true);
-    expect(plan.platformPlans.xiaohongshu.pages.every((page) => page.blocks.every((block) => block.provenance === "source"))).toBe(true);
+    expect(plan.platformPlans.xiaohongshu.pages.every((page) => page.blocks.every((block) => block.provenance === "source" || block.provenance === "structuralSummary"))).toBe(true);
     expect(designPlanSchema.safeParse(plan).success).toBe(true);
   });
 
@@ -88,6 +88,41 @@ describe("analyzeArticleDesign", () => {
     expect(plan.contentLayoutId).toBe("editorial");
   });
 
+  it("does not let narrative import hints override an analytical article", () => {
+    const article = parseArticleContent(`# 做企业 AI 最尴尬的事：你想补地基，老板想先看楼
+
+刚开始做企业 AI 项目时，我先整理资料和业务规则。第一次汇报后，老板希望先看到一个能演示的应用。
+
+后来我发现，问题不是模型不够强，而是演示价值不能替代生产能力。能查大屏，就不要说能查全量业务数据。
+
+最后，团队需要一边交付边界明确的应用，一边补齐数据、规则和后台。`, { mode: "narrative" });
+
+    expect(detectContentType(article)).toBe("opinionAnalysis");
+  });
+
+  it("recognizes structural judgments without first-person wording", () => {
+    const article = parseArticleContent(`# 企业 AI 先做什么
+
+真正关键的不是先做一个复杂智能体，而是先把业务问题和可验证边界讲清楚。
+
+## 先建立判断
+
+资料、数据和流程没有整理好，应用越快上线，后面越容易返工。
+
+## 再做可见版本
+
+可以先交付一个能讨论的版本，但必须明确它能做什么、不能做什么。
+
+## 最后补齐基础
+
+应用暴露的问题，应当反过来推动数据、接口和权限建设。`, { mode: "knowledge" });
+
+    const plan = analyzeArticleDesign(article);
+    expect(plan.contentType).toBe("opinionAnalysis");
+    expect(plan.recommendedThemeId).toBe("editorial");
+    expect(plan.contentLayoutId).toBe("editorial");
+  });
+
   it("keeps an explicit checklist ahead of a trailing narrative word", () => {
     const article = parseArticleContent(`# 发布前检查清单
 
@@ -97,6 +132,23 @@ describe("analyzeArticleDesign", () => {
     expect(plan.contentType).toBe("checklistGuide");
     expect(plan.recommendedThemeId).toBe("informationCard");
     expect(plan.contentLayoutId).toBe("checklist");
+  });
+
+  it("does not infer a checklist from repeated validation wording in a long article", () => {
+    const repeatedParagraphs = Array.from({ length: 12 }, (_, index) =>
+      `第${index + 1}段：这是一段用于说明项目推进的内容，不能因为篇幅增加就丢失上下文，这里用来检查分页和导出顺序。`,
+    ).join("\n\n");
+    const article = parseArticleContent(`# 岗位 AI 提效复盘
+
+这是一篇关于岗位协作和交付边界的复盘文章。
+
+${repeatedParagraphs}
+
+总结：长文的重点是保持完整顺序。`, { mode: "knowledge" });
+
+    const plan = analyzeArticleDesign(article);
+    expect(plan.contentType).toBe("opinionAnalysis");
+    expect(plan.recommendedThemeId).toBe("editorial");
   });
 
   it("uses four structurally distinct schemes with user-facing metadata", () => {

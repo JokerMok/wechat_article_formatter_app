@@ -10,6 +10,8 @@ export {
 } from "./provider";
 
 export { HostedAIProvider } from "./hosted-provider";
+export { HostedSemanticAnalyzer, OpenAICompatibleSemanticAnalyzer } from "./semantic-provider";
+export type { SemanticAnalyzer } from "./semantic-provider";
 
 export type {
   AIDiagnostics,
@@ -27,4 +29,6 @@ export type {
   OpenAICompatibleProviderConfig,
   ProviderGenerateOptions,
   ProviderGenerateResult,
+  ProviderSemanticAnalyzeOptions,
+  ProviderSemanticAnalyzeResult,
 } from "./provider";

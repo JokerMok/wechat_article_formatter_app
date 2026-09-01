@@ -12,31 +12,17 @@ import { collectTags, renderBlockText, stableChecksum } from "../platforms/platf
 import type { PlatformId } from "../platforms/types";
 import { cleanPublishingText, isGenericStructureHeading, isWeakPublishingText, publicationBlocks } from "./content-filter";
 import { buildPlatformDesignPlans } from "./platform-planner";
+import { buildLocalEditorialPlan } from "./editorial-plan";
+import { analyzeSemanticBlueprint, summarizeSemanticSignals } from "./semantic-analyzer";
 import type {
   ContentBlockRole,
   ContentBlueprint,
-  ContentSection,
-  ContentSectionPurpose,
   ContentTone,
   ContentType,
   DesignPlan,
   DesignPlanBlock,
   GenerationMode,
-  SourceFact,
 } from "./types";
-
-type ContentRule = { id: ContentType; pattern: RegExp; weight: number };
-
-const CONTENT_RULES: ContentRule[] = [
-  { id: "knowledgeTutorial", pattern: /教程|入门|指南|怎么做|如何|操作|配置|使用方法|实操|流程/, weight: 3 },
-  { id: "checklistGuide", pattern: /清单|攻略|避坑|检查项|注意事项|步骤|工具推荐|要点/, weight: 4 },
-  { id: "opinionAnalysis", pattern: /我认为|真正关键|本质|不是.+而是|观点|判断|为什么|反常识|核心问题/, weight: 3 },
-  { id: "dataInsight", pattern: /数据显示|数据表明|数据分析|数据解读|数据复盘|报告|趋势|增长|下降|同比|环比|调查|比例|统计|样本|\d+(?:\.\d+)?\s*(?:%|％|倍|万|亿|元|人|次|个|项|条|类|月|年|天)/, weight: 4 },
-  { id: "caseReview", pattern: /案例|复盘|项目复盘|业务复盘|客户交付|交付|实施|上线|解决方案|验收/, weight: 4 },
-  { id: "storyNarrative", pattern: /那天|后来|第一次|当时|直到|没想到|故事|经历|转折|回头看|这几个月/, weight: 3 },
-  { id: "productIntroduction", pattern: /产品说明|产品介绍|产品功能|产品能力|适用场景|选型|配置建议|服务方案|版本说明/, weight: 3 },
-  { id: "experienceSharing", pattern: /体验|体会|感受|分享|踩坑|我用|这几个月|建议|心得/, weight: 3 },
-];
 
 const CONTENT_TYPE_THEME: Record<ContentType, VisualThemeId> = {
   knowledgeTutorial: "informationCard",
@@ -111,20 +97,17 @@ export function analyzeArticleDesign(content: UnifiedArticleContent, options: An
     ? []
     : ["提供标题候选并保留原题", "提炼开头钩子和核心信息", "按平台阅读习惯调整内容顺序", "保留原文事实、限定条件和人工编辑"];
   const blueprint: ContentBlueprint = {
-    schemaVersion: 1,
-    generationMode,
-    contentType,
-    targetAudience,
-    sourceFacts: buildSourceFacts(publishableContent),
+    ...analyzeSemanticBlueprint(content, { generationMode, contentType, targetAudience, tone }),
     coreMessage,
+    centralThesis: coreMessage,
     titleCandidates,
-    openingHook,
-    sections: buildContentSections(publishableContent, contentType),
+    ...(openingHook ? { openingHook } : {}),
     conclusion,
     ...(callToAction ? { callToAction } : {}),
     modificationSummary,
   };
-  const platformPlans = buildPlatformDesignPlans(content, blueprint, scheme, { themeId, contentLayoutId });
+  const editorialPlans = buildEditorialPlans(content, blueprint);
+  const platformPlans = buildPlatformDesignPlans(content, blueprint, scheme, { themeId, contentLayoutId, editorialPlans });
 
   return {
     schemaVersion: 1,
@@ -164,101 +147,115 @@ export function analyzeArticleDesign(content: UnifiedArticleContent, options: An
   };
 }
 
-function buildSourceFacts(content: UnifiedArticleContent): SourceFact[] {
-  return content.blocks.flatMap((block, index) => {
-    if (block.type === "pageBreak" || block.type === "divider" || block.type === "code" || block.type === "image") return [];
-    const values = block.type === "list"
-      ? block.items
-      : block.type === "card"
-        ? [[block.title, block.body].filter(Boolean).join("：")]
-        : [block.text];
-    return values.map(cleanPublishingText).filter(Boolean).map((text, valueIndex) => ({
-      id: `fact-${index + 1}-${valueIndex + 1}`,
-      text,
-      sourceBlockIds: [block.id],
-    }));
+export function applySemanticBlueprint(
+  content: UnifiedArticleContent,
+  semanticBlueprint: ContentBlueprint,
+  options: Pick<AnalyzeArticleDesignOptions, "generationMode" | "recommendedThemeId" | "recommendedLayoutId" | "recommendedScheme"> = {},
+): DesignPlan {
+  const base = analyzeArticleDesign(content, {
+    generationMode: options.generationMode ?? semanticBlueprint.generationMode,
+    recommendedScheme: options.recommendedScheme,
+    recommendedThemeId: options.recommendedThemeId,
+    recommendedLayoutId: options.recommendedLayoutId,
   });
+  const themeId = options.recommendedThemeId ?? CONTENT_TYPE_THEME[semanticBlueprint.primaryContentType] ?? base.recommendedThemeId ?? getDesignScheme(base.recommendedScheme).themeId;
+  const contentLayoutId = options.recommendedLayoutId ?? CONTENT_TYPE_LAYOUT[semanticBlueprint.primaryContentType] ?? base.contentLayoutId ?? getDesignScheme(base.recommendedScheme).contentLayoutId;
+  const recommendedScheme = schemeIdForVisualThemeAndLayout(themeId, contentLayoutId);
+  const scheme = getDesignScheme(recommendedScheme);
+  const theme = getVisualTheme(themeId);
+  const blueprint: ContentBlueprint = {
+    ...base.blueprint,
+    ...semanticBlueprint,
+    generationMode: options.generationMode ?? semanticBlueprint.generationMode,
+    contentType: semanticBlueprint.primaryContentType,
+    coreMessage: semanticBlueprint.centralThesis,
+    sourceFacts: semanticBlueprint.facts.map((fact) => ({ id: fact.id, text: fact.text, sourceBlockIds: [...fact.sourceBlockIds] })),
+    titleCandidates: base.titleCandidates,
+    openingHook: semanticBlueprint.narrativeArc.opening || base.openingHook,
+    callToAction: base.callToAction,
+    modificationSummary: base.modificationSummary,
+  };
+  const editorialPlans = buildEditorialPlans(content, blueprint);
+  const platformPlans = buildPlatformDesignPlans(content, blueprint, scheme, { themeId, contentLayoutId, editorialPlans });
+
+  return {
+    ...base,
+    generationMode: blueprint.generationMode,
+    contentType: blueprint.primaryContentType,
+    targetAudience: blueprint.targetAudience,
+    coreMessage: blueprint.centralThesis,
+    tone: blueprint.tone,
+    recommendedScheme,
+    recommendedThemeId: themeId,
+    contentLayoutId,
+    contentLayout: getContentLayout(contentLayoutId),
+    visualStyle: theme.name,
+    palette: { primary: theme.colors.primary, secondary: theme.colors.secondary, background: theme.colors.background, text: theme.colors.text },
+    typography: { ...scheme.typography, titleFamily: theme.typography.titleFamily, bodyFamily: theme.typography.bodyFamily, focusFamily: theme.typography.focusFamily },
+    density: scheme.density,
+    keyPoints: blueprint.keyPoints,
+    openingHook: blueprint.narrativeArc.opening || base.openingHook,
+    conclusion: blueprint.conclusion || base.conclusion,
+    tags: blueprint.topicTags,
+    blueprint,
+    platformPlans,
+  };
 }
 
-function buildContentSections(content: UnifiedArticleContent, contentType: ContentType): ContentSection[] {
-  const sections: ContentSection[] = [];
-  let current: ContentSection | undefined;
-  for (const block of content.blocks) {
-    if (block.type === "title" || block.type === "pageBreak" || block.type === "divider" || block.type === "code") continue;
-    if (block.type === "section" || block.type === "subsection") {
-      current = {
-        id: `section-${sections.length + 1}`,
-        title: cleanPublishingText(block.text),
-        purpose: sectionPurpose(contentType, sections.length),
-        sourceBlockIds: [block.id],
-      };
-      sections.push(current);
-      continue;
-    }
-    if (!current) {
-      current = {
-        id: "section-1",
-        purpose: "opening",
-        sourceBlockIds: [],
-      };
-      sections.push(current);
-    }
-    current.sourceBlockIds.push(block.id);
-  }
-  if (sections.length > 1) sections[sections.length - 1]!.purpose = "conclusion";
-  return sections;
-}
-
-function sectionPurpose(contentType: ContentType, index: number): ContentSectionPurpose {
-  if (index === 0) return "opening";
-  if (contentType === "checklistGuide" || contentType === "knowledgeTutorial") return "step";
-  if (contentType === "dataInsight") return "evidence";
-  if (contentType === "caseReview" || contentType === "storyNarrative" || contentType === "experienceSharing") {
-    return index === 1 ? "conflict" : "turning";
-  }
-  return "argument";
+function buildEditorialPlans(content: UnifiedArticleContent, blueprint: ContentBlueprint) {
+  return {
+    wechat: buildLocalEditorialPlan(content, blueprint, "wechat"),
+    xiaohongshu: buildLocalEditorialPlan(content, blueprint, "xiaohongshu"),
+    douyinImage: buildLocalEditorialPlan(content, blueprint, "douyinImage"),
+    douyinLongform: buildLocalEditorialPlan(content, blueprint, "douyinLongform"),
+  };
 }
 
 export function detectContentType(content: UnifiedArticleContent): ContentType {
-  const analysisText = publicationBlocks(content).map((block) => renderBlockText(block) ?? "").join("\n");
-  const scores = new Map<ContentType, number>([
-    ["knowledgeTutorial", 0],
-    ["checklistGuide", content.blocks.some((block) => block.type === "list") ? 5 : 0],
-    ["opinionAnalysis", 2],
-    ["dataInsight", 0],
-    ["caseReview", content.parseMode === "business" ? 4 : 0],
-    ["storyNarrative", content.parseMode === "narrative" ? 4 : 0],
-    ["productIntroduction", content.parseMode === "business" ? 2 : 0],
-    ["experienceSharing", 0],
-  ]);
+  const summary = summarizeSemanticSignals(content);
+  const searchableText = [content.title, ...summary.headingTexts, ...publicationBlocks(content).map((block) => renderBlockText(block) ?? "")].join("\n");
+  const signals = summary.signalCounts;
+  const hasList = summary.listCount > 0;
+  const hasDataLanguage = /数据显示|数据表明|数据分析|数据解读|数据复盘|报告|趋势|增长|下降|同比|环比|调查|比例|统计|样本/u.test(searchableText);
+  const hasCaseTitle = /案例|客户项目|业务复盘/u.test(content.title ?? "");
+  const hasCaseEvidence = /案例|客户|项目|交付|实施|上线|解决方案|验收/u.test(searchableText) && signals.result > 0;
+  const hasStoryTitle = /那天|故事|经历|转折|一次/u.test(content.title ?? "");
+  const hasExperienceTitle = /体验|体会|感受|分享|踩坑|心得/u.test(content.title ?? "");
+  const hasProductTitle = /产品说明|产品介绍|产品功能|产品能力|适用场景|选型|配置建议|服务方案|版本说明/u.test(searchableText);
+  const hasChecklistShape = hasList || /清单|攻略|检查项|注意事项|步骤|要点/u.test(content.title ?? "");
+  const hasTutorialShape = /教程|入门|指南|怎么做|如何|操作|配置|使用方法|实操|流程/u.test(content.title ?? "");
+  const methodSignal = Math.min(signals.method, 3);
 
-  for (const rule of CONTENT_RULES) {
-    const flags = rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`;
-    const matches = analysisText.match(new RegExp(rule.pattern.source, flags));
-    scores.set(rule.id, (scores.get(rule.id) ?? 0) + Math.min(matches?.length ?? 0, 6) * rule.weight);
+  // Content type is inferred from the shape of the article first. Parse mode is
+  // an import hint and must not turn a first-person analysis into a story.
+  const scores: Array<[ContentType, number]> = [
+    ["checklistGuide", (hasList ? 8 : 0) + (hasChecklistShape ? 5 : 0) + methodSignal],
+    ["knowledgeTutorial", methodSignal + (hasTutorialShape ? 6 : 0)],
+    ["dataInsight", (hasDataLanguage ? 7 : 0) + Math.min(signals.fact, 3) * 2],
+    ["productIntroduction", hasProductTitle ? 8 : 0],
+    ["caseReview", (hasCaseTitle ? 5 : 0) + (hasCaseEvidence ? 7 : 0) + Math.min(signals.result, 3) * 2],
+    ["experienceSharing", (hasExperienceTitle ? 8 : 0) + Math.min(summary.personalVoiceBlockCount, 3) + (signals.example > 0 ? 2 : 0)],
+    ["storyNarrative", (hasStoryTitle ? 6 : 0) + signals.narrative * 3 + (signals.narrative >= 3 ? 4 : 0)],
+    ["opinionAnalysis", 3 + signals.opinion * 4 + signals.counter * 2 + Math.min(signals.boundary, 2) + Math.min(signals.conclusion, 2)],
+  ];
+
+  const opinionScore = scores.find(([id]) => id === "opinionAnalysis")?.[1] ?? 0;
+  const storyScore = scores.find(([id]) => id === "storyNarrative")?.[1] ?? 0;
+  const narrativeEvidence = signals.narrative >= 3 && summary.personalVoiceBlockCount >= 2;
+  if (!narrativeEvidence && !hasStoryTitle) {
+    scores.splice(scores.findIndex(([id]) => id === "storyNarrative"), 1);
+  } else if (opinionScore >= storyScore && !hasStoryTitle) {
+    scores.splice(scores.findIndex(([id]) => id === "storyNarrative"), 1);
   }
 
-  // Generic words such as "项目" or "最后" are common in explanatory prose.
-  // Case and story layouts need multiple narrative signals before they can win.
-  const dataSignalCount = countMatches(analysisText, /数据显示|数据表明|数据分析|数据解读|数据复盘|报告|趋势|增长|下降|同比|环比|调查|比例|统计|样本|\d+(?:\.\d+)?\s*(?:%|％|倍|万|亿|元|人|次|个|项|条|类|月|年|天)/g);
-  const caseSignalCount = countMatches(analysisText, /案例|复盘|项目复盘|业务复盘|客户交付|交付|实施|上线|解决方案|验收/g);
-  const storySignalCount = countMatches(analysisText, /那天|后来|第一次|当时|直到|没想到|故事|经历|转折|回头看|这几个月/g);
-  if (content.parseMode !== "business" && caseSignalCount < 2) scores.set("caseReview", 0);
-  if (content.parseMode !== "narrative" && storySignalCount < 2) scores.set("storyNarrative", 0);
-  if (dataSignalCount < 2) scores.set("dataInsight", 0);
-
-  return [...scores.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ?? "opinionAnalysis";
-}
-
-function countMatches(text: string, pattern: RegExp) {
-  return text.match(pattern)?.length ?? 0;
+  return scores.sort((left, right) => right[1] - left[1])[0]?.[0] ?? "opinionAnalysis";
 }
 
 function detectTone(content: UnifiedArticleContent, contentType: ContentType): ContentTone {
   if (contentType === "storyNarrative" || contentType === "caseReview") return "叙事";
   if (contentType === "experienceSharing") return "轻松";
   if (contentType === "checklistGuide" || contentType === "knowledgeTutorial") return "实用";
-  return content.parseMode === "narrative" ? "叙事" : "理性";
+  return "理性";
 }
 
 function detectAudience(text: string) {

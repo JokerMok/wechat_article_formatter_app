@@ -128,6 +128,62 @@ describe("OpenAICompatibleProvider", () => {
     expect(result.changes.some((change) => change.field === "title")).toBe(false);
   });
 
+  it("materializes the minimal editorial plan response into local platform pages", async () => {
+    const sourceParagraph = source.blocks.find((block) => block.type === "paragraph");
+    expect(sourceParagraph).toBeDefined();
+    const response = {
+      id: "chatcmpl-editorial-plan",
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            schemaVersion: 1,
+            editorialPlans: [{
+              schemaVersion: 1,
+              platform: "xiaohongshu",
+              contentType: "knowledgeTutorial",
+              title: "知识库重构",
+              sections: [{
+                id: "section-1",
+                role: "claim",
+                body: sourceParagraph!.text,
+                sourceBlockIds: [sourceParagraph!.id],
+              }],
+              tags: ["知识库"],
+            }],
+          }),
+        },
+      }],
+    };
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      void input;
+      void init;
+      return jsonResponse(response);
+    });
+    const provider = new OpenAICompatibleProvider({
+      ...baseProviderConfig,
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+
+    const result = await generatePlatformVersions({
+      provider,
+      source,
+      sourceVersionId: "source-editorial-plan",
+      generationMode: "reachOptimized",
+      platforms: ["xiaohongshu"],
+    });
+
+    expectOk(result);
+    expect(result.designPlan.platformPlans.xiaohongshu.editorialPlan).toMatchObject({
+      platform: "xiaohongshu",
+      sections: [{ id: "section-1", role: "claim", sourceBlockIds: [sourceParagraph!.id] }],
+    });
+    expect(result.versions.xiaohongshu?.content.blocks.some((block) => block.type === "pageBreak")).toBe(true);
+    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const requestBody = JSON.parse(String(requestInit?.body)) as { messages: Array<{ content: string }> };
+    expect(requestBody.messages[0]?.content).toContain("editorialPlans");
+    expect(requestBody.messages[0]?.content).toContain("Do not return designPlan, drafts, UnifiedArticleContent");
+  });
+
   it("TEST-008 keeps existing content on schema errors and returns fallback versions", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(invalidFixture)));
     const existing = buildFallbackPlatformVersions(source, ["wechat"], "2026-08-20T00:00:00.000Z");

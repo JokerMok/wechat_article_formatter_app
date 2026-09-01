@@ -1,8 +1,8 @@
 import { OpenAICompatibleProvider, type OpenAICompatibleProviderConfig } from "../../provider";
 import type { ServerAIConfig } from "../config";
-import type { ServerAIProvider } from "./types";
+import type { ServerAIProvider, ServerSemanticAnalyzer } from "./types";
 
-export class OpenAICompatibleAdapter implements ServerAIProvider {
+export class OpenAICompatibleAdapter implements ServerAIProvider, ServerSemanticAnalyzer {
   private readonly provider: OpenAICompatibleProvider;
   readonly model: string;
 
@@ -23,5 +23,9 @@ export class OpenAICompatibleAdapter implements ServerAIProvider {
 
   generate(options: Parameters<ServerAIProvider["generate"]>[0]) {
     return this.provider.generate(options);
+  }
+
+  analyzeSemantic(options: Parameters<ServerSemanticAnalyzer["analyzeSemantic"]>[0]) {
+    return this.provider.analyzeSemantic(options);
   }
 }

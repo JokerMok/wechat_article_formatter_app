@@ -1,6 +1,7 @@
 import type { SourcePosition, UnifiedArticleBlock, UnifiedArticleContent } from "../content";
 import { getDesignScheme } from "../design-schemes";
 import type { PlatformId } from "../platforms/types";
+import { buildLocalEditorialPlan } from "./editorial-plan";
 import { buildPlatformDesignPlans } from "./platform-planner";
 import type { DesignPlan, PagePlan, PlannedContentBlock, PlatformDesignPlan } from "./types";
 
@@ -30,7 +31,12 @@ function resolvePlatformPlan(source: UnifiedArticleContent, platform: PlatformId
     && existing?.layoutId === layoutId
     && existing.title
   ) return existing;
-  return buildPlatformDesignPlans(source, plan.blueprint, getDesignScheme(plan.recommendedScheme), { themeId, contentLayoutId: layoutId })[platform];
+  const editorialPlan = existing?.editorialPlan ?? buildLocalEditorialPlan(source, plan.blueprint, platform);
+  return buildPlatformDesignPlans(source, plan.blueprint, getDesignScheme(plan.recommendedScheme), {
+    themeId,
+    contentLayoutId: layoutId,
+    editorialPlans: { [platform]: editorialPlan },
+  })[platform];
 }
 
 function renderCardPages(
@@ -94,8 +100,6 @@ function blockTypeForRole(
   }
   if (block.role === "body") {
     if ((page.kind === "keyMetric" || page.kind === "turning" || page.kind === "transition") && blockIndex === 0) return "golden";
-    if (page.kind === "conflict" && blockIndex === 0) return "quote";
-    if ((page.kind === "summary" || page.kind === "ending" || page.kind === "conclusion" || page.kind === "epilogue") && blockIndex === page.blocks.length - 1) return "summary";
   }
   return "paragraph";
 }

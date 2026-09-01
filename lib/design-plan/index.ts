@@ -1,17 +1,27 @@
-export { analyzeArticleDesign, CONTENT_TYPE_LABELS, detectContentType } from "./local-analyzer";
+export { analyzeArticleDesign, applySemanticBlueprint, CONTENT_TYPE_LABELS, detectContentType } from "./local-analyzer";
 export type { AnalyzeArticleDesignOptions } from "./local-analyzer";
+export { analyzeSemanticBlueprint, migrateSemanticBlueprintSections, summarizeSemanticSignals, validateSemanticBlueprint } from "./semantic-analyzer";
+export type { SemanticSignalSummary } from "./semantic-analyzer";
 export { buildPlatformArticle } from "./platform-adapter";
 export { buildPlatformDesignPlans } from "./platform-planner";
-export { designPlanSchema } from "./schemas";
-export { CONTENT_TYPE_IDS, GENERATION_MODE_IDS, PAGE_PLAN_KINDS } from "./types";
+export { contentBlueprintSchema, designPlanSchema, editorialPlanSchema, semanticBlueprintSchema } from "./schemas";
+export { CONTENT_TYPE_IDS, EDITORIAL_SECTION_ROLES, GENERATION_MODE_IDS, PAGE_PLAN_KINDS } from "./types";
 export { CONTENT_LAYOUT_IDS } from "../design-schemes";
 export type {
   ContentBlockRole,
   ContentBlueprint,
   ContentProvenance,
   ContentSection,
+  DisplayHeading,
+  SemanticCertainty,
+  SemanticSectionRole,
+  SemanticUnit,
+  NarrativeArc,
   ContentTone,
   ContentType,
+  EditorialPlan,
+  EditorialSection,
+  EditorialSectionRole,
   DesignPalette,
   DesignPlan,
   DesignPlanBlock,

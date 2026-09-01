@@ -32,6 +32,17 @@ describe("buildPlatformArticle", () => {
     expect(result.blocks.some((block) => block.type === "cta")).toBe(false);
   });
 
+  it("keeps source image blocks in the generated WeChat content", () => {
+    const article = parseArticleContent(`# 图片保留测试
+
+正文需要和图片一起进入公众号成稿。
+
+![流程图](asset:asset-1)`, { mode: "knowledge" });
+    const result = buildPlatformArticle(article, "wechat", analyzeArticleDesign(article));
+
+    expect(result.blocks.some((block) => block.type === "image")).toBe(true);
+  });
+
   it("does not repeat the opening paragraph or rewrite source headings in layout-only mode", () => {
     const article = parseArticleContent(`# 项目复盘
 

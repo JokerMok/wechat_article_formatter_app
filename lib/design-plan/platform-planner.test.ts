@@ -25,6 +25,38 @@ const REAL_ARTICLE = `# 做企业 AI 最尴尬的事：你想补地基，老板�
 
 最后能不能做成，取决于团队能否一边搭出楼的样子，一边持续补齐下面的地基。`;
 
+const FULL_SEMANTIC_ARTICLE = `# 做企业 AI 最尴尬的事：你想补地基，老板想先看楼
+
+刚开始做企业 AI 项目时，我先把公司的产品文档、政策文件、客服问答和业务口径整理出来。没有这些资料，AI 根本答不了业务问题。
+
+## 一开始，我想先补基础
+
+我的规划是先做知识库，再接数据，最后让智能体进入具体业务场景。这个判断没错，但它不容易在第一次汇报时被看见。
+
+## 第一次汇报后，方向变了
+
+老板希望先看到一个客户能看的应用。落地的人知道基础还没准备好，但老板需要一个能打开、能演示、能证明项目正在推进的结果。
+
+## 先做一个能看的版本
+
+我们在大屏看板上加了语音助手入口，用户可以询问企业数据，系统从已有大屏查数据返回。这个版本能展示，也能试用，但查的不是完整业务数据。
+
+## 新的需求又插进来
+
+汇报过程中，老板又提出产品选型助手。产品规则和知识库还没完全沉淀，只能先用现有资料拼出一个能跑的版本。
+
+## 老板不是错，落地人也不是保守
+
+老板看结果，团队看数据、规则、权限和后台。两边都没错，只是关注点不一样。
+
+## 内部项目不是乙方交付
+
+内部项目需要同步风险、说明资源缺口，再根据现实调整顺序。开发人员还有自己的系统任务，不能假设所有人都会围着 AI 转。
+
+## 演示版可以做，但边界要清楚
+
+能查大屏，就不要说能查全量业务数据；能做文档问答，就不要说能处理复杂业务判断。先做一个能验证方向并暴露基础问题的样板房。`;
+
 describe("platform design planner", () => {
   it("keeps three independent themes composable with four content skeletons", () => {
     const article = parseArticleContent(REAL_ARTICLE, { mode: "narrative" });
@@ -53,13 +85,32 @@ describe("platform design planner", () => {
     expect(xhs.pages.length).toBeLessThanOrEqual(10);
     expect(douyin.pages.length).toBeGreaterThanOrEqual(3);
     expect(douyin.pages.length).toBeLessThanOrEqual(8);
-    expect(xhs.pages.map((page) => page.blocks.map((block) => block.text))).not.toEqual(douyin.pages.map((page) => page.blocks.map((block) => block.text)));
+    expect(xhs.platform).toBe("xiaohongshu");
+    expect(douyin.platform).toBe("douyinImage");
     expect(plan.platformPlans.wechat.exportSpec.format).toBe("html");
     expect(xhs.exportSpec).toMatchObject({ format: "png", width: 1080, height: 1440 });
     expect(douyin.pages.every((page) => page.blocks.length <= 6)).toBe(true);
     expect(douyin.pages.slice(1).every((page) => page.blocks.reduce((count, block) => count + block.text.length, 0) <= douyinCharacterBudget)).toBe(true);
     expect(xhs.pages.every((page) => page.blocks.length > 0)).toBe(true);
-    expect(xhs.pages.flatMap((page) => page.blocks).every((block) => block.provenance === "source")).toBe(true);
+    expect(xhs.pages.flatMap((page) => page.blocks).every((block) => block.provenance === "source" || block.provenance === "structuralSummary")).toBe(true);
+  });
+
+  it("uses semantic chapters for the enterprise AI article instead of mechanically filling cards", () => {
+    const article = parseArticleContent(FULL_SEMANTIC_ARTICLE, { mode: "narrative" });
+    const plan = analyzeArticleDesign(article);
+    const xhsPages = plan.platformPlans.xiaohongshu.pages;
+    const douyinPages = plan.platformPlans.douyinImage.pages;
+    const sectionRoles = new Set(plan.blueprint.sections.map((section) => section.role));
+
+    expect(xhsPages.length).toBeGreaterThanOrEqual(7);
+    expect(xhsPages.length).toBeLessThanOrEqual(9);
+    expect(douyinPages.length).toBeGreaterThanOrEqual(4);
+    expect(douyinPages.length).toBeLessThanOrEqual(8);
+    expect([...sectionRoles]).toEqual(expect.arrayContaining(["background", "example", "conflict", "method", "boundary"]));
+    const visibleHeadings = xhsPages.flatMap((page) => page.blocks).filter((block) => block.role === "heading");
+    expect(visibleHeadings.length).toBeGreaterThan(0);
+    expect(visibleHeadings.every((block) => FULL_SEMANTIC_ARTICLE.includes(block.text))).toBe(true);
+    expect(new Set(xhsPages.slice(1).map((page) => page.kind)).size).toBeGreaterThan(2);
   });
 
   it("adds pages for long content instead of changing the source blueprint", () => {

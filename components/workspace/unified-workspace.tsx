@@ -26,7 +26,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Toggle } from "@/components/ui/toggle";
 import { copyRichText } from "@/lib/copy-rich-text";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "@/lib/content";
-import { analyzeArticleDesign, type DesignPlan, type GenerationMode } from "@/lib/design-plan";
+import { analyzeArticleDesign, applySemanticBlueprint, CONTENT_TYPE_LABELS, type ContentBlueprint, type ContentTone, type ContentType, type DesignPlan, type GenerationMode, type SemanticSectionRole } from "@/lib/design-plan";
 import { createCardPreset, DESIGN_SCHEMES, getContentLayout, getVisualTheme, type DesignSchemeId } from "@/lib/design-schemes";
 import type { PlatformId } from "@/lib/platforms/types";
 import {
@@ -39,7 +39,8 @@ import {
   type CardLayoutPage,
   type CardLayoutResult,
 } from "@/lib/renderers/cards";
-import { HostedAIProvider, OpenAICompatibleProvider, generatePlatformVersions } from "@/lib/ai";
+import { HostedAIProvider, HostedSemanticAnalyzer, OpenAICompatibleProvider, OpenAICompatibleSemanticAnalyzer, generatePlatformVersions } from "@/lib/ai";
+import { AIProviderError } from "@/lib/ai";
 import type { WechatImageNode } from "@/lib/renderers/wechat";
 import { renderWechatContentHtml } from "@/lib/renderers/wechat";
 import {
@@ -289,7 +290,9 @@ export default function UnifiedWorkspace() {
   const historyRef = React.useRef<Record<PlatformId, DraftHistory>>(createEmptyHistories());
   const [sessionApiKey, setSessionApiKey] = React.useState("");
   const [sourceAnalysisNotice, setSourceAnalysisNotice] = React.useState<string>();
+  const [analysisEngine, setAnalysisEngine] = React.useState<"本地基础分析" | "AI 智能分析">("本地基础分析");
   const [parsedDrafts, setParsedDrafts] = React.useState<Partial<Record<PlatformId, PlatformDraft>>>({});
+  const [analysisRunning, setAnalysisRunning] = React.useState(false);
   const [aiRunState, setAiRunState] = React.useState<"idle" | "generating" | "error">("idle");
   const [aiStatusMessage, setAiStatusMessage] = React.useState<string | undefined>();
   const repoRef = React.useRef<ReturnType<typeof createProjectRepository> | undefined>(undefined);
@@ -297,6 +300,7 @@ export default function UnifiedWorkspace() {
   const hydratedRef = React.useRef(false);
   const revisionRef = React.useRef(0);
   const aiAbortRef = React.useRef<AbortController | undefined>(undefined);
+  const analysisAbortRef = React.useRef<AbortController | undefined>(undefined);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const backupInputRef = React.useRef<HTMLInputElement>(null);
   const activeDraft = workspace.platforms[activePlatform];
@@ -869,18 +873,100 @@ export default function UnifiedWorkspace() {
     setStatusMessage(message);
   }
 
-  function reparseCurrentPlatform() {
+  async function reparseCurrentPlatform() {
     if (!hydratedRef.current) {
       setStatusMessage("本地项目仍在恢复，请稍候再试；当前编辑稿未改变");
       return;
     }
 
+    const analysisPlatform = activePlatform;
     const current = workspaceRef.current;
-    const next = updateWorkspaceSource(current, current.sourceMarkdown);
-    const currentDraft = next.platforms[activePlatform];
-    const nextParsedDraft = createPlatformDraft(activePlatform, parseSourceMarkdown(next.sourceMarkdown), {
-      designPlan: next.designPlan,
+    const article = parseSourceMarkdown(current.sourceMarkdown);
+    const localState = updateWorkspaceSource(current, current.sourceMarkdown);
+    const localPlan = localState.designPlan;
+    const controller = new AbortController();
+    analysisAbortRef.current?.abort();
+    analysisAbortRef.current = controller;
+    setAnalysisRunning(true);
+    setSourceAnalysisNotice("正在分析源文……");
+    setStatusMessage(current.ai.mode === "deterministic" ? "正在进行本地基础分析" : "正在进行 AI 智能分析");
+
+    let designPlan = localPlan;
+    let engineLabel = "本地基础分析";
+    let fallbackNotice = "";
+    try {
+      if (current.ai.mode !== "deterministic") {
+        const analyzer = current.ai.mode === "hosted"
+          ? new HostedSemanticAnalyzer()
+          : new OpenAICompatibleSemanticAnalyzer({
+              baseUrl: current.ai.baseUrl.trim(),
+              model: current.ai.model.trim(),
+              apiKey: sessionApiKey.trim(),
+              timeoutMs: 30000,
+            });
+        const result = await analyzer.analyze({
+          source: article,
+          sourceVersionId: localState.sourceRevision,
+          generationMode: current.designPlan.generationMode,
+          signal: controller.signal,
+        });
+        designPlan = applySemanticBlueprint(article, result.blueprint, { generationMode: current.designPlan.generationMode });
+        engineLabel = "AI 智能分析";
+      }
+    } catch (error) {
+      if (error instanceof AIProviderError && error.code === "cancelled") {
+        setAnalysisRunning(false);
+        if (analysisAbortRef.current === controller) analysisAbortRef.current = undefined;
+        setSourceAnalysisNotice("分析已取消，当前编辑稿未改变");
+        setStatusMessage("分析已取消，当前编辑稿未改变");
+        return;
+      }
+      designPlan = localPlan;
+      fallbackNotice = error instanceof AIProviderError ? `；AI 分析失败，已回退本地基础分析（${error.message}）` : "；AI 分析失败，已回退本地基础分析";
+      engineLabel = "本地基础分析";
+    } finally {
+      if (analysisAbortRef.current === controller) analysisAbortRef.current = undefined;
+      setAnalysisRunning(false);
+    }
+
+    const next = { ...localState, designPlan, sourceRevision: designPlan.sourceRevision };
+    setAnalysisEngine(engineLabel as "本地基础分析" | "AI 智能分析");
+    const currentDraft = next.platforms[analysisPlatform];
+    const preserveManualStyle = currentDraft.status === "edited" || currentDraft.status === "locked";
+    const nextParsedDraft = createPlatformDraft(analysisPlatform, article, {
+      designPlan,
       sourceRevision: next.sourceRevision,
+      ratio: currentDraft.ratio,
+      lockedPageIds: currentDraft.lockedPageIds,
+      manualPages: currentDraft.manualPages,
+      ...(preserveManualStyle ? {
+        schemeId: currentDraft.schemeId,
+        themeId: currentDraft.themeId,
+        layoutId: currentDraft.layoutId,
+        templateKey: currentDraft.templateKey,
+      } : {}),
+    });
+    replaceWorkspace(next);
+    setParsedDrafts((currentDrafts) => ({ ...currentDrafts, [analysisPlatform]: nextParsedDraft }));
+    setSourceAnalysisNotice(`${engineLabel}完成 · ${designPlan.blueprint.sections.length} 个章节 · ${designPlan.blueprint.facts.length} 条事实${fallbackNotice}`);
+    setAiRunState("idle");
+    setAiStatusMessage(undefined);
+    setStatusMessage(`源文分析完成，已生成“${getVisualTheme(designPlan.recommendedThemeId ?? DESIGN_SCHEMES[designPlan.recommendedScheme].themeId).name}”结构建议；平台稿尚未覆盖${fallbackNotice}`);
+  }
+
+  function updateParsedSemanticBlueprint(patch: Partial<Pick<ContentBlueprint, "centralThesis" | "primaryContentType" | "targetAudience" | "tone" | "sections">>) {
+    const current = workspaceRef.current;
+    const article = parseSourceMarkdown(current.sourceMarkdown);
+    const blueprint = { ...current.designPlan.blueprint, ...patch };
+    const designPlan = applySemanticBlueprint(article, blueprint, {
+      generationMode: current.designPlan.generationMode,
+      recommendedThemeId: current.designPlan.recommendedThemeId,
+      recommendedLayoutId: current.designPlan.contentLayoutId,
+    });
+    const currentDraft = current.platforms[activePlatform];
+    const nextParsedDraft = createPlatformDraft(activePlatform, article, {
+      designPlan,
+      sourceRevision: current.sourceRevision,
       schemeId: currentDraft.schemeId,
       themeId: currentDraft.themeId,
       layoutId: currentDraft.layoutId,
@@ -889,12 +975,9 @@ export default function UnifiedWorkspace() {
       lockedPageIds: currentDraft.lockedPageIds,
       manualPages: currentDraft.manualPages,
     });
-    replaceWorkspace(next);
+    replaceWorkspace({ ...current, designPlan });
     setParsedDrafts((currentDrafts) => ({ ...currentDrafts, [activePlatform]: nextParsedDraft }));
-    setSourceAnalysisNotice(`分析完成 · ${next.designPlan.blueprint.sourceFacts.length} 条内容事实 · ${getContentLayout(next.designPlan.contentLayoutId ?? DESIGN_SCHEMES[next.designPlan.recommendedScheme].contentLayoutId).name}`);
-    setAiRunState("idle");
-    setAiStatusMessage(undefined);
-    setStatusMessage(`源文分析完成，推荐“${getVisualTheme(next.designPlan.recommendedThemeId ?? DESIGN_SCHEMES[next.designPlan.recommendedScheme].themeId).name}”；平台稿尚未覆盖`);
+    setSourceAnalysisNotice(`已修改分析结构 · ${designPlan.blueprint.sections.length} 个章节；点击“生成”更新当前平台`);
   }
 
   function ensureCurrentDesignPlan(article: UnifiedArticleContent) {
@@ -1232,12 +1315,13 @@ export default function UnifiedWorkspace() {
             article={sourceArticle}
             assets={assets}
             analysisNotice={sourceAnalysisNotice}
+            analysisRunning={analysisRunning}
             onSourceChange={(sourceMarkdown) => {
               replaceWorkspace(updateWorkspaceSourceDraft(workspaceRef.current, sourceMarkdown));
               clearParsedDrafts();
               setSourceAnalysisNotice("源文已修改，请点击“分析源文”更新结构建议");
             }}
-            onReparse={reparseCurrentPlatform}
+            onReparse={() => void reparseCurrentPlatform()}
             onPickImages={() => fileInputRef.current?.click()}
             onUpload={uploadAssets}
             onInsertAsset={insertAsset}
@@ -1250,6 +1334,7 @@ export default function UnifiedWorkspace() {
           <PlatformEditor
             draft={parsedDraft ?? activeDraft}
             plan={workspace.designPlan}
+            analysisEngine={analysisEngine}
             history={history[activePlatform]}
             draftMode={parsedDraft ? "parsed" : "generated"}
             generating={aiRunState === "generating"}
@@ -1263,6 +1348,7 @@ export default function UnifiedWorkspace() {
             onUndo={undoPlatform}
             onRedo={redoPlatform}
             onGenerate={() => void generateCurrentPlatformFromEditor()}
+            onSemanticChange={updateParsedSemanticBlueprint}
           />
         </section>
 
@@ -1355,6 +1441,7 @@ function SourcePanel(props: {
   article: UnifiedArticleContent;
   assets: AssetPlaceholder[];
   analysisNotice?: string;
+  analysisRunning: boolean;
   onSourceChange: (value: string) => void;
   onReparse: () => void;
   onPickImages: () => void;
@@ -1377,9 +1464,9 @@ function SourcePanel(props: {
             <p className="mt-1 text-xs text-muted-foreground">编辑源文，分析后再生成当前平台</p>
             {props.analysisNotice && <p data-source-analysis-status role="status" className="mt-1 text-[11px] leading-4 text-[#17633d]">{props.analysisNotice}</p>}
           </div>
-          <Button type="button" size="sm" variant="outline" onClick={props.onReparse}>
-            <RefreshCw className="h-4 w-4" />
-            分析源文
+          <Button type="button" size="sm" variant="outline" onClick={props.onReparse} disabled={props.analysisRunning}>
+            <RefreshCw className={cn("h-4 w-4", props.analysisRunning && "animate-spin")} />
+            {props.analysisRunning ? "分析中" : "分析源文"}
           </Button>
         </div>
         <div className="grid grid-cols-3 gap-2 text-xs">
@@ -1432,6 +1519,7 @@ function SourcePanel(props: {
 function PlatformEditor(props: {
   draft: PlatformDraft;
   plan: DesignPlan;
+  analysisEngine: "本地基础分析" | "AI 智能分析";
   history: DraftHistory;
   draftMode: "parsed" | "generated";
   generating: boolean;
@@ -1439,6 +1527,7 @@ function PlatformEditor(props: {
   onUndo: () => void;
   onRedo: () => void;
   onGenerate: () => void;
+  onSemanticChange?: (patch: Partial<Pick<ContentBlueprint, "centralThesis" | "primaryContentType" | "targetAudience" | "tone" | "sections">>) => void;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -1492,6 +1581,9 @@ function PlatformEditor(props: {
         )}
       </div>
       <div data-editor-scroll className="min-h-0 flex-1 overflow-y-auto bg-[#f5f8f6] p-4">
+        {props.draftMode === "parsed" && props.onSemanticChange && (
+          <SemanticAnalysisSummary blueprint={props.plan.blueprint} analysisEngine={props.analysisEngine} onChange={props.onSemanticChange} />
+        )}
         <div className="mx-auto max-w-[860px] overflow-hidden rounded-lg border border-[#d8e1dc] bg-white shadow-[0_2px_8px_rgba(31,52,42,0.04)]">
           {props.draft.content.blocks.map((block) => {
             const editable = block.type !== "divider" && block.type !== "pageBreak";
@@ -1521,6 +1613,142 @@ function PlatformEditor(props: {
       </div>
     </div>
   );
+}
+
+function SemanticAnalysisSummary(props: {
+  blueprint: ContentBlueprint;
+  analysisEngine: "本地基础分析" | "AI 智能分析";
+  onChange: (patch: Partial<Pick<ContentBlueprint, "centralThesis" | "primaryContentType" | "targetAudience" | "tone" | "sections">>) => void;
+}) {
+  const updateSection = (id: string, patch: Partial<ContentBlueprint["sections"][number]>) => {
+    props.onChange({ sections: props.blueprint.sections.map((section) => section.id === id ? { ...section, ...patch } : section) });
+  };
+
+  return (
+    <section data-semantic-summary className="mx-auto mb-4 max-w-[860px] rounded-lg border border-[#c9dbd0] bg-[#f5faf7] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-[#17382a]">源文解析结果</h3>
+          <p className="mt-1 text-xs leading-5 text-[#5b7467]">可调整中心观点、章节角色和分页倾向；不会直接覆盖右侧成稿。</p>
+        </div>
+        <span className="rounded-full bg-white px-2.5 py-1 text-[11px] text-[#17633d]">{props.analysisEngine}</span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+        <SemanticMetric label="内容类型" value={CONTENT_TYPE_LABELS[props.blueprint.primaryContentType]} />
+        <SemanticMetric label="章节" value={props.blueprint.sections.length} />
+        <SemanticMetric label="事实 / 观点" value={`${props.blueprint.facts.length} / ${props.blueprint.opinions.length}`} />
+        <SemanticMetric label="案例 / 方法 / 边界" value={`${props.blueprint.examples.length} / ${props.blueprint.methods.length} / ${props.blueprint.boundaries.length}`} />
+      </div>
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <div>
+          <label className="mb-1 block text-xs font-medium text-[#4c6659]" htmlFor="semantic-content-type">内容类型</label>
+          <select
+            id="semantic-content-type"
+            value={props.blueprint.primaryContentType}
+            onChange={(event) => props.onChange({ primaryContentType: event.target.value as ContentType })}
+            className="h-9 w-full rounded-md border border-[#c9dbd0] bg-white px-2 text-sm text-[#31463a]"
+            aria-label="分析内容类型"
+          >
+            {(Object.entries(CONTENT_TYPE_LABELS) as Array<[ContentType, string]>).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-[#4c6659]" htmlFor="semantic-tone">语气</label>
+          <select
+            id="semantic-tone"
+            value={props.blueprint.tone}
+            onChange={(event) => props.onChange({ tone: event.target.value as ContentTone })}
+            className="h-9 w-full rounded-md border border-[#c9dbd0] bg-white px-2 text-sm text-[#31463a]"
+            aria-label="分析语气"
+          >
+            {(["理性", "叙事", "实用", "轻松"] as ContentTone[]).map((tone) => <option key={tone} value={tone}>{tone}</option>)}
+          </select>
+        </div>
+        <div className="md:col-span-2">
+          <label className="mb-1 block text-xs font-medium text-[#4c6659]" htmlFor="semantic-target-audience">目标受众</label>
+          <Input
+            id="semantic-target-audience"
+            value={props.blueprint.targetAudience}
+            onChange={(event) => props.onChange({ targetAudience: event.target.value })}
+            className="h-9 border-[#c9dbd0] bg-white text-sm"
+            aria-label="分析目标受众"
+          />
+        </div>
+        <div className="md:col-span-2">
+          <label className="mb-1 block text-xs font-medium text-[#4c6659]" htmlFor="semantic-central-thesis">中心观点</label>
+          <Textarea
+            id="semantic-central-thesis"
+            value={props.blueprint.centralThesis}
+            onChange={(event) => props.onChange({ centralThesis: event.target.value })}
+            className="min-h-16 resize-y border-[#c9dbd0] bg-white text-sm shadow-none focus-visible:ring-[#8fc8a8]"
+            aria-label="中心观点"
+          />
+        </div>
+      </div>
+      <div className="mt-4 border-t border-[#dce9e1] pt-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <span className="text-xs font-semibold text-[#17382a]">语义章节</span>
+          <span className="text-[11px] text-[#6b8275]">每个章节都保留源文块引用 · 置信度 {Math.round(props.blueprint.confidence * 100)}%</span>
+        </div>
+        <div className="grid gap-2">
+          {props.blueprint.sections.map((section, index) => (
+            <div key={section.id} className="rounded-md border border-[#dce9e1] bg-white p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="w-6 text-xs font-semibold text-[#17633d]">{String(index + 1).padStart(2, "0")}</span>
+                <Input
+                  value={section.displayHeading?.text ?? ""}
+                  placeholder="无可见标题"
+                  onChange={(event) => {
+                    const text = event.target.value;
+                    updateSection(section.id, {
+                      title: text,
+                      displayHeading: text.trim()
+                        ? { text, provenance: "expressionOptimization", confidence: 1 }
+                        : undefined,
+                      titleProvenance: text.trim() ? undefined : undefined,
+                    });
+                  }}
+                  className="h-8 min-w-[180px] flex-1 border-[#dce9e1] text-sm"
+                  aria-label={`第${index + 1}章展示标题`}
+                />
+                <select
+                  value={section.role}
+                  onChange={(event) => updateSection(section.id, { role: event.target.value as SemanticSectionRole })}
+                  className="h-8 rounded-md border border-[#dce9e1] bg-white px-2 text-xs text-[#31463a]"
+                  aria-label={`第${index + 1}章角色`}
+                >
+                  {[
+                    ["hook", "开场"], ["background", "背景"], ["problem", "问题"], ["conflict", "冲突"], ["argument", "观点"],
+                    ["evidence", "依据"], ["example", "案例"], ["method", "方法"], ["result", "结果"], ["counterArgument", "反方"],
+                    ["boundary", "边界"], ["conclusion", "结论"], ["callToAction", "行动"],
+                  ].map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-[#60776b]">
+                <label className="inline-flex items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    checked={section.importance >= 0.7}
+                    onChange={(event) => updateSection(section.id, { importance: event.target.checked ? 0.9 : 0.45 })}
+                  />
+                  作为重点
+                </label>
+                <label className="inline-flex items-center gap-1.5">
+                  <input type="checkbox" checked={section.canSplit} onChange={(event) => updateSection(section.id, { canSplit: event.target.checked })} />
+                  允许拆页
+                </label>
+                <span>源文块 {section.sourceBlockIds.length} 个</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SemanticMetric(props: { label: string; value: string | number }) {
+  return <div className="rounded-md border border-[#dce9e1] bg-white px-3 py-2"><div className="text-[10px] text-[#789084]">{props.label}</div><div className="mt-1 truncate text-sm font-semibold text-[#17382a]">{props.value}</div></div>;
 }
 
 function PreviewPanel(props: {
