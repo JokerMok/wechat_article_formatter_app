@@ -31,7 +31,8 @@ import { createCardPreset, DESIGN_SCHEMES, getContentLayout, getVisualTheme, typ
 import type { PlatformId } from "@/lib/platforms/types";
 import {
   createApproximateTextMeasurer,
-  layoutCardPagesToTarget,
+  layoutDouyinImagePagesToTarget,
+  layoutXiaohongshuPagesToTarget,
   lockCardImagePage,
   mergeAdjacentCardPages,
   moveCardImagePage,
@@ -298,6 +299,7 @@ export default function UnifiedWorkspace() {
   const repoRef = React.useRef<ReturnType<typeof createProjectRepository> | undefined>(undefined);
   const assetRepoRef = React.useRef<ReturnType<typeof createAssetBlobRepository> | undefined>(undefined);
   const hydratedRef = React.useRef(false);
+  const hydrationStartedRef = React.useRef(false);
   const revisionRef = React.useRef(0);
   const aiAbortRef = React.useRef<AbortController | undefined>(undefined);
   const analysisAbortRef = React.useRef<AbortController | undefined>(undefined);
@@ -320,7 +322,8 @@ export default function UnifiedWorkspace() {
     const targetPages = activePlatform === "xiaohongshu"
       ? workspace.designPlan.pagination.xiaohongshuTargetPages
       : workspace.designPlan.pagination.douyinImageTargetPages;
-    const result = layoutCardPagesToTarget(activeDraft.content, measurer, {
+    const layoutForPlatform = activePlatform === "xiaohongshu" ? layoutXiaohongshuPagesToTarget : layoutDouyinImagePagesToTarget;
+    const result = layoutForPlatform(activeDraft.content, measurer, {
       aspectRatio: ratio,
       safeArea: {
         top: workspace.layout.margin + topOffset,
@@ -362,16 +365,19 @@ export default function UnifiedWorkspace() {
   }, [history]);
 
   React.useEffect(() => {
-    repoRef.current = createProjectRepository();
-    assetRepoRef.current = createAssetBlobRepository();
+    // Next dev mode may mount effects twice. Keep one repository instance and
+    // let the in-flight IndexedDB request finish instead of closing it during
+    // the probe cleanup.
+    if (hydrationStartedRef.current) return;
+    hydrationStartedRef.current = true;
+    repoRef.current ??= createProjectRepository();
+    assetRepoRef.current ??= createAssetBlobRepository();
     void loadLatestProject();
 
     return () => {
       assets.forEach((asset) => {
         if (asset.objectUrl) URL.revokeObjectURL(asset.objectUrl);
       });
-      void repoRef.current?.close();
-      void assetRepoRef.current?.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

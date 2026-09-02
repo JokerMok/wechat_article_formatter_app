@@ -7,9 +7,9 @@ export {
   getCardTypography,
   layoutCardPages,
 } from "./layout";
-export { layoutCardPagesToTarget, type AdaptiveCardLayoutResult } from "./adaptive";
+export { layoutCardPagesToTarget, layoutXiaohongshuPagesToTarget, layoutDouyinImagePagesToTarget, type AdaptiveCardLayoutResult } from "./adaptive";
 export { createApproximateTextMeasurer, createCanvasTextMeasurer } from "./measurement";
-export { drawCardImagePage, type CardImageCanvasContext, type DrawCardImagePageOptions } from "./canvas";
+export { drawCardImagePage, drawXiaohongshuImagePage, drawDouyinImagePage, type CardImageCanvasContext, type DrawCardImagePageOptions } from "./canvas";
 export {
   lockCardImagePage,
   mergeAdjacentCardPages,

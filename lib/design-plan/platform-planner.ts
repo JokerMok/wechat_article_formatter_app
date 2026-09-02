@@ -1,30 +1,44 @@
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../content";
-import { getContentLayout, getVisualTheme, type ContentLayoutId, type DesignScheme, type VisualThemeId } from "../design-schemes";
+import {
+  getContentLayout,
+  getDesignScheme,
+  getVisualTheme,
+  schemeIdForVisualThemeAndLayout,
+  type ContentLayoutId,
+  type DesignScheme,
+  type VisualThemeId,
+} from "../design-schemes";
 import type { PlatformId } from "../platforms/types";
 import { cleanPublishingText, isGenericStructureHeading, publicationBlocks } from "./content-filter";
 import { editorialSectionToContentSection, editorialUnitsForSection } from "./editorial-plan";
 import type {
   ContentBlueprint,
   ContentSection,
+  ContentUnitUsage,
   EditorialPlan,
   PagePlan,
   PagePlanKind,
   PlannedBlockRole,
   PlannedContentBlock,
+  PlannedSourceUnit,
   PlatformDesignPlan,
+  ContentIntegrityResult,
 } from "./types";
 
-type SourceUnit = {
-  id: string;
-  role: PlannedBlockRole;
-  text: string;
-  sourceBlockIds: string[];
-  sourceType: UnifiedArticleBlock["type"];
-};
+type SourceUnit = PlannedSourceUnit;
 
 type PageSeed = {
   units: SourceUnit[];
   characterCount: number;
+};
+
+export type PlatformPlannerInput = {
+  source: UnifiedArticleContent;
+  blueprint: ContentBlueprint;
+  scheme: DesignScheme;
+  theme: ReturnType<typeof getVisualTheme>;
+  layout: ReturnType<typeof getContentLayout>;
+  editorialPlan?: EditorialPlan;
 };
 
 export function buildPlatformDesignPlans(
@@ -36,35 +50,26 @@ export function buildPlatformDesignPlans(
   const theme = getVisualTheme(selection.themeId ?? scheme.themeId);
   const layout = getContentLayout(selection.contentLayoutId ?? scheme.contentLayoutId);
   return {
-    wechat: buildLongformPlan(source, blueprint, scheme, theme, layout, "wechat", selection.editorialPlans?.wechat),
-    xiaohongshu: buildCardPlan(source, blueprint, scheme, theme, layout, "xiaohongshu", selection.editorialPlans?.xiaohongshu),
-    douyinImage: buildCardPlan(source, blueprint, scheme, theme, layout, "douyinImage", selection.editorialPlans?.douyinImage),
-    douyinLongform: buildLongformPlan(source, blueprint, scheme, theme, layout, "douyinLongform", selection.editorialPlans?.douyinLongform),
+    wechat: buildWechatPlan({ source, blueprint, scheme, theme, layout, editorialPlan: selection.editorialPlans?.wechat }),
+    xiaohongshu: buildXiaohongshuPlan({ source, blueprint, scheme, theme, layout, editorialPlan: selection.editorialPlans?.xiaohongshu }),
+    douyinImage: buildDouyinImagePlan({ source, blueprint, scheme, theme, layout, editorialPlan: selection.editorialPlans?.douyinImage }),
+    douyinLongform: buildDouyinLongformPlan({ source, blueprint, scheme, theme, layout, editorialPlan: selection.editorialPlans?.douyinLongform }),
   };
 }
 
-function buildLongformPlan(
-  source: UnifiedArticleContent,
-  blueprint: ContentBlueprint,
-  scheme: DesignScheme,
-  theme: ReturnType<typeof getVisualTheme>,
-  layout: ReturnType<typeof getContentLayout>,
-  platform: "wechat" | "douyinLongform",
-  editorialPlan?: EditorialPlan,
-): PlatformDesignPlan {
+export function buildWechatPlan(input: PlatformPlannerInput): PlatformDesignPlan {
+  const { source, blueprint, scheme, theme, layout, editorialPlan } = input;
   const units = collectSourceUnits(source);
-  const pages: PagePlan[] = [createPage(platform, 0, "cover", createCoverBlocks(source, blueprint, platform, false, undefined, editorialPlan))];
-  const sections = editorialPlan
-    ? editorialPlan.sections.map((section, index) => editorialSectionToContentSection(section, source, index))
-    : usableSections(blueprint, units);
-  const budget = layout.paginationRules.longformCharacterBudget[platform];
-  const claimedSourceBlockIds = new Set<string>();
+  const sections = sectionsForPlanner(source, blueprint, units, editorialPlan);
+  const pages: PagePlan[] = [createPage("wechat", 0, "cover", createCoverBlocks(source, blueprint, "wechat", false, undefined, editorialPlan))];
+  const budget = Math.max(180, layout.paginationRules.longformCharacterBudget.wechat);
+  const claimedUnitIds = new Set<string>();
 
-  for (const section of sections) {
+  for (const [sectionIndex, section] of sections.entries()) {
     const editorialSection = editorialPlan?.sections.find((candidate) => candidate.id === section.id);
     const sectionUnits = (editorialSection ? editorialUnitsForSection(editorialSection, source) : unitsForSection(section, units))
-      .filter((unit) => unit.sourceBlockIds.every((id) => !claimedSourceBlockIds.has(id)));
-    sectionUnits.flatMap((unit) => unit.sourceBlockIds).forEach((id) => claimedSourceBlockIds.add(id));
+      .filter((unit) => isAvailableUnit(unit, claimedUnitIds));
+    markClaimedUnits(sectionUnits, claimedUnitIds);
     const seeds = packSectionUnits(
       sectionUnits,
       budget,
@@ -72,84 +77,254 @@ function buildLongformPlan(
       layout.paginationRules.shortPageThreshold,
       layout.paginationRules.allowSplitLongParagraphs && section.canSplit,
     );
-    const sectionHeader = sectionTitleBlock(platform, section, source);
+    const sectionHeader = sectionTitleBlock("wechat", section, source);
     if (!seeds.length) {
-      if (sectionHeader) pages.push(createPage(platform, pages.length, sectionPageKind(section, platform), [sectionHeader]));
+      if (sectionHeader) pages.push(createPage("wechat", pages.length, wechatPageKind(section, sectionIndex), [sectionHeader]));
       continue;
     }
     seeds.forEach((seed, index) => {
       const blocks = index === 0 && sectionHeader ? [sectionHeader, ...seed.units] : seed.units;
-      pages.push(createPage(platform, pages.length, sectionPageKind(section, platform), blocks));
+      pages.push(createPage("wechat", pages.length, wechatPageKind(section, sectionIndex), blocks));
     });
   }
 
   if (blueprint.generationMode === "reachOptimized" && blueprint.openingHook && !sourceContainsText(source, blueprint.openingHook) && !containsText(pages, blueprint.openingHook)) {
-    pages.splice(1, 0, createPage(platform, 1, "opening", [plannedBlock(`${platform}:opening:optimized`, "focus", blueprint.openingHook, [], "expressionOptimization")]));
-    renumberPages(pages, platform);
+    pages.splice(1, 0, createPage("wechat", 1, "opening", [plannedBlock("wechat:opening:optimized", "focus", blueprint.openingHook, [], "expressionOptimization")]));
+    renumberPages(pages, "wechat");
   }
 
-  return createPlatformPlan(source, blueprint, scheme, theme, layout.id, platform, pages, editorialPlan?.sections.flatMap((section) => [section.body ?? "", ...(section.bullets ?? [])]).filter(Boolean).join("\n\n") || units.map((unit) => unit.text).join("\n\n"), { format: platform === "wechat" ? "html" : "text" }, editorialPlan);
+  return createPlatformPlan(source, blueprint, scheme, theme, layout.id, "wechat", pages, publishCopyFor(units, editorialPlan), { format: "html" }, editorialPlan);
 }
 
-function buildCardPlan(
-  source: UnifiedArticleContent,
-  blueprint: ContentBlueprint,
-  scheme: DesignScheme,
-  theme: ReturnType<typeof getVisualTheme>,
-  layout: ReturnType<typeof getContentLayout>,
-  platform: "xiaohongshu" | "douyinImage",
-  editorialPlan?: EditorialPlan,
-): PlatformDesignPlan {
+export function buildXiaohongshuPlan(input: PlatformPlannerInput): PlatformDesignPlan {
+  const { source, blueprint, scheme, theme, layout, editorialPlan } = input;
   const units = collectSourceUnits(source);
-  const coverBlocks = createCoverBlocks(source, blueprint, platform, true, layout.id, editorialPlan);
-  const pages: PagePlan[] = [createPage(platform, 0, "cover", coverBlocks)];
-  const claimedSourceBlockIds = new Set(coverBlocks.flatMap((block) => block.sourceBlockIds));
-  const semanticSections = editorialPlan
-    ? editorialPlan.sections.map((section, index) => editorialSectionToContentSection(section, source, index))
-    : usableSections(blueprint, units);
-  const sections = compactSectionsForDouyin(
-    semanticSections.filter((section, index) => {
-      const editorialSection = editorialPlan?.sections[index];
-      const sectionUnits = editorialSection ? editorialUnitsForSection(editorialSection, source) : unitsForSection(section, units);
-      return sectionUnits.some((unit) => unit.sourceBlockIds.some((id) => !claimedSourceBlockIds.has(id)));
-    }),
-    platform,
-  );
-  const budget = layout.paginationRules.cardCharacterBudget[platform];
-  const maxUnits = platform === "xiaohongshu"
-    ? Math.max(2, layout.paginationRules.cardMaxUnits[platform])
-    : Math.min(2, layout.paginationRules.cardMaxUnits[platform]);
+  const sections = sectionsForPlanner(source, blueprint, units, editorialPlan);
+  const pages: PagePlan[] = [createPage("xiaohongshu", 0, "cover", createCoverBlocks(source, blueprint, "xiaohongshu", true, layout.id, editorialPlan))];
+  const claimedUnitIds = new Set<string>();
+  const budget = Math.min(110, Math.max(72, layout.paginationRules.cardCharacterBudget.xiaohongshu));
+
   for (const [sectionIndex, section] of sections.entries()) {
     const editorialSection = editorialPlan?.sections.find((candidate) => candidate.id === section.id);
-    const sectionUnits = (editorialPlan && editorialSection
-      ? editorialUnitsForCardSection(section, editorialSection, editorialPlan, source)
-      : unitsForSection(section, units))
-      .filter((unit) => unit.sourceBlockIds.every((id) => !claimedSourceBlockIds.has(id)));
-    sectionUnits.flatMap((unit) => unit.sourceBlockIds).forEach((id) => claimedSourceBlockIds.add(id));
+    const sectionUnits = (editorialSection ? editorialUnitsForCardSection(section, editorialSection, editorialPlan!, source) : unitsForSection(section, units))
+      .filter((unit) => isAvailableUnit(unit, claimedUnitIds));
+    markClaimedUnits(sectionUnits, claimedUnitIds);
     const seeds = packSectionUnits(
       sectionUnits,
       budget,
-      maxUnits,
+      2,
       layout.paginationRules.shortPageThreshold,
-      layout.paginationRules.allowSplitLongParagraphs && section.canSplit,
+      true,
     );
-    const sectionHeader = sectionTitleBlock(platform, section, source);
+    const sectionHeader = sectionTitleBlock("xiaohongshu", section, source);
     if (!seeds.length) {
-      if (sectionHeader) pages.push(createPage(platform, pages.length, cardSectionPageKind(section, platform, 0, layout.id, sectionIndex, sections.length), [sectionHeader]));
+      if (sectionHeader) pages.push(createPage("xiaohongshu", pages.length, xiaohongshuPageKind(section, sectionIndex, sections.length, layout.id), [sectionHeader]));
       continue;
     }
     seeds.forEach((seed, index) => {
       const blocks = index === 0 && sectionHeader ? [sectionHeader, ...seed.units] : seed.units;
-      pages.push(createPage(platform, pages.length, cardSectionPageKind(section, platform, index, layout.id, sectionIndex, sections.length), blocks));
+      pages.push(createPage("xiaohongshu", pages.length, xiaohongshuPageKind(section, sectionIndex, sections.length, layout.id), blocks));
     });
   }
 
-  return createPlatformPlan(source, blueprint, scheme, theme, layout.id, platform, pages, editorialPlan?.sections.flatMap((section) => [section.body ?? "", ...(section.bullets ?? [])]).filter(Boolean).join("\n\n") || units.map((unit) => unit.text).join("\n\n"), {
+  return createPlatformPlan(source, blueprint, scheme, theme, layout.id, "xiaohongshu", pages, publishCopyFor(units, editorialPlan), {
     format: "png",
     width: 1080,
     height: 1440,
     aspectRatio: "3:4",
   }, editorialPlan);
+}
+
+export function buildDouyinImagePlan(input: PlatformPlannerInput): PlatformDesignPlan {
+  const { source, blueprint, scheme, theme, layout, editorialPlan } = input;
+  const units = collectSourceUnits(source);
+  const sections = compactDouyinSections(sectionsForPlanner(source, blueprint, units, editorialPlan));
+  const pages: PagePlan[] = [createPage("douyinImage", 0, "cover", createCoverBlocks(source, blueprint, "douyinImage", true, layout.id, editorialPlan))];
+  const claimedUnitIds = new Set<string>();
+  const budget = Math.min(170, Math.max(100, layout.paginationRules.cardCharacterBudget.douyinImage));
+
+  for (const [sectionIndex, section] of sections.entries()) {
+    const editorialSection = editorialPlan?.sections.find((candidate) => candidate.id === section.id);
+    const sectionUnits = (editorialSection ? editorialUnitsForCardSection(section, editorialSection, editorialPlan!, source) : unitsForSection(section, units))
+      .filter((unit) => isAvailableUnit(unit, claimedUnitIds));
+    markClaimedUnits(sectionUnits, claimedUnitIds);
+    const seeds = packSectionUnits(sectionUnits, budget, 2, layout.paginationRules.shortPageThreshold, true);
+    const sectionHeader = sectionTitleBlock("douyinImage", section, source);
+    if (!seeds.length) {
+      if (sectionHeader) pages.push(createPage("douyinImage", pages.length, douyinImagePageKind(section, sectionIndex, sections.length), [sectionHeader]));
+      continue;
+    }
+    seeds.forEach((seed, pageIndex) => {
+      const blocks = pageIndex === 0 && sectionHeader ? [sectionHeader, ...seed.units] : seed.units;
+      pages.push(createPage("douyinImage", pages.length, douyinImagePageKind(section, sectionIndex, sections.length), blocks));
+    });
+  }
+
+  return createPlatformPlan(source, blueprint, scheme, theme, layout.id, "douyinImage", pages, publishCopyFor(units, editorialPlan), {
+    format: "png",
+    width: 1080,
+    height: 1440,
+    aspectRatio: "3:4",
+  }, editorialPlan);
+}
+
+export function buildDouyinLongformPlan(input: PlatformPlannerInput): PlatformDesignPlan {
+  const { source, blueprint, scheme, theme, layout, editorialPlan } = input;
+  const units = collectSourceUnits(source);
+  const sections = sectionsForPlanner(source, blueprint, units, editorialPlan);
+  const pages: PagePlan[] = [createPage("douyinLongform", 0, "cover", createCoverBlocks(source, blueprint, "douyinLongform", false, undefined, editorialPlan))];
+  const claimedUnitIds = new Set<string>();
+  const budget = Math.max(132, layout.paginationRules.longformCharacterBudget.douyinLongform);
+
+  for (const [sectionIndex, section] of sections.entries()) {
+    const editorialSection = editorialPlan?.sections.find((candidate) => candidate.id === section.id);
+    const sectionUnits = (editorialSection ? editorialUnitsForSection(editorialSection, source) : unitsForSection(section, units))
+      .filter((unit) => isAvailableUnit(unit, claimedUnitIds));
+    markClaimedUnits(sectionUnits, claimedUnitIds);
+    const seeds = packSectionUnits(sectionUnits, budget, 4, layout.paginationRules.shortPageThreshold, true);
+    const sectionHeader = sectionTitleBlock("douyinLongform", section, source);
+    if (!seeds.length) {
+      if (sectionHeader) pages.push(createPage("douyinLongform", pages.length, douyinLongformPageKind(section, sectionIndex), [sectionHeader]));
+      continue;
+    }
+    seeds.forEach((seed, pageIndex) => {
+      const blocks = pageIndex === 0 && sectionHeader ? [sectionHeader, ...seed.units] : seed.units;
+      pages.push(createPage("douyinLongform", pages.length, douyinLongformPageKind(section, sectionIndex), blocks));
+    });
+  }
+
+  if (blueprint.generationMode === "reachOptimized" && blueprint.openingHook && !sourceContainsText(source, blueprint.openingHook) && !containsText(pages, blueprint.openingHook)) {
+    pages.splice(1, 0, createPage("douyinLongform", 1, "opening", [plannedBlock("douyinLongform:opening:optimized", "focus", blueprint.openingHook, [], "expressionOptimization")]));
+    renumberPages(pages, "douyinLongform");
+  }
+
+  return createPlatformPlan(source, blueprint, scheme, theme, layout.id, "douyinLongform", pages, publishCopyFor(units, editorialPlan), { format: "text" }, editorialPlan);
+}
+
+function sectionsForPlanner(source: UnifiedArticleContent, blueprint: ContentBlueprint, units: SourceUnit[], editorialPlan?: EditorialPlan) {
+  const sections = editorialPlan
+    ? editorialPlan.sections.map((section, index) => editorialSectionToContentSection(section, source, index))
+    : usableSections(blueprint, units);
+  return ensureSectionCoverage(sections, units);
+}
+
+function ensureSectionCoverage(sections: ContentSection[], units: SourceUnit[]) {
+  if (!sections.length) return sections;
+  const sourceOrder = new Map(units.flatMap((unit, index) => unit.sourceBlockIds.map((id) => [id, index] as const)));
+  const claimed = new Set(sections.flatMap((section) => section.sourceBlockIds));
+  const missing = units.filter((unit) => unit.usage === "body" && unit.sourceBlockIds.some((id) => !claimed.has(id)));
+  if (!missing.length) return sections;
+  const next = sections.map((section) => ({ ...section, sourceBlockIds: [...section.sourceBlockIds] }));
+  for (const unit of missing) {
+    const unitIndex = Math.min(...unit.sourceBlockIds.map((id) => sourceOrder.get(id) ?? Number.MAX_SAFE_INTEGER));
+    let nearestIndex = 0;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    next.forEach((section, sectionIndex) => {
+      const sectionIndexes = section.sourceBlockIds.map((id) => sourceOrder.get(id)).filter((value): value is number => value !== undefined);
+      const anchor = sectionIndexes.length ? Math.min(...sectionIndexes) : 0;
+      const distance = Math.abs(anchor - unitIndex);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestIndex = sectionIndex;
+      }
+    });
+    next[nearestIndex]!.sourceBlockIds = [...new Set([...next[nearestIndex]!.sourceBlockIds, ...unit.sourceBlockIds])];
+  }
+  return next;
+}
+
+function publishCopyFor(units: SourceUnit[], editorialPlan?: EditorialPlan) {
+  return editorialPlan?.sections.flatMap((section) => [section.body ?? "", ...(section.bullets ?? [])]).filter(Boolean).join("\n\n") || units.map((unit) => unit.text).join("\n\n");
+}
+
+function markClaimedUnits(units: SourceUnit[], claimedUnitIds: Set<string>) {
+  units.filter((unit) => unit.usage === "body").forEach((unit) => claimedUnitIds.add(unit.unitId));
+}
+
+function wechatPageKind(section: ContentSection, sectionIndex: number): PagePlanKind {
+  if (sectionIndex === 0 || section.role === "hook" || section.role === "background") return "intro";
+  if (section.role === "conclusion") return "conclusion";
+  if (section.role === "evidence") return "evidence";
+  if (section.role === "boundary") return "boundary";
+  if (section.role === "method") return "argument";
+  return section.recommendedPageRole === "cover" ? "argument" : section.recommendedPageRole;
+}
+
+function xiaohongshuPageKind(section: ContentSection, sectionIndex: number, sectionCount: number, layoutId: ContentLayoutId): PagePlanKind {
+  if (layoutId === "story") {
+    if (sectionIndex === 0) return "intro";
+    if (sectionIndex === sectionCount - 1) return "epilogue";
+    if (["problem", "conflict", "counterArgument"].includes(section.role)) return "conflict";
+    if (sectionIndex === sectionCount - 2) return "transition";
+    return section.role === "example" ? "chapter" : "turning";
+  }
+  if (layoutId === "checklist") {
+    if (sectionIndex === sectionCount - 1) return "callToAction";
+    if (section.role === "boundary") return "warning";
+    if (section.role === "method") return "step";
+    if (section.role === "conclusion") return "summary";
+    return sectionIndex === 0 ? "intro" : "checklist";
+  }
+  if (layoutId === "data") {
+    if (section.role === "boundary") return "boundary";
+    if (section.role === "evidence" || section.role === "result") return "keyMetric";
+    if (sectionIndex === 1) return "interpretation";
+    if (section.displayHeading?.text && /对比|相比|同比|环比|高于|低于/u.test(section.displayHeading.text)) return "comparison";
+    return "interpretation";
+  }
+  if (layoutId === "editorial" && sectionIndex === sectionCount - 1) return "callToAction";
+  if (section.role === "hook" || section.role === "background") return "intro";
+  if (section.role === "problem" || section.role === "conflict") return "conflict";
+  if (section.role === "method") return "step";
+  if (section.role === "evidence") return "evidence";
+  if (section.role === "boundary") return "warning";
+  if (section.role === "conclusion") return "summary";
+  return "argument";
+}
+
+function douyinImagePageKind(section: ContentSection, sectionIndex: number, sectionCount: number): PagePlanKind {
+  if (sectionIndex === 0 || section.role === "hook" || section.role === "background") return "intro";
+  if (section.role === "evidence") return "keyMetric";
+  if (section.role === "method") return "action";
+  if (section.role === "boundary") return "warning";
+  if (section.role === "conclusion" || sectionIndex === sectionCount - 1) return "callToAction";
+  if (section.role === "conflict" || section.role === "problem") return "point";
+  return "point";
+}
+
+function douyinLongformPageKind(section: ContentSection, sectionIndex: number): PagePlanKind {
+  if (sectionIndex === 0 || section.role === "hook") return "opening";
+  if (section.role === "conflict" || section.role === "problem") return "turning";
+  if (section.role === "method") return "action";
+  if (section.role === "boundary") return "boundary";
+  if (section.role === "conclusion") return "ending";
+  return section.recommendedPageRole === "cover" ? "section" : section.recommendedPageRole;
+}
+
+function compactDouyinSections(sections: ContentSection[]) {
+  const next = sections.map((section) => ({ ...section, sourceBlockIds: [...section.sourceBlockIds] }));
+  while (next.length > 7) {
+    const pairIndex = next.findIndex((section, index) => index > 0 && canMergeDouyinSections(next[index - 1]!, section));
+    const index = pairIndex > 0 ? pairIndex : next.length - 1;
+    const left = next[index - 1]!;
+    const right = next[index]!;
+    next.splice(index - 1, 2, {
+      ...left,
+      sourceBlockIds: [...new Set([...left.sourceBlockIds, ...right.sourceBlockIds])],
+      summary: cleanPublishingText(`${left.summary} ${right.summary}`).slice(0, 500),
+      keyMessage: cleanPublishingText(`${left.keyMessage} ${right.keyMessage}`).slice(0, 500),
+      canSplit: left.canSplit || right.canSplit,
+    });
+  }
+  return next;
+}
+
+function canMergeDouyinSections(left: ContentSection, right: ContentSection) {
+  if (left.role === right.role) return true;
+  return (left.role === "background" && right.role === "example")
+    || (left.role === "evidence" && right.role === "argument")
+    || (left.role === "result" && right.role === "conclusion")
+    || (left.role === "method" && right.role === "result");
 }
 
 function editorialUnitsForCardSection(
@@ -166,12 +341,12 @@ function editorialUnitsForCardSection(
     return editorialUnitsForSection(primarySection, source);
   }
 
-  const seenSourceIds = new Set<string>();
+  const seenUnitIds = new Set<string>();
   return matchingSections.flatMap((candidate) => editorialUnitsForSection(candidate, source)).filter((unit) => {
     const matchesSection = unit.sourceBlockIds.some((id) => sectionSourceIds.has(id));
-    const isNewSource = unit.sourceBlockIds.some((id) => !seenSourceIds.has(id));
-    unit.sourceBlockIds.forEach((id) => seenSourceIds.add(id));
-    return matchesSection && isNewSource;
+    const isNewUnit = !seenUnitIds.has(unit.unitId);
+    seenUnitIds.add(unit.unitId);
+    return matchesSection && isNewUnit;
   });
 }
 
@@ -188,19 +363,49 @@ function createPlatformPlan(
   editorialPlan?: EditorialPlan,
 ): PlatformDesignPlan {
   const title = editorialPlan?.title || blueprint.titleCandidates[0] || source.title || "未命名文章";
+  // themeId and layoutId are the persisted presentation contract. The scheme
+  // field remains a compatibility hint for older consumers only.
+  const compatibilityScheme = getDesignScheme(schemeIdForVisualThemeAndLayout(theme.id, layoutId));
   return {
     schemaVersion: 1,
     platform,
-    visualPresetId: scheme.id,
+    visualPresetId: compatibilityScheme.id,
     themeId: theme.id,
     layoutId,
     title,
     publishCopy,
     palette: { primary: theme.colors.primary, secondary: theme.colors.secondary, background: theme.colors.background, text: theme.colors.text },
-    typography: { ...scheme.typography, titleFamily: theme.typography.titleFamily, bodyFamily: theme.typography.bodyFamily, focusFamily: theme.typography.focusFamily },
+    typography: { ...compatibilityScheme.typography, titleFamily: theme.typography.titleFamily, bodyFamily: theme.typography.bodyFamily, focusFamily: theme.typography.focusFamily },
     ...(editorialPlan ? { editorialPlan } : {}),
+    integrity: calculateContentIntegrity(source, pages),
     pages,
     exportSpec,
+  };
+}
+
+export function calculateContentIntegrity(source: UnifiedArticleContent, pages: PagePlan[]): ContentIntegrityResult {
+  const sourceUnits = collectSourceUnits(source).filter((unit) => unit.usage === "body" && unit.role !== "heading");
+  const requiredSourceBlockIds = new Set(sourceUnits.flatMap((unit) => unit.sourceBlockIds));
+  const bodyBlocks = pages.flatMap((page) => page.blocks).filter((block) => block.usage === "body");
+  const coveredSourceBlockIds = new Set(bodyBlocks.flatMap((block) => block.sourceBlockIds));
+  const missingSourceBlockIds = [...requiredSourceBlockIds].filter((id) => !coveredSourceBlockIds.has(id));
+  const bodyOccurrences = new Map<string, number>();
+  for (const block of bodyBlocks) {
+    const baseUnitId = (block.unitId ?? block.id).replace(/:part:\d+$/u, "");
+    const key = `${baseUnitId}\u0000${normalizeMeaning(block.text)}`;
+    bodyOccurrences.set(key, (bodyOccurrences.get(key) ?? 0) + 1);
+  }
+  const duplicatedBodyUnitIds = [...bodyOccurrences.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([key]) => key.split("\u0000")[0] ?? key);
+  const unresolvedEditorialUnits = sourceUnits
+    .filter((unit) => !bodyBlocks.some((block) => block.sourceBlockIds.some((id) => unit.sourceBlockIds.includes(id))))
+    .map((unit) => unit.unitId);
+  return {
+    sourceCoverage: requiredSourceBlockIds.size === 0 ? 1 : (requiredSourceBlockIds.size - missingSourceBlockIds.length) / requiredSourceBlockIds.size,
+    missingSourceBlockIds,
+    duplicatedBodyUnitIds: [...new Set(duplicatedBodyUnitIds)],
+    unresolvedEditorialUnits: [...new Set(unresolvedEditorialUnits)],
   };
 }
 
@@ -232,41 +437,15 @@ function usableSections(blueprint: ContentBlueprint, units: SourceUnit[]) {
   } satisfies ContentSection];
 }
 
-function compactSectionsForDouyin(sections: ContentSection[], platform: "xiaohongshu" | "douyinImage") {
-  if (platform !== "douyinImage" || sections.length <= 7) return sections;
-
-  const compacted = [...sections];
-  while (compacted.length > 7) {
-    const pairIndex = compacted.findIndex((section, index) => index > 0 && section.role === compacted[index - 1].role);
-    if (pairIndex < 1) break;
-    const previous = compacted[pairIndex - 1];
-    const current = compacted[pairIndex];
-    compacted.splice(pairIndex - 1, 2, mergeRelatedSections(previous, current));
-  }
-  return compacted;
-}
-
-function mergeRelatedSections(left: ContentSection, right: ContentSection): ContentSection {
-  const displayHeading = left.displayHeading ?? right.displayHeading;
-  return {
-    ...left,
-    title: displayHeading?.text ?? "",
-    summary: cleanPublishingText(`${left.summary} ${right.summary}`).slice(0, 500),
-    sourceBlockIds: [...new Set([...left.sourceBlockIds, ...right.sourceBlockIds])],
-    keyMessage: cleanPublishingText(`${left.keyMessage} ${right.keyMessage}`).slice(0, 500),
-    importance: Math.max(left.importance, right.importance),
-    canSplit: left.canSplit || right.canSplit,
-    ...(displayHeading
-      ? { displayHeading, titleProvenance: "source" as const }
-      : { displayHeading: undefined, titleProvenance: undefined }),
-  };
-}
-
 function unitsForSection(section: ContentSection, units: SourceUnit[]) {
   const ids = new Set(section.sourceBlockIds);
   // The section header is rendered from the semantic title below. Keeping the
   // source heading in the payload would duplicate it on every first page.
   return units.filter((unit) => unit.role !== "heading" && unit.sourceBlockIds.some((id) => ids.has(id)));
+}
+
+function isAvailableUnit(unit: SourceUnit, claimedUnitIds: Set<string>) {
+  return unit.usage !== "body" || !claimedUnitIds.has(unit.unitId);
 }
 
 function sectionTitleBlock(platform: PlatformId, section: ContentSection, source: UnifiedArticleContent): PlannedContentBlock | undefined {
@@ -306,58 +485,10 @@ function createCoverBlocks(source: UnifiedArticleContent, blueprint: ContentBlue
     && !sourceContainsText(source, blueprint.openingHook)
     ? blueprint.openingHook
     : undefined);
-  if (card && layoutId !== "story" && layoutId !== "data" && !optimizedHook) {
-    const teaserUnits = collectSourceUnits(source).filter((unit) => unit.role !== "heading" && unit.role !== "media" && unit.sourceType !== "list");
-    const teaser = teaserUnits.length > 1 ? teaserUnits[0] : undefined;
-    if (teaser) {
-      blocks.push(plannedBlock(`${platform}:cover:teaser`, "subtitle", compactCoverSubtitle(teaser.text, 72), teaser.sourceBlockIds, "source"));
-    }
-  }
   if (optimizedHook) {
     blocks.push(plannedBlock(`${platform}:cover:hook`, "subtitle", compactCoverSubtitle(optimizedHook, card ? 72 : 180), [], "expressionOptimization"));
   }
   return blocks;
-}
-
-function sectionPageKind(section: ContentSection, platform: "wechat" | "douyinLongform"): PagePlanKind {
-  if (platform === "douyinLongform" && section.role === "hook") return "opening";
-  return section.recommendedPageRole;
-}
-
-function cardSectionPageKind(section: ContentSection, platform: "xiaohongshu" | "douyinImage", index = 0, layoutId?: ContentLayoutId, sectionIndex = 0, sectionCount = 1): PagePlanKind {
-  const role = section.role;
-  if (layoutId === "story") {
-    if (sectionIndex === sectionCount - 1) return "epilogue";
-    if (sectionIndex === 0) return "intro";
-    if (sectionIndex === 1 || role === "problem" || role === "conflict" || role === "counterArgument") return "conflict";
-    if (sectionIndex === sectionCount - 2) return "transition";
-    return role === "example" ? "chapter" : "turning";
-  }
-  if (layoutId === "checklist") {
-    if (sectionIndex === sectionCount - 1) return "callToAction";
-    if (role === "boundary") return "warning";
-    if (sectionIndex === 0) return "intro";
-    if (role === "result") return "summary";
-    return sectionIndex % 2 === 1 ? "step" : "action";
-  }
-  if (layoutId === "data") {
-    if (role === "boundary" || sectionIndex === sectionCount - 1 && role === "conclusion") return "boundary";
-    if (sectionIndex === 0) return "keyMetric";
-    if (section.displayHeading?.text && /对比|相比|同比|环比|高于|低于/u.test(section.displayHeading.text)) return "comparison";
-    if (sectionIndex === 1) return "interpretation";
-    if (role === "evidence") return "keyMetric";
-    if (role === "argument" || role === "counterArgument") return "interpretation";
-  }
-  if (layoutId === "editorial" && (role === "method" || role === "boundary")) return role === "boundary" ? "boundary" : "argument";
-  if (role === "hook" || role === "background") return "intro";
-  if (role === "problem" || role === "conflict" || role === "counterArgument") return "conflict";
-  if (role === "method") return index === 0 ? "step" : "action";
-  if (role === "boundary") return "warning";
-  if (role === "result") return "summary";
-  if (role === "conclusion") return platform === "douyinImage" ? "callToAction" : "conclusion";
-  if (role === "evidence") return platform === "douyinImage" ? "keyMetric" : "evidence";
-  if (role === "example") return "chapter";
-  return platform === "douyinImage" ? "point" : "argument";
 }
 
 function collectSourceUnits(source: UnifiedArticleContent): SourceUnit[] {
@@ -366,18 +497,18 @@ function collectSourceUnits(source: UnifiedArticleContent): SourceUnit[] {
     if (block.type === "title" || block.type === "pageBreak" || block.type === "divider" || block.type === "code") continue;
     if (block.type === "list") {
       block.items.map(cleanPublishingText).filter(Boolean).forEach((text, index) => {
-        units.push({ id: `${block.id}:item:${index}`, role: "list", text, sourceBlockIds: [block.id], sourceType: block.type });
+        units.push({ unitId: `${block.id}:item:${index}`, role: "list", text, sourceBlockIds: [block.id], sourceType: block.type, usage: "body" });
       });
       continue;
     }
     if (block.type === "card") {
       const text = cleanPublishingText([block.title, block.body].filter(Boolean).join("："));
-      if (text) units.push({ id: block.id, role: "focus", text, sourceBlockIds: [block.id], sourceType: block.type });
+      if (text) units.push({ unitId: block.id, role: "focus", text, sourceBlockIds: [block.id], sourceType: block.type, usage: "body" });
       continue;
     }
     const text = cleanPublishingText(block.text);
     if (!text) continue;
-    units.push({ id: block.id, role: blockRole(block), text, sourceBlockIds: [block.id], sourceType: block.type });
+    units.push({ unitId: block.id, role: blockRole(block), text, sourceBlockIds: [block.id], sourceType: block.type, usage: "body" });
   }
   return units;
 }
@@ -420,7 +551,7 @@ function packSectionUnits(units: SourceUnit[], characterBudget: number, maxUnits
 
 function splitUnit(unit: SourceUnit, characterBudget: number, allowSplitLongParagraphs: boolean): SourceUnit[] {
   if (!allowSplitLongParagraphs || unit.role === "heading" || unit.role === "media" || unit.text.length <= characterBudget) return [unit];
-  return splitTextAtBoundaries(unit.text, characterBudget).map((text, index) => ({ ...unit, id: `${unit.id}:part:${index + 1}`, text }));
+  return splitTextAtBoundaries(unit.text, characterBudget).map((text, index) => ({ ...unit, unitId: `${unit.unitId}:part:${index + 1}`, text }));
 }
 
 function splitTextAtBoundaries(text: string, maxLength: number) {
@@ -472,7 +603,7 @@ function compactCoverSubtitle(text: string, maxLength: number) {
 function createPage(platform: PlatformId, index: number, kind: PagePlanKind, units: Array<SourceUnit | PlannedContentBlock>): PagePlan {
   const blocks = units.map((unit, blockIndex): PlannedContentBlock => {
     if ("provenance" in unit) return unit;
-    return plannedBlock(`${platform}:${kind}:${index}:${blockIndex}`, unit.role, unit.text, unit.sourceBlockIds, "source");
+    return plannedBlock(`${platform}:${kind}:${index}:${blockIndex}`, unit.role, unit.text, unit.sourceBlockIds, "source", unit.usage, unit.unitId);
   });
   return {
     id: `${platform}:page:${kind}:${index + 1}`,
@@ -483,8 +614,16 @@ function createPage(platform: PlatformId, index: number, kind: PagePlanKind, uni
   };
 }
 
-function plannedBlock(id: string, role: PlannedBlockRole, text: string, sourceBlockIds: string[], provenance: PlannedContentBlock["provenance"]): PlannedContentBlock {
-  return { id, role, text, sourceBlockIds: [...sourceBlockIds], provenance };
+function plannedBlock(
+  id: string,
+  role: PlannedBlockRole,
+  text: string,
+  sourceBlockIds: string[],
+  provenance: PlannedContentBlock["provenance"],
+  usage: ContentUnitUsage = "reference",
+  unitId = id,
+): PlannedContentBlock {
+  return { id, unitId, role, text, sourceBlockIds: [...new Set(sourceBlockIds)], provenance, usage };
 }
 
 function containsText(pages: PagePlan[], text: string) {

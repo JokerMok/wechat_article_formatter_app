@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { parseArticleContent } from "../article-parser";
-import { CONTENT_LAYOUTS, DESIGN_SCHEME_IDS, getContentLayout, VISUAL_THEMES } from "../design-schemes";
+import { CONTENT_LAYOUTS, DESIGN_SCHEME_IDS, getContentLayout, getDesignScheme, VISUAL_THEMES } from "../design-schemes";
 import { analyzeArticleDesign } from "./local-analyzer";
+import { buildPlatformDesignPlans } from "./platform-planner";
+import type { EditorialPlan } from "./types";
 
 const REAL_ARTICLE = `# 做企业 AI 最尴尬的事：你想补地基，老板想先看楼
 
@@ -133,5 +135,68 @@ describe("platform design planner", () => {
     expect(kinds).toContain("keyMetric");
     expect(kinds.some((kind) => kind === "comparison" || kind === "interpretation")).toBe(true);
     expect(kinds).toContain("boundary");
+  });
+
+  it("does not consume source text just because a cover references the same source block", () => {
+    const article = parseArticleContent(`# 观点标题：先看结果再补基础
+
+第一段正文解释为什么团队需要先做一个能被验证的应用。
+
+第二段正文解释为什么数据、规则和权限仍然必须继续补齐。`, { mode: "knowledge" });
+    const plan = analyzeArticleDesign(article);
+    const blocks = plan.platformPlans.xiaohongshu.pages.flatMap((page) => page.blocks);
+    const blockTexts = blocks.map((block) => block.text);
+
+    expect(blockTexts).toContain("第一段正文解释为什么团队需要先做一个能被验证的应用。");
+    expect(blockTexts).toContain("第二段正文解释为什么数据、规则和权限仍然必须继续补齐。");
+    expect(blocks.every((block) => Boolean(block.unitId && block.usage))).toBe(true);
+  });
+
+  it("keeps explicit theme and layout authoritative over the compatibility scheme", () => {
+    const article = parseArticleContent(`# 原文标题
+
+正文内容需要保留在当前平台计划中。`, { mode: "knowledge" });
+    const base = analyzeArticleDesign(article);
+    const plans = buildPlatformDesignPlans(article, base.blueprint, getDesignScheme("knowledgeMinimal"), {
+      themeId: "storyMagazine",
+      contentLayoutId: "story",
+    });
+
+    expect(plans.xiaohongshu).toMatchObject({
+      visualPresetId: "storyNarrative",
+      themeId: "storyMagazine",
+      layoutId: "story",
+    });
+  });
+
+  it("deduplicates output units by unitId instead of shared sourceBlockIds", () => {
+    const article = parseArticleContent(`# 原文标题
+
+第一段原文提供背景信息。
+
+第二段原文给出后续判断。`, { mode: "knowledge" });
+    const base = analyzeArticleDesign(article);
+    const paragraphIds = article.blocks.filter((block) => block.type === "paragraph").map((block) => block.id);
+    const editorialPlan: EditorialPlan = {
+      schemaVersion: 1,
+      platform: "xiaohongshu",
+      contentType: base.blueprint.primaryContentType,
+      title: article.title ?? "原文标题",
+      sections: [{
+        id: "rewritten-section",
+        role: "claim",
+        body: "表达优化后的第一段。\n\n表达优化后的第二段。",
+        sourceBlockIds: paragraphIds,
+      }],
+    };
+    const plans = buildPlatformDesignPlans(article, base.blueprint, getDesignScheme("knowledgeMinimal"), {
+      themeId: "editorial",
+      contentLayoutId: "editorial",
+      editorialPlans: { xiaohongshu: editorialPlan },
+    });
+    const texts = plans.xiaohongshu.pages.flatMap((page) => page.blocks).map((block) => block.text);
+
+    expect(texts).toContain("表达优化后的第一段。");
+    expect(texts).toContain("表达优化后的第二段。");
   });
 });

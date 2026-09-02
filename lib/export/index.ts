@@ -6,6 +6,8 @@ import { createWechatPlatformContent, type WechatPlatformContent } from "../plat
 import { toXiaohongshuImageText, type XiaohongshuImageTextOutput } from "../platforms/xiaohongshu";
 import {
   drawCardImagePage,
+  drawDouyinImagePage,
+  drawXiaohongshuImagePage,
   layoutCardPages,
   type CardAspectRatio,
   type CardImageCanvasContext,
@@ -287,7 +289,7 @@ export async function copyWechatRichText(input: {
   return copyRichText(exportWechatHtml(input).html);
 }
 
-async function renderBrowserCardPageToPng(input: CardPageRenderInput): Promise<Blob> {
+async function renderCanvasPageToPng(input: CardPageRenderInput, drawPage: typeof drawCardImagePage): Promise<Blob> {
   if (typeof document === "undefined") {
     throw new Error("card_canvas_unavailable");
   }
@@ -300,13 +302,21 @@ async function renderBrowserCardPageToPng(input: CardPageRenderInput): Promise<B
     throw new Error("card_canvas_context_unavailable");
   }
 
-  drawCardImagePage(context as unknown as CardImageCanvasContext, input.page, { images: input.images, preset: input.preset });
+  drawPage(context as unknown as CardImageCanvasContext, input.page, { images: input.images, preset: input.preset });
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (blob) resolve(blob);
       else reject(new Error("card_canvas_blob_unavailable"));
     }, "image/png");
   });
+}
+
+async function renderXiaohongshuPageToPng(input: CardPageRenderInput) {
+  return renderCanvasPageToPng(input, drawXiaohongshuImagePage);
+}
+
+async function renderDouyinImagePageToPng(input: CardPageRenderInput) {
+  return renderCanvasPageToPng(input, drawDouyinImagePage);
 }
 
 function isSafeCardImageSrc(src: string) {
@@ -437,7 +447,7 @@ async function renderImageFiles(input: {
   images?: CardRenderImages;
   preset?: CardRenderPreset;
 }) {
-  const renderer = input.renderer ?? renderBrowserCardPageToPng;
+  const renderer = input.renderer ?? (input.platform === "xiaohongshu" ? renderXiaohongshuPageToPng : renderDouyinImagePageToPng);
   const files: ExportedFile[] = [];
   const portableBaseName = portableArchiveName(input.baseName);
   for (const [index, page] of input.pages.entries()) {

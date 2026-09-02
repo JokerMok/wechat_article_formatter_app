@@ -80,7 +80,7 @@ describe("buildPlatformArticle", () => {
     expect(pages.length).toBeGreaterThanOrEqual(3);
     expect(pages.length).toBeLessThanOrEqual(10);
     expect(output.pages).toHaveLength(pages.length);
-    expect(pages[0]?.map((block) => block.type)).toEqual(["title", "lead"]);
+    expect(pages[0]?.map((block) => block.type)).toEqual(["title"]);
     expect(result.blocks.some((block) => block.id.includes(":page:callToAction:"))).toBe(true);
   });
 

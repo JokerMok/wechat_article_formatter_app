@@ -77,6 +77,16 @@ export function drawCardImagePage(ctx: CardImageCanvasContext, page: CardLayoutP
   drawPageIndicator(ctx, page, preset);
 }
 
+/** Final renderer entry point for Xiaohongshu exports and previews. */
+export function drawXiaohongshuImagePage(ctx: CardImageCanvasContext, page: CardLayoutPage, options: DrawCardImagePageOptions = {}) {
+  drawCardImagePage(ctx, page, options);
+}
+
+/** Final renderer entry point for Douyin image exports and previews. */
+export function drawDouyinImagePage(ctx: CardImageCanvasContext, page: CardLayoutPage, options: DrawCardImagePageOptions = {}) {
+  drawCardImagePage(ctx, page, options);
+}
+
 function drawNode(ctx: CardImageCanvasContext, node: CardLayoutNode, preset: CardCanvasPreset, options: DrawCardImagePageOptions) {
   if (node.kind === "image" && node.image) {
     const image = options.images?.[node.blockId] ?? options.images?.[node.entryId];

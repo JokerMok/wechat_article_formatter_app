@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "content:validate": "vitest run lib/design-plan/content-validation.test.ts",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "autoprefixer": "^10.5.0",

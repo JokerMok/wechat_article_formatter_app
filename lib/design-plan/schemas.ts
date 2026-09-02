@@ -38,10 +38,15 @@ const brandOverrideSchema = z.strictObject({
 
 const plannedContentBlockSchema = z.strictObject({
   id: z.string().min(1),
+  // Optional keeps saved projects from older schema versions readable. New
+  // plans always persist both fields so page generation can deduplicate units
+  // without confusing source references with consumed content.
+  unitId: z.string().min(1).optional(),
   role: z.enum(["title", "subtitle", "heading", "body", "focus", "list", "media"]),
   text: z.string(),
   sourceBlockIds: z.array(z.string().min(1)),
   provenance: z.enum(["source", "structuralSummary", "expressionOptimization"]),
+  usage: z.enum(["reference", "body"]).optional(),
 });
 
 export const editorialPlanSchema = z.strictObject({
@@ -70,6 +75,13 @@ const pagePlanSchema = z.strictObject({
   blocks: z.array(plannedContentBlockSchema),
 });
 
+const contentIntegritySchema = z.strictObject({
+  sourceCoverage: z.number().min(0).max(1),
+  missingSourceBlockIds: z.array(z.string()),
+  duplicatedBodyUnitIds: z.array(z.string()),
+  unresolvedEditorialUnits: z.array(z.string()),
+});
+
 const platformDesignPlanSchema = z.strictObject({
   schemaVersion: z.literal(1),
   platform: platformIdSchema,
@@ -82,6 +94,7 @@ const platformDesignPlanSchema = z.strictObject({
   typography: typographySchema,
   brandOverride: brandOverrideSchema.optional(),
   editorialPlan: editorialPlanSchema.optional(),
+  integrity: contentIntegritySchema.optional(),
   pages: z.array(pagePlanSchema).min(1),
   exportSpec: z.strictObject({
     format: z.enum(["html", "png", "text"]),

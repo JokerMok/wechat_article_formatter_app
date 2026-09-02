@@ -53,6 +53,39 @@ export function layoutCardPagesToTarget(
   return { ...best, fitScale: bestScale, targetPages: target };
 }
 
+/** Xiaohongshu keeps a calmer reading rhythm for explanatory cards. */
+export function layoutXiaohongshuPagesToTarget(
+  source: UnifiedArticleContent,
+  measurer: TextMeasurer,
+  options: CardLayoutOptions,
+  targetPages: number,
+): AdaptiveCardLayoutResult {
+  return layoutCardPagesToTarget(source, measurer, {
+    ...options,
+    typography: {
+      ...options.typography,
+      paragraphSpacing: Math.max(options.typography?.paragraphSpacing ?? 0, 30),
+    },
+  }, targetPages);
+}
+
+/** Douyin image cards prioritize fast scanning and tighter grouping. */
+export function layoutDouyinImagePagesToTarget(
+  source: UnifiedArticleContent,
+  measurer: TextMeasurer,
+  options: CardLayoutOptions,
+  targetPages: number,
+): AdaptiveCardLayoutResult {
+  return layoutCardPagesToTarget(source, measurer, {
+    ...options,
+    typography: {
+      ...options.typography,
+      paragraphSpacing: Math.min(options.typography?.paragraphSpacing ?? 28, 30),
+      titleSpacing: Math.min(options.typography?.titleSpacing ?? 42, 46),
+    },
+  }, targetPages);
+}
+
 function scaled(value: number | undefined, scale: number, minimum: number) {
   if (value === undefined) return undefined;
   return Math.max(minimum, Math.round(value * scale));

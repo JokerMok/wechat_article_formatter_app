@@ -248,6 +248,14 @@ export function detectContentType(content: UnifiedArticleContent): ContentType {
     scores.splice(scores.findIndex(([id]) => id === "storyNarrative"), 1);
   }
 
+  // A clearly labelled personal experience should keep its narrative theme
+  // even when the article also contains strong opinions or recommendations.
+  // This uses title shape plus first-person evidence, rather than a lone
+  // keyword, so an opinion article written in the first person stays editorial.
+  if (hasExperienceTitle && summary.personalVoiceBlockCount >= 2 && !hasList && !hasTutorialShape) {
+    return "experienceSharing";
+  }
+
   return scores.sort((left, right) => right[1] - left[1])[0]?.[0] ?? "opinionAnalysis";
 }
 

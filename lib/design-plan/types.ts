@@ -1,4 +1,4 @@
-import type { UnifiedArticleContent } from "../content";
+import type { UnifiedArticleBlock, UnifiedArticleContent } from "../content";
 import type { PlatformId } from "../platforms/types";
 import type { BrandOverride, ContentLayout, ContentLayoutId, DesignDensity, DesignSchemeId, VisualThemeId } from "../design-schemes";
 
@@ -189,12 +189,32 @@ export const PAGE_PLAN_KINDS = [
 export type PagePlanKind = (typeof PAGE_PLAN_KINDS)[number];
 export type PlannedBlockRole = "title" | "subtitle" | "heading" | "body" | "focus" | "list" | "media";
 
+/**
+ * Source references explain where a unit came from. They must not be used as
+ * a consumption key because the same source block may be referenced by a
+ * cover teaser, a quote, and the body independently.
+ */
+export type ContentUnitUsage = "reference" | "body";
+
+export type PlannedSourceUnit = {
+  unitId: string;
+  role: PlannedBlockRole;
+  text: string;
+  sourceBlockIds: string[];
+  sourceType: UnifiedArticleBlock["type"];
+  usage: ContentUnitUsage;
+};
+
 export type PlannedContentBlock = {
   id: string;
+  /** Stable identity for deduplication within one platform output. */
+  unitId?: string;
   role: PlannedBlockRole;
   text: string;
   sourceBlockIds: string[];
   provenance: ContentProvenance;
+  /** Optional for backwards-compatible persisted plans. New plans always set it. */
+  usage?: ContentUnitUsage;
 };
 
 export type PagePlan = {
@@ -241,8 +261,16 @@ export type PlatformDesignPlan = {
   typography: TypographyTokens;
   brandOverride?: BrandOverride;
   editorialPlan?: EditorialPlan;
+  integrity?: ContentIntegrityResult;
   pages: PagePlan[];
   exportSpec: ExportSpec;
+};
+
+export type ContentIntegrityResult = {
+  sourceCoverage: number;
+  missingSourceBlockIds: string[];
+  duplicatedBodyUnitIds: string[];
+  unresolvedEditorialUnits: string[];
 };
 
 export type RenderValidationResult = {

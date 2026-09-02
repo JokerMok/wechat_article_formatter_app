@@ -8,6 +8,7 @@ import type {
   EditorialPlan,
   EditorialSection,
   EditorialSectionRole,
+  PlannedSourceUnit,
   SemanticSectionRole,
 } from "./types";
 
@@ -99,43 +100,53 @@ export function editorialSectionToContentSection(
 export function editorialUnitsForSection(
   section: EditorialSection,
   source: UnifiedArticleContent,
-): Array<{ id: string; role: "body" | "list" | "focus" | "media" | "heading" | "subtitle"; text: string; sourceBlockIds: string[]; sourceType: UnifiedArticleBlock["type"] }> {
+): PlannedSourceUnit[] {
   const sourceBlocks = new Map(source.blocks.map((block) => [block.id, block]));
   const sourceBlockIds = [...new Set(section.sourceBlockIds.filter((id) => sourceBlocks.has(id)))];
   const sourceSectionBlocks = sourceBlockIds
     .map((id) => sourceBlocks.get(id))
     .filter((block): block is UnifiedArticleBlock => Boolean(block));
   const textSourceBlockIds = sourceSectionBlocks
-    .filter((block) => block.type !== "image")
+    .filter(isBodySourceBlock)
     .map((block) => block.id);
-  const units: Array<{ id: string; role: "body" | "list" | "focus" | "media" | "heading" | "subtitle"; text: string; sourceBlockIds: string[]; sourceType: UnifiedArticleBlock["type"] }> = [];
+  const units: PlannedSourceUnit[] = [];
 
   if (section.body?.trim()) {
     splitEditorialBody(section.body).forEach((text, index) => {
       const matchingSourceBlock = sourceSectionBlocks.find((block) => {
-        if (block.type === "list") return false;
+        if (!isBodySourceBlock(block) || block.type === "list") return false;
         const sourceText = cleanPublishingText(renderBlockText(block) ?? "");
-        return normalizeMeaning(sourceText).includes(normalizeMeaning(text)) || normalizeMeaning(text).includes(normalizeMeaning(sourceText));
+        const normalizedSourceText = normalizeMeaning(sourceText);
+        const normalizedText = normalizeMeaning(text);
+        return normalizedSourceText.length > 0 && normalizedText.length > 0
+          && (normalizedSourceText.includes(normalizedText) || normalizedText.includes(normalizedSourceText));
       });
-      units.push({
-        id: `${section.id}:body:${index + 1}`,
+      const sourceIds = matchingSourceBlock ? [matchingSourceBlock.id] : textSourceBlockIds.length ? textSourceBlockIds : sourceBlockIds;
+      units.push(makeEditorialUnit({
+        unitId: stableUnitId(section.id, "body", text, sourceIds, index),
         role: section.role === "warning" || section.role === "conclusion" ? "focus" : "body",
         text,
-        sourceBlockIds: matchingSourceBlock ? [matchingSourceBlock.id] : textSourceBlockIds,
+        sourceBlockIds: sourceIds,
         sourceType: matchingSourceBlock?.type ?? sourceSectionBlocks[0]?.type ?? "paragraph",
-      });
+      }));
     });
   } else {
     sourceSectionBlocks.forEach((block) => {
       if (block.type === "title" || block.type === "section" || block.type === "subsection" || block.type === "divider" || block.type === "pageBreak" || block.type === "code") return;
       if (block.type === "list") {
         block.items.map(cleanPublishingText).filter(Boolean).forEach((text, index) => {
-          units.push({ id: `${block.id}:item:${index + 1}`, role: "list", text, sourceBlockIds: [block.id], sourceType: block.type });
+          units.push(makeEditorialUnit({ unitId: `${block.id}:item:${index + 1}`, role: "list", text, sourceBlockIds: [block.id], sourceType: block.type }));
         });
         return;
       }
       const text = cleanPublishingText(renderBlockText(block) ?? "");
-      if (text) units.push({ id: block.id, role: block.type === "image" ? "media" : block.type === "quote" || block.type === "golden" || block.type === "summary" || block.type === "cta" || block.type === "card" ? "focus" : block.type === "lead" ? "subtitle" : "body", text, sourceBlockIds: [block.id], sourceType: block.type });
+      if (text) units.push(makeEditorialUnit({
+        unitId: block.id,
+        role: block.type === "image" ? "media" : block.type === "quote" || block.type === "golden" || block.type === "summary" || block.type === "cta" || block.type === "card" ? "focus" : block.type === "lead" ? "subtitle" : "body",
+        text,
+        sourceBlockIds: [block.id],
+        sourceType: block.type,
+      }));
     });
   }
 
@@ -146,23 +157,61 @@ export function editorialUnitsForSection(
     const sourceList = sourceSectionBlocks.find((block): block is Extract<UnifiedArticleBlock, { type: "list" }> => block.type === "list");
     const bulletSourceBlockIds = sourceList ? [sourceList.id] : sourceBlockIds;
     section.bullets?.map(cleanPublishingText).filter(Boolean).forEach((text, index) => {
-      units.push({ id: `${section.id}:bullet:${index + 1}`, role: "list", text, sourceBlockIds: bulletSourceBlockIds, sourceType: "list" });
+      units.push(makeEditorialUnit({
+        unitId: stableUnitId(section.id, "list", text, bulletSourceBlockIds, index),
+        role: "list",
+        text,
+        sourceBlockIds: bulletSourceBlockIds,
+        sourceType: "list",
+      }));
     });
   }
 
   sourceSectionBlocks.filter((block) => block.type === "image").forEach((block) => {
-    units.push({
-      id: block.id,
+    units.push(makeEditorialUnit({
+      unitId: `${block.id}:media`,
       role: "media",
       text: cleanPublishingText(renderBlockText(block) ?? block.text),
       sourceBlockIds: [block.id],
       sourceType: block.type,
-    });
+    }));
   });
 
   return units.length ? units : sourceSectionBlocks.flatMap((block) => block.type === "image"
-    ? [{ id: block.id, role: "media" as const, text: cleanPublishingText(block.text), sourceBlockIds: [block.id], sourceType: block.type }]
+    ? [makeEditorialUnit({ unitId: `${block.id}:media`, role: "media" as const, text: cleanPublishingText(block.text), sourceBlockIds: [block.id], sourceType: block.type })]
     : []);
+}
+
+type EditorialUnitInput = Omit<PlannedSourceUnit, "usage"> & { usage?: PlannedSourceUnit["usage"] };
+
+function makeEditorialUnit(input: EditorialUnitInput): PlannedSourceUnit {
+  return { ...input, usage: input.usage ?? "body", sourceBlockIds: [...new Set(input.sourceBlockIds)] };
+}
+
+function isBodySourceBlock(block: UnifiedArticleBlock): boolean {
+  return block.type !== "title"
+    && block.type !== "section"
+    && block.type !== "subsection"
+    && block.type !== "divider"
+    && block.type !== "pageBreak"
+    && block.type !== "code"
+    && block.type !== "image";
+}
+
+function stableUnitId(sectionId: string, role: PlannedSourceUnit["role"], text: string, sourceBlockIds: string[], index: number) {
+  const sourceAnchor = sourceBlockIds.join("+") || sectionId;
+  const normalized = normalizeMeaning(text);
+  const fingerprint = normalized.slice(0, 120) || `empty-${index + 1}`;
+  return `unit:${sourceAnchor}:${role}:${stableTextHash(fingerprint)}`;
+}
+
+function stableTextHash(value: string) {
+  let hash = 2166136261;
+  for (const char of value) {
+    hash ^= char.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 function editorialSectionFromBlueprint(section: ContentSection, sourceBlocks: Map<string, UnifiedArticleBlock>): EditorialSection | undefined {

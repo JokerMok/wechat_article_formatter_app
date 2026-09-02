@@ -328,6 +328,11 @@ test("TEST-012/013/014/015 card previews keep real ratios, reflow after layout e
   await expect(page.locator("text=当前页有溢出")).toHaveCount(0);
 
   const split = page.getByRole("button", { name: "拆分页面" }).first();
+  // The cover intentionally contains only the title, so choose the first
+  // content page when the cover cannot be split.
+  if (await split.isDisabled() && await pageTabs.count() > 1) {
+    await pageTabs.nth(1).click();
+  }
   if (await split.isEnabled()) await split.click();
   await expect(page.getByText("已启用手动页")).toBeVisible();
   await page.getByRole("button", { name: "锁定页面" }).first().click();
@@ -337,6 +342,7 @@ test("TEST-012/013/014/015 card previews keep real ratios, reflow after layout e
   await page.getByRole("button", { name: "重做" }).click();
   await page.getByRole("button", { name: "清除" }).click();
   await expect(page.getByText("已启用手动页")).toHaveCount(0);
+  await pageTabs.nth(0).click();
   await expect(page.getByText(/1080x1440 · 1\//).first()).toBeVisible();
 
   await selectPlatform(page, "抖音图文");
