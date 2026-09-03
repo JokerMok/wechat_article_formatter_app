@@ -42,6 +42,10 @@ export function buildLocalEditorialPlan(
     && !containsMeaningfulText(source, openingHook)
     ? openingHook
     : undefined;
+  const optimizedTitle = blueprint.generationMode === "reachOptimized"
+    ? blueprint.titleCandidates.find((candidate) => candidate !== sourceTitle && !containsMeaningfulText(source, candidate))
+    : undefined;
+  const visibleHook = hook || optimizedTitle;
 
   const preferredTitle = blueprint.generationMode === "reachOptimized"
     ? blueprint.titleCandidates[0] || sourceTitle
@@ -52,7 +56,7 @@ export function buildLocalEditorialPlan(
     platform,
     contentType: blueprint.primaryContentType,
     title: preferredTitle || "未命名文章",
-    ...(hook ? { hook } : {}),
+    ...(visibleHook ? { hook: visibleHook } : {}),
     sections: sectionsWithMedia,
     ...(blueprint.conclusion && !sectionsWithMedia.some((section) => containsMeaningfulText(section.body ?? "", blueprint.conclusion))
       ? { summary: blueprint.conclusion }

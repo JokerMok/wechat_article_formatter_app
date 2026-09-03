@@ -1,5 +1,5 @@
 import type { TemplateKey } from "../../lib/article-types";
-import { parseArticleContent } from "../../lib/article-parser";
+import { parseSourceDocument } from "../../lib/article-parser";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../../lib/content";
 import { unifiedArticleContentSchema } from "../../lib/content/schemas";
 import { analyzeArticleDesign, buildPlatformArticle, designPlanSchema, PAGE_PLAN_KINDS, type DesignPlan, type PagePlanKind } from "../../lib/design-plan";
@@ -77,7 +77,7 @@ export const DEFAULT_AI_SETTINGS: AiWorkspaceSettings = {
 };
 
 export function parseSourceMarkdown(sourceMarkdown: string) {
-  return parseArticleContent(sourceMarkdown, { mode: "knowledge" });
+  return parseSourceDocument(sourceMarkdown, { mode: "knowledge" });
 }
 
 export function cloneArticleContent(content: UnifiedArticleContent): UnifiedArticleContent {

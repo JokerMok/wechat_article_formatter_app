@@ -13,7 +13,7 @@ import type { PlatformId } from "../platforms/types";
 import { cleanPublishingText, isGenericStructureHeading, isWeakPublishingText, publicationBlocks } from "./content-filter";
 import { buildPlatformDesignPlans } from "./platform-planner";
 import { buildLocalEditorialPlan } from "./editorial-plan";
-import { analyzeSemanticBlueprint, summarizeSemanticSignals } from "./semantic-analyzer";
+import { analyzeSourceDocument, summarizeSemanticSignals } from "./semantic-analyzer";
 import type {
   ContentBlockRole,
   ContentBlueprint,
@@ -65,7 +65,7 @@ export type AnalyzeArticleDesignOptions = {
 };
 
 export function analyzeArticleDesign(content: UnifiedArticleContent, options: AnalyzeArticleDesignOptions = {}): DesignPlan {
-  const sourceRevision = stableChecksum(content.sourceText);
+  const sourceRevision = content.sourceRevision ?? stableChecksum(content.sourceText);
   const publishableContent = { ...content, blocks: publicationBlocks(content) };
   const contentType = detectContentType(content);
   const generationMode = options.generationMode ?? "layoutOnly";
@@ -79,17 +79,18 @@ export function analyzeArticleDesign(content: UnifiedArticleContent, options: An
   const theme = getVisualTheme(themeId);
   const contentLayout = getContentLayout(contentLayoutId);
   const title = cleanTitle(content.title || firstMeaningfulText(publishableContent, ["title", "section", "paragraph"]) || "未命名文章", 72);
-  const coreMessage = cleanLine(firstMeaningfulText(publishableContent, ["summary", "golden", "quote", "lead", "paragraph"]) || title, 280);
-  const keyPoints = collectKeyPoints(publishableContent, coreMessage);
-  const openingHook = cleanLine(firstMeaningfulText(publishableContent, ["lead", "quote", "paragraph"]) || coreMessage, 220);
-  const conclusion = cleanLine(lastMeaningfulText(publishableContent, ["summary", "golden", "paragraph"]) || coreMessage, 360);
-  const highlights = collectHighlights(publishableContent, keyPoints);
   const tone = detectTone(content, contentType);
   const textLength = publishableContent.blocks.reduce((total, block) => total + (renderBlockText(block)?.length ?? 0), 0);
   const publishableText = publishableContent.blocks.map((block) => renderBlockText(block) ?? "").join("\n");
   const targetAudience = detectAudience(publishableText);
-  const tags = collectTags(publishableContent, 8);
-  const titleCandidates = generationMode === "layoutOnly" ? [title] : buildTitleCandidates(title, contentType, keyPoints.length);
+  const semanticBlueprint = analyzeSourceDocument(content, { generationMode, contentType, targetAudience, tone });
+  const coreMessage = cleanLine(semanticBlueprint.centralThesis || title, 280);
+  const keyPoints = uniqueText([...semanticBlueprint.keyPoints, ...collectKeyPoints(publishableContent, coreMessage)]).slice(0, 5);
+  const openingHook = cleanLine(semanticBlueprint.openingHook || semanticBlueprint.narrativeArc.opening || title, 220);
+  const conclusion = cleanLine(semanticBlueprint.conclusion || lastMeaningfulText(publishableContent, ["summary", "paragraph"]) || coreMessage, 360);
+  const highlights = uniqueText([...semanticBlueprint.goldenSentences.map((unit) => unit.text), ...collectHighlights(publishableContent, keyPoints)]).slice(0, 5);
+  const tags = semanticBlueprint.topicTags.length ? semanticBlueprint.topicTags : collectTags(publishableContent, 8);
+  const titleCandidates = generationMode === "layoutOnly" ? [title] : uniqueText([...semanticBlueprint.titleCandidates, ...buildTitleCandidates(title, contentType, keyPoints.length)]).slice(0, 3);
   const sourceCallToAction = cleanLine(firstMeaningfulText(content, ["cta"]), 180);
   const callToAction = generationMode === "layoutOnly" ? sourceCallToAction : sourceCallToAction || defaultCallToAction(contentType);
   const recommendedTitle = titleCandidates[0] ?? title;
@@ -97,9 +98,9 @@ export function analyzeArticleDesign(content: UnifiedArticleContent, options: An
     ? []
     : ["提供标题候选并保留原题", "提炼开头钩子和核心信息", "按平台阅读习惯调整内容顺序", "保留原文事实、限定条件和人工编辑"];
   const blueprint: ContentBlueprint = {
-    ...analyzeSemanticBlueprint(content, { generationMode, contentType, targetAudience, tone }),
+    ...semanticBlueprint,
     coreMessage,
-    centralThesis: coreMessage,
+    centralThesis: semanticBlueprint.centralThesis || coreMessage,
     titleCandidates,
     ...(openingHook ? { openingHook } : {}),
     conclusion,
@@ -218,10 +219,16 @@ export function detectContentType(content: UnifiedArticleContent): ContentType {
   const hasList = summary.listCount > 0;
   const hasDataLanguage = /数据显示|数据表明|数据分析|数据解读|数据复盘|报告|趋势|增长|下降|同比|环比|调查|比例|统计|样本/u.test(searchableText);
   const hasCaseTitle = /案例|客户项目|业务复盘/u.test(content.title ?? "");
-  const hasCaseEvidence = /案例|客户|项目|交付|实施|上线|解决方案|验收/u.test(searchableText) && signals.result > 0;
-  const hasStoryTitle = /那天|故事|经历|转折|一次/u.test(content.title ?? "");
+  // "项目/复盘" describe a topic, not necessarily a case. Require a concrete
+  // delivery event before selecting the case layout.
+  const concreteCaseTokens = ["客户", "实施", "上线", "解决方案", "验收"].filter((token) => searchableText.includes(token)).length;
+  const hasCaseEvidence = signals.result > 0 && (
+    (hasCaseTitle && concreteCaseTokens >= 1) || concreteCaseTokens >= 2
+  );
+  const hasStoryTitle = /那天|故事|经历|转折|第一次|一天|某次|某个晚上/u.test(content.title ?? "");
   const hasExperienceTitle = /体验|体会|感受|分享|踩坑|心得/u.test(content.title ?? "");
-  const hasProductTitle = /产品说明|产品介绍|产品功能|产品能力|适用场景|选型|配置建议|服务方案|版本说明/u.test(searchableText);
+  const hasProductTitle = /产品说明|产品介绍|产品功能|产品能力|适用场景|选型|配置建议|服务方案|版本说明/u.test(content.title ?? "")
+    && /产品|能力|场景|配置|版本|方案/u.test(searchableText);
   const hasChecklistShape = hasList || /清单|攻略|检查项|注意事项|步骤|要点/u.test(content.title ?? "");
   const hasTutorialShape = /教程|入门|指南|怎么做|如何|操作|配置|使用方法|实操|流程/u.test(content.title ?? "");
   const methodSignal = Math.min(signals.method, 3);
@@ -233,15 +240,15 @@ export function detectContentType(content: UnifiedArticleContent): ContentType {
     ["knowledgeTutorial", methodSignal + (hasTutorialShape ? 6 : 0)],
     ["dataInsight", (hasDataLanguage ? 7 : 0) + Math.min(signals.fact, 3) * 2],
     ["productIntroduction", hasProductTitle ? 8 : 0],
-    ["caseReview", (hasCaseTitle ? 5 : 0) + (hasCaseEvidence ? 7 : 0) + Math.min(signals.result, 3) * 2],
+    ["caseReview", (hasCaseTitle && hasCaseEvidence ? 5 : 0) + (hasCaseEvidence ? 7 : 0) + (hasCaseEvidence ? Math.min(signals.result, 3) * 2 : 0)],
     ["experienceSharing", (hasExperienceTitle ? 8 : 0) + Math.min(summary.personalVoiceBlockCount, 3) + (signals.example > 0 ? 2 : 0)],
-    ["storyNarrative", (hasStoryTitle ? 6 : 0) + signals.narrative * 3 + (signals.narrative >= 3 ? 4 : 0)],
+    ["storyNarrative", hasStoryTitle ? 10 : (signals.narrative >= 3 && signals.example >= 2 && summary.personalVoiceBlockCount >= 2 ? 8 : 0)],
     ["opinionAnalysis", 3 + signals.opinion * 4 + signals.counter * 2 + Math.min(signals.boundary, 2) + Math.min(signals.conclusion, 2)],
   ];
 
   const opinionScore = scores.find(([id]) => id === "opinionAnalysis")?.[1] ?? 0;
   const storyScore = scores.find(([id]) => id === "storyNarrative")?.[1] ?? 0;
-  const narrativeEvidence = signals.narrative >= 3 && summary.personalVoiceBlockCount >= 2;
+  const narrativeEvidence = signals.narrative >= 3 && signals.example >= 2 && summary.personalVoiceBlockCount >= 2;
   if (!narrativeEvidence && !hasStoryTitle) {
     scores.splice(scores.findIndex(([id]) => id === "storyNarrative"), 1);
   } else if (opinionScore >= storyScore && !hasStoryTitle) {

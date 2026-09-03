@@ -3,6 +3,8 @@ import type {
   ArticleContentParseOptions,
   ArticleSourceFormat,
   SourcePosition,
+  SourceSegment,
+  SourceDocument,
   UnifiedArticleBlock,
   UnifiedArticleContent,
 } from "./content";
@@ -235,11 +237,6 @@ function normalizeImagePlaceholder(line: SourceLine) {
   return t.replace(/^(图片|配图|图示|插图|此处插入|image)[:：\s]*/i, "此处插入：");
 }
 
-function isGoldenSentence(text: string) {
-  const t = text.trim();
-  return t.length >= 10 && t.length <= 46 && /不是|而是|已经|正在|终究|本质|变成|过去了|真正/.test(t);
-}
-
 function isSummaryIntro(text: string) {
   return /对普通人来说，这意味着|这意味着|总结来看|归根到底|写在最后|最后想说/.test(text.trim());
 }
@@ -274,11 +271,6 @@ function shouldPromoteQuote(line: SourceLine, mode: ArticleParseMode) {
   if (line.quoted) return true;
   if (mode === "narrative") return false;
   return isQuoteLine(line);
-}
-
-function shouldPromoteGolden(text: string, mode: ArticleParseMode) {
-  if (mode === "narrative") return false;
-  return isGoldenSentence(text);
 }
 
 function makeSourcePosition(lines: SourceLine[]): SourcePosition {
@@ -332,6 +324,10 @@ function isStructuralLine(line: SourceLine) {
 }
 
 export function parseArticleContent(raw: string, options: ParseOptions = {}): UnifiedArticleContent {
+  return parseArticleContentInternal(raw, options, true);
+}
+
+function parseArticleContentInternal(raw: string, options: ParseOptions, legacyPresentationBlocks: boolean): UnifiedArticleContent {
   const mode = options.mode ?? "narrative";
   const lines = normalizeInput(raw);
   const blocks: UnifiedArticleBlock[] = [];
@@ -400,7 +396,7 @@ export function parseArticleContent(raw: string, options: ParseOptions = {}): Un
       continue;
     }
 
-    const lineCard = parseExplicitCard(line.text, mode);
+    const lineCard = legacyPresentationBlocks ? parseExplicitCard(line.text, mode) : null;
     if (lineCard && !line.quoted) {
       pushBlock(
         {
@@ -419,13 +415,13 @@ export function parseArticleContent(raw: string, options: ParseOptions = {}): Un
       continue;
     }
 
-    if (shouldPromoteQuote(line, mode)) {
+    if (isQuoteBoundary(line, mode, legacyPresentationBlocks)) {
       pushBlock(makeTextBlock(id, "quote", line.text, [line]), [line]);
       i += 1;
       continue;
     }
 
-    if (isCTA(line.text)) {
+    if (legacyPresentationBlocks && isCTA(line.text)) {
       pushBlock(makeTextBlock(id, "cta", line.text, [line]), [line]);
       i += 1;
       continue;
@@ -463,10 +459,10 @@ export function parseArticleContent(raw: string, options: ParseOptions = {}): Un
       !isSectionTitle(lines[j]) &&
       !isSubTitle(lines[j]) &&
       !isBullet(lines[j]) &&
-      !isCTA(lines[j].text) &&
+      !(legacyPresentationBlocks && isCTA(lines[j].text)) &&
       !isImagePlaceholder(lines[j]) &&
-      !shouldPromoteQuote(lines[j], mode) &&
-      !parseExplicitCard(lines[j].text, mode)
+      !isQuoteBoundary(lines[j], mode, legacyPresentationBlocks) &&
+      !(legacyPresentationBlocks && parseExplicitCard(lines[j].text, mode))
     ) {
       paragraphLines.push(lines[j]);
       j += 1;
@@ -474,14 +470,12 @@ export function parseArticleContent(raw: string, options: ParseOptions = {}): Un
 
     const paragraph = paragraphLines.map((paragraphLine) => paragraphLine.text).join("");
     const markdown = paragraphLines.map((paragraphLine) => paragraphLine.markdown).join("\n");
-    if (blocks.length === 1 && blocks[0].type === "title" && looksLikeLead(paragraph)) {
+    if (legacyPresentationBlocks && blocks.length === 1 && blocks[0].type === "title" && looksLikeLead(paragraph)) {
       pushBlock(makeTextBlock(id, "lead", paragraph, paragraphLines, markdown), paragraphLines);
-    } else if (shouldPromoteGolden(paragraph, mode)) {
-      pushBlock(makeTextBlock(id, "golden", paragraph, paragraphLines, markdown), paragraphLines);
-    } else if (isSummaryIntro(paragraph)) {
+    } else if (legacyPresentationBlocks && isSummaryIntro(paragraph)) {
       pushBlock(makeTextBlock(id, "summary", paragraph, paragraphLines, markdown), paragraphLines);
     } else {
-      const explicitCard = parseExplicitCard(paragraph, mode);
+      const explicitCard = legacyPresentationBlocks ? parseExplicitCard(paragraph, mode) : null;
       if (explicitCard) {
         pushBlock(
           {
@@ -553,4 +547,68 @@ export function articleContentToBlocks(content: UnifiedArticleContent): ArticleB
 
 export function parseArticle(raw: string, options: ParseOptions = {}): ArticleBlock[] {
   return articleContentToBlocks(parseArticleContent(raw, options));
+}
+
+/**
+ * Adds only source identity to the syntax parser output. This deliberately does
+ * not infer semantic roles; that belongs to the semantic analyzer stage.
+ */
+export function parseSourceDocument(raw: string, options: ParseOptions = {}): SourceDocument {
+  const content = parseArticleContentInternal(raw, options, false);
+  return {
+    ...content,
+    sourceRevision: sourceRevisionFor(raw),
+    segments: buildSourceSegments(content.blocks),
+  };
+}
+
+function buildSourceSegments(blocks: UnifiedArticleBlock[]): SourceSegment[] {
+  return blocks.flatMap((block) => {
+    if (block.type === "divider" || block.type === "pageBreak" || block.type === "code") return [];
+    const texts = block.type === "list"
+      ? block.items
+      : block.type === "card"
+        ? [block.text]
+        : [block.text];
+    return texts.flatMap((text, itemIndex) => {
+      const normalized = text.trim();
+      if (!normalized) return [];
+      const sentenceParts = block.type === "list"
+        ? [normalized]
+        : normalized.split(/(?<=[。！？；.!?;])\s*/u).map((part) => part.trim()).filter(Boolean);
+      let searchOffset = 0;
+      return sentenceParts.map((part, sentenceIndex) => {
+        const localStart = Math.max(0, normalized.indexOf(part, searchOffset));
+        const localEnd = localStart + part.length;
+        searchOffset = localEnd;
+        const sourceStart = block.source.startOffset + localStart;
+        const sourceEnd = Math.min(block.source.endOffset, sourceStart + part.length);
+        return {
+          id: `${block.id}:segment:${itemIndex + 1}:${sentenceIndex + 1}`,
+          blockId: block.id,
+          text: part,
+          sourceRange: {
+            ...block.source,
+            startOffset: sourceStart,
+            endOffset: sourceEnd,
+            sourceText: part,
+          },
+        };
+      });
+    });
+  });
+}
+
+function isQuoteBoundary(line: SourceLine, mode: ArticleParseMode, legacyPresentationBlocks: boolean) {
+  if (line.quoted) return true;
+  return legacyPresentationBlocks && shouldPromoteQuote(line, mode);
+}
+
+function sourceRevisionFor(value: string) {
+  let hash = 2166136261;
+  for (const char of value) {
+    hash ^= char.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return `src-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }

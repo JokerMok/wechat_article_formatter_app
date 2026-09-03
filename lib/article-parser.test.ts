@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Mock } from "@vitest/spy";
-import { articleContentToBlocks, parseArticle, parseArticleContent } from "./article-parser";
+import { articleContentToBlocks, parseArticle, parseArticleContent, parseSourceDocument } from "./article-parser";
 import type { PlatformVersion } from "./platforms/types";
 
 declare module "@vitest/spy" {
@@ -186,6 +186,27 @@ Promise<string>、Promise<s> 和 3 < 5 > 2 都要保留。`);
     });
     expect(content.sourceText).toContain("onclick");
     expect(content.blocks[1]?.text).not.toMatch(/onclick|script|font-weight|evil|alert/);
+  });
+
+  it("keeps the source document syntax-only and fingerprints the exact source", () => {
+    const raw = `# 文章标题
+
+真正关键：先把业务边界讲清楚。再把结果说明白。
+
+关键判断：能演示，不代表能处理全量业务。
+
+留言领取检查表
+
+> 这是原文明确引用的判断。`;
+    const document = parseSourceDocument(raw, { mode: "business" });
+
+    expect(document.blocks.map((block) => block.type)).toEqual(["title", "paragraph", "paragraph", "paragraph", "quote"]);
+    expect(document.blocks.filter((block) => ["lead", "summary", "card", "cta", "golden"].includes(block.type))).toHaveLength(0);
+    expect(document.sourceRevision).toMatch(/^src-[0-9a-f]{8}$/);
+    expect(document.segments.length).toBeGreaterThan(document.blocks.length);
+    expect(document.segments.every((segment) => document.blocks.some((block) => block.id === segment.blockId))).toBe(true);
+    expect(parseSourceDocument(raw, { mode: "business" }).sourceRevision).toBe(document.sourceRevision);
+    expect(parseSourceDocument(`${raw}!`, { mode: "business" }).sourceRevision).not.toBe(document.sourceRevision);
   });
 
   it("keeps plain text source format and platform version type contract", () => {

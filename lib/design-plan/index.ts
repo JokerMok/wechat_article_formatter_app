@@ -1,6 +1,6 @@
 export { analyzeArticleDesign, applySemanticBlueprint, CONTENT_TYPE_LABELS, detectContentType } from "./local-analyzer";
 export type { AnalyzeArticleDesignOptions } from "./local-analyzer";
-export { analyzeSemanticBlueprint, migrateSemanticBlueprintSections, summarizeSemanticSignals, validateSemanticBlueprint } from "./semantic-analyzer";
+export { analyzeSemanticBlueprint, analyzeSourceDocument, migrateSemanticBlueprintSections, summarizeSemanticSignals, validateSemanticBlueprint } from "./semantic-analyzer";
 export type { SemanticSignalSummary } from "./semantic-analyzer";
 export { buildPlatformArticle } from "./platform-adapter";
 export { buildPlatformDesignPlans, buildWechatPlan, buildXiaohongshuPlan, buildDouyinImagePlan, buildDouyinLongformPlan, calculateContentIntegrity } from "./platform-planner";
@@ -16,6 +16,7 @@ export type {
   DisplayHeading,
   SemanticCertainty,
   SemanticSectionRole,
+  SemanticArticle,
   SemanticUnit,
   NarrativeArc,
   ContentTone,

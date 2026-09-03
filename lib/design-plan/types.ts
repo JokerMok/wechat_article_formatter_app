@@ -157,6 +157,9 @@ export type ContentBlueprint = {
   modificationSummary: string[];
 };
 
+/** SemanticArticle is the named contract between analysis and platform planning. */
+export type SemanticArticle = ContentBlueprint;
+
 export const PAGE_PLAN_KINDS = [
   "cover",
   "intro",

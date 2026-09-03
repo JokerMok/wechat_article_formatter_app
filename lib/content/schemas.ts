@@ -8,6 +8,13 @@ export const sourcePositionSchema = z.object({
   sourceText: z.string(),
 });
 
+export const sourceSegmentSchema = z.object({
+  id: z.string().min(1),
+  blockId: z.string().min(1),
+  text: z.string().min(1),
+  sourceRange: sourcePositionSchema,
+});
+
 const baseBlockSchema = z.object({
   id: z.string().min(1),
   source: sourcePositionSchema,
@@ -49,6 +56,8 @@ export const unifiedArticleContentSchema = z.object({
   sourceText: z.string(),
   sourceFormat: z.union([z.literal("markdown"), z.literal("plainText")]),
   parseMode: z.union([z.literal("narrative"), z.literal("knowledge"), z.literal("business")]),
+  sourceRevision: z.string().min(1).optional(),
+  segments: z.array(sourceSegmentSchema).optional(),
   title: z.string().optional(),
   blocks: z.array(unifiedArticleBlockSchema),
   warnings: z.array(

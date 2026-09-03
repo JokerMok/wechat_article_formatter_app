@@ -32,11 +32,15 @@ export function cleanPublishingText(value: string) {
     .replace(/\[\[[^|\]]+\|([^\]]+)\]\]/g, "$1")
     .replace(/\[\[[^\]]+\]\]/g, "")
     .replace(/`([^`]+)`/g, "$1")
+    .replace(/^(?:>|＞|&gt;)\s*$/u, "")
+    .replace(/^(?:>|＞|&gt;)\s+/u, "")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 export function isWeakPublishingText(value: string) {
   const normalized = cleanPublishingText(value).replace(/\s+/g, "").slice(0, 48);
-  return /^(素材类型|目标受众|关联资产|发布边界|状态为|公众号案例草稿|created:|updated:|tags:|sources:)/i.test(normalized);
+  return !normalized
+    || /^(?:>|＞|&gt;)$/.test(normalized)
+    || /^(素材类型|目标受众|关联资产|发布边界|状态为|公众号案例草稿|created:|updated:|tags:|sources:)/i.test(normalized);
 }

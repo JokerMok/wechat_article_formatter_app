@@ -10,6 +10,7 @@ import type {
   PagePlanKind,
   SemanticSectionRole,
   SemanticUnit,
+  SemanticArticle,
   SourceFact,
 } from "./types";
 
@@ -104,6 +105,18 @@ export function analyzeSemanticBlueprint(
   };
 }
 
+/**
+ * Named semantic stage for the SourceDocument -> SemanticArticle pipeline.
+ * The implementation stays deterministic here; hosted/custom AI analyzers
+ * return the same contract and are validated before they enter planning.
+ */
+export function analyzeSourceDocument(
+  source: UnifiedArticleContent,
+  options: LocalSemanticAnalysisOptions,
+): SemanticArticle {
+  return analyzeSemanticBlueprint(source, options);
+}
+
 export function validateSemanticBlueprint(value: ContentBlueprint, source: UnifiedArticleContent) {
   const validBlockIds = new Set(source.blocks.map((block) => block.id));
   const sourceBlocks = new Map(source.blocks.map((block) => [block.id, block]));
@@ -152,7 +165,10 @@ export function migrateSemanticBlueprintSections(value: ContentBlueprint, source
     ...value,
     sections: value.sections.map((section) => {
       if (section.displayHeading?.provenance === "expressionOptimization") {
-        return { ...section, title: section.displayHeading.text, titleProvenance: undefined };
+        // An optimized heading is optional public copy, never the legacy
+        // semantic-role label. Keep it only when it is a deliberate display
+        // heading; old generic labels are discarded during migration.
+        return { ...section, title: "", titleProvenance: undefined };
       }
       const sourceHeading = section.displayHeading?.provenance === "source"
         ? section.displayHeading.text
@@ -187,17 +203,60 @@ function toSemanticBlocks(content: UnifiedArticleContent): SemanticBlock[] {
 
 function signalSet(text: string, blockType: UnifiedArticleBlock["type"]): Set<SemanticSignal> {
   const signals = new Set<SemanticSignal>();
-  if (blockType === "quote" || blockType === "golden" || blockType === "summary") signals.add("conclusion");
-  if (hasNumberOrDate(text) && !hasPersonalVoice(text) && !hasAdviceVoice(text)) signals.add("fact");
+  if (isObjectiveFact(text) && blockType !== "list") signals.add("fact");
   if (hasJudgmentCue(text)) signals.add("opinion");
-  if (/一开始|起初|后来|随后|第一次|当时|直到|回头看|这几个月|一天|一年后|最终/u.test(text) || hasPersonalVoice(text) && /做过|经历|接手|遇到|发现/u.test(text)) signals.add("example");
-  if (/一开始|起初|后来|随后|第一次|当时|直到|回头看|这几个月|一天|一年后|最终/u.test(text) && hasPersonalVoice(text)) signals.add("narrative");
-  if (/步骤|方法|流程|可以通过|建议|需要把|按照|检查|整理|拆成|建立|先(?:把|做|选|从|补|搭|接|完成|解决|确定)|再(?:把|做|补|看|接|考虑|进入)|然后(?:把|做|补|看|接|再)/u.test(text) || blockType === "list") signals.add("method");
-  if (/结果|最终|完成|上线|落地|实现|带来|形成|开始讨论|得到/u.test(text)) signals.add("result");
-  if (/不能|不要|不等于|不代表|无法|仅限|只(?:能|是)|前提|边界|(?:明确|收缩|限定|适用|超出).*范围|范围(?:内|外|限制)/u.test(text)) signals.add("boundary");
-  if (/但|但是|然而|不过|不是.+而是|有人认为|反而|却/u.test(text)) signals.add("counter");
-  if (/因此|所以|最后|总结|归根到底|这意味着|核心判断/u.test(text)) signals.add("conclusion");
+  if (isExperience(text)) signals.add("example");
+  if (isNarrative(text)) signals.add("narrative");
+  if (isMethod(text, blockType)) signals.add("method");
+  if (isResult(text)) signals.add("result");
+  if (isBoundary(text)) signals.add("boundary");
+  if (isCounterArgument(text)) signals.add("counter");
+  if (isConclusion(text, blockType)) signals.add("conclusion");
   return signals;
+}
+
+function isObjectiveFact(text: string) {
+  if (hasPersonalVoice(text) || hasAdviceVoice(text)) return false;
+  const hasMeasurement = /\d+(?:\.\d+)?\s*(?:%|％|倍|万|亿|元|人|次|项|条|类|月|年|天)/u.test(text);
+  const hasDate = /20\d{2}年(?:\d{1,2}月)?(?:\d{1,2}日)?/u.test(text);
+  const hasObjectiveEvent = /数据显示|数据表明|报告|调查|统计|样本|完成了|上线了|发布了|交付了|记录了|包含|达到|增长|下降/u.test(text);
+  return (hasMeasurement || hasDate) && (hasObjectiveEvent || /(?:为|有|共|达到)\s*\d/u.test(text));
+}
+
+function isExperience(text: string) {
+  return hasPersonalVoice(text) && /我(?:们)?(?:先|后来|曾经|开始|发现|意识到|接手|遇到|做过|经历|看到|接受|调整)|我们(?:在|把|没有|先)/u.test(text);
+}
+
+function isNarrative(text: string) {
+  return isExperience(text) && /一开始|起初|后来|随后|第一次|当时|直到|回头看|这几个月|一天|一年后|最终/u.test(text);
+}
+
+function isMethod(text: string, blockType: UnifiedArticleBlock["type"]) {
+  if (blockType === "list") return true;
+  const normalized = text.trim();
+  const startsWithAction = /^(?:先|再|然后|可以|建议|需要(?:把|将)|按照|按步骤|如何)/u.test(normalized);
+  const orderedAction = /(?:先|再|然后)(?:把|做|选|从|补|搭|接|完成|解决|确定|逐步)/u.test(normalized);
+  const containsAction = /(?:步骤|方法|流程|可以通过|建议|整理成|拆成|建立|配置|执行|补齐|交付|操作|检查(?:标题|来源|权限|内容|是否|清单|流程|项)|核对(?:标题|来源|权限|内容|是否|清单|流程|项))/u.test(normalized);
+  return startsWithAction || orderedAction || containsAction;
+}
+
+function isResult(text: string) {
+  return !hasAdviceVoice(text) && /结果|最终|完成|上线|落地|实现|带来|形成|开始讨论|得到|验证成功|交付/u.test(text);
+}
+
+function isBoundary(text: string) {
+  // Process safeguards such as "不能因为篇幅增加就丢失内容" describe the
+  // work being tested, not a limitation of the article's subject.
+  if (/(?:不能|不要)因为.{0,24}(?:就|而)/u.test(text)) return false;
+  return /不等于|不代表|(?:无法|不能)(?:完全)?(?:处理|支持|覆盖|替代)|仅限|只(?:能|是)(?:在|用于|说明)|前提|边界|全量|生产级|复杂业务判断|不可外推|(?:明确|收缩|限定|适用|超出).*范围|范围(?:内|外|限制)/u.test(text);
+}
+
+function isCounterArgument(text: string) {
+  return /(?:但|但是|然而|不过|反而|却)|不是.{1,28}而是|并不是.{1,28}而是/u.test(text);
+}
+
+function isConclusion(text: string, blockType: UnifiedArticleBlock["type"]) {
+  return blockType === "summary" || /因此|所以|最后|总结|归根到底|这意味着|核心判断|最大的体会|最终来看/u.test(text);
 }
 
 function hasJudgmentCue(text: string) {
@@ -254,40 +313,34 @@ function classifyUnits(blocks: SemanticBlock[]) {
     if (item.signals.has("counter")) result.counterArguments.push(unit);
     if (item.signals.has("opinion")) result.opinions.push(unit);
 
-    if (item.kind === "quote" || item.signals.has("conclusion") || item.text.length <= 90 && (item.signals.has("opinion") || item.signals.has("result"))) {
-      result.goldenSentences.push(unit);
-    }
+    if (isGoldenCandidate(item)) result.goldenSentences.push(unit);
   });
+  result.goldenSentences = result.goldenSentences
+    .sort((left, right) => goldenScore(right.text) - goldenScore(left.text))
+    .slice(0, 3)
+    .sort((left, right) => Number(left.id.split("-").at(-1)) - Number(right.id.split("-").at(-1)));
   return result;
+}
+
+function isGoldenCandidate(item: SemanticBlock) {
+  if (item.kind === "quote") return true;
+  if (item.text.length > 90) return false;
+  return item.signals.has("counter")
+    || item.signals.has("conclusion") && item.signals.has("opinion")
+    || item.signals.has("opinion") && /本质|关键|最怕|真正|取决于/u.test(item.text);
+}
+
+function goldenScore(text: string) {
+  return (/(不是|而是|本质|关键|最怕|真正|取决于)/u.test(text) ? 4 : 0)
+    + (text.length >= 18 && text.length <= 72 ? 2 : 0)
+    + (/[。！？]$/u.test(text) ? 1 : 0);
 }
 
 function buildSemanticSections(blocks: SemanticBlock[], contentType: ContentType): ContentSection[] {
   if (!blocks.length) return [emptySection("section-1", "开场", "hook")];
-  const groups: SemanticBlock[][] = [];
   const hasExplicitHeading = blocks.some((item) => item.kind === "heading");
-  let current: SemanticBlock[] = [];
-  for (const item of blocks) {
-    const startsNew = item.kind === "heading" && current.length > 0;
-    // Explicit headings are the author's semantic boundaries. Signal-based grouping
-    // is only needed for plain prose, otherwise one paragraph can become its own page.
-    const currentSignal = current.map((entry) => dominantSignal(entry.signals)).find(Boolean);
-    const itemSignal = dominantSignal(item.signals);
-    const signalStartsNew = !hasExplicitHeading
-      && item.kind !== "heading"
-      && shouldStartHeadingFreeGroup(current, item, currentSignal, itemSignal);
-    if (startsNew || signalStartsNew) {
-      groups.push(current);
-      current = [];
-    }
-    current.push(item);
-  }
-  if (current.length) groups.push(current);
-
-  // A heading-free article often has one sentence carrying a transition cue.
-  // Keep those cues available for role inference, but do not let every cue
-  // become a chapter. Merging the shortest neighboring groups preserves order
-  // and source traceability while producing a usable editorial outline.
-  const normalizedGroups = hasExplicitHeading ? groups : coalesceHeadingFreeGroups(groups, 8);
+  const groups = hasExplicitHeading ? groupByExplicitHeadings(blocks) : groupHeadingFreeProse(blocks);
+  const normalizedGroups = coalesceHeadingFreeGroups(groups, 8);
 
   return normalizedGroups.map((group, index) => {
     const heading = group.find((item) => item.kind === "heading");
@@ -318,21 +371,73 @@ function buildSemanticSections(blocks: SemanticBlock[], contentType: ContentType
   });
 }
 
-function shouldStartHeadingFreeGroup(
-  current: SemanticBlock[],
-  item: SemanticBlock,
-  currentSignal: SemanticSignal | undefined,
-  itemSignal: SemanticSignal | undefined,
-) {
-  if (!current.length || !currentSignal || !itemSignal || currentSignal === itemSignal) return false;
+function groupByExplicitHeadings(blocks: SemanticBlock[]) {
+  const groups: SemanticBlock[][] = [];
+  let current: SemanticBlock[] = [];
+  for (const item of blocks) {
+    if (item.kind === "heading" && current.length) {
+      groups.push(current);
+      current = [];
+    }
+    current.push(item);
+  }
+  if (current.length) groups.push(current);
+  return groups;
+}
 
-  const currentTextLength = current.reduce((total, entry) => total + entry.text.length, 0);
-  const hardBoundarySignals = new Set<SemanticSignal>(["method", "result", "boundary", "conclusion"]);
-  const narrativeShift = currentSignal === "example" && (itemSignal === "counter" || hardBoundarySignals.has(itemSignal));
-  const reasoningShift = currentSignal === "counter" && hardBoundarySignals.has(itemSignal);
-  const methodShift = currentSignal === "method" && (itemSignal === "result" || itemSignal === "boundary" || itemSignal === "conclusion");
-  if (narrativeShift || reasoningShift || methodShift) return currentTextLength >= 12;
-  return hardBoundarySignals.has(itemSignal) && currentTextLength >= 60;
+function groupHeadingFreeProse(blocks: SemanticBlock[]) {
+  const groups: SemanticBlock[][] = [];
+  let current: SemanticBlock[] = [];
+  let currentPhase: SemanticPhase | undefined;
+
+  for (const [index, item] of blocks.entries()) {
+    const phase = phaseForBlock(item, index, blocks.length);
+    if (current.length && shouldStartHeadingFreeGroup(current, currentPhase, phase)) {
+      groups.push(current);
+      current = [];
+    }
+    current.push(item);
+    currentPhase = currentPhase === "context" && phase !== "context" ? phase : currentPhase ?? phase;
+  }
+  if (current.length) groups.push(current);
+
+  // Plain prose has no authored chapter boundary. When all paragraphs belong to
+  // one phase, make a few reading groups from paragraph boundaries so the next
+  // platform stage can add density without inventing headings.
+  if (groups.length === 1 && blocks.length >= 4) {
+    return splitHeadingFreeGroup(groups[0], blocks.length >= 10 ? 3 : 4);
+  }
+  return groups;
+}
+
+type SemanticPhase = "context" | "conflict" | "argument" | "evidence" | "example" | "method" | "result" | "boundary" | "conclusion";
+
+function phaseForBlock(item: SemanticBlock, index: number, total: number): SemanticPhase {
+  const signals = item.signals;
+  if (signals.has("boundary")) return "boundary";
+  if (signals.has("method")) return "method";
+  if (signals.has("result")) return "result";
+  if (signals.has("counter")) return "conflict";
+  if (signals.has("example")) return "example";
+  if (signals.has("fact")) return "evidence";
+  if (signals.has("conclusion")) return index === total - 1 ? "conclusion" : "argument";
+  if (signals.has("opinion")) return "argument";
+  return index === 0 ? "context" : "argument";
+}
+
+function shouldStartHeadingFreeGroup(current: SemanticBlock[], currentPhase: SemanticPhase | undefined, itemPhase: SemanticPhase) {
+  if (!current.length || !currentPhase || currentPhase === itemPhase) return false;
+  const strongPhase = new Set<SemanticPhase>(["conflict", "method", "result", "boundary", "conclusion"]);
+  if (strongPhase.has(itemPhase)) return current.length >= 1;
+  return current.length >= 2 && strongPhase.has(currentPhase);
+}
+
+function splitHeadingFreeGroup(group: SemanticBlock[], targetSize: number) {
+  const result: SemanticBlock[][] = [];
+  for (let index = 0; index < group.length; index += targetSize) {
+    result.push(group.slice(index, index + targetSize));
+  }
+  return result;
 }
 
 function coalesceHeadingFreeGroups(groups: SemanticBlock[][], maxGroups: number) {
@@ -360,7 +465,7 @@ function coalesceHeadingFreeGroups(groups: SemanticBlock[][], maxGroups: number)
 }
 
 function dominantSignal(signals: Set<SemanticSignal>) {
-  for (const signal of ["boundary", "method", "result", "example", "counter", "conclusion"] as const) {
+  for (const signal of ["boundary", "method", "result", "counter", "example", "fact", "opinion", "conclusion"] as const) {
     if (signals.has(signal)) return signal;
   }
   return undefined;
@@ -369,7 +474,7 @@ function dominantSignal(signals: Set<SemanticSignal>) {
 function inferSectionRole(group: SemanticBlock[], index: number, total: number, contentType: ContentType): SemanticSectionRole {
   const signals = new Set(group.flatMap((item) => [...item.signals]));
   const heading = group.find((item) => item.kind === "heading")?.text || "";
-  if (index === total - 1 && !heading && signals.has("conclusion")) return "conclusion";
+  if (index === total - 1 && !heading && signals.has("conclusion") && !signals.has("boundary")) return "conclusion";
   // Introductory prose before the first explicit heading establishes context.
   // Method cues such as "先整理" should not turn that lead-in into a step page.
   if (index === 0 && !heading) {
@@ -387,8 +492,8 @@ function inferSectionRole(group: SemanticBlock[], index: number, total: number, 
   }
   if (index === 0 && (signals.has("opinion") || signals.has("counter"))) return "hook";
   if (signals.has("counter")) return contentType === "storyNarrative" || contentType === "caseReview" ? "conflict" : "counterArgument";
-  if (/边界|限制|范围|不能|不要/u.test(heading) || signals.has("boundary") && !signals.has("method")) return "boundary";
-  if (/步骤|方法|流程|怎么|推进|检查|行动|做法/u.test(heading) || signals.has("method") && !signals.has("boundary")) return "method";
+  if (/边界|限制|范围|不能|不要/u.test(heading) || signals.has("boundary")) return "boundary";
+  if (/步骤|方法|流程|怎么|推进|检查|行动|做法/u.test(heading) || signals.has("method")) return "method";
   if (signals.has("result")) return "result";
   if (signals.has("example")) return contentType === "storyNarrative" || contentType === "caseReview" ? "example" : "evidence";
   if (signals.has("fact")) return "evidence";
@@ -423,7 +528,12 @@ function legacyPurposeFor(role: SemanticSectionRole): ContentSectionPurpose {
 
 function deriveCentralThesis(units: ReturnType<typeof classifyUnits>, sections: ContentSection[], title?: string) {
   return cleanLine(
-    units.goldenSentences.at(-1)?.text || units.opinions.at(-1)?.text || sections.find((section) => section.role === "argument")?.keyMessage || title || "文章中心观点待确认",
+    units.opinions.findLast((unit) => /不是|而是|本质|关键|意味着|取决于/u.test(unit.text))?.text
+      || units.counterArguments.at(-1)?.text
+      || units.opinions.at(-1)?.text
+      || sections.find((section) => section.role === "argument")?.keyMessage
+      || title
+      || "文章中心观点待确认",
     500,
   );
 }

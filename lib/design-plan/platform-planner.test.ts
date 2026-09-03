@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseArticleContent } from "../article-parser";
+import { parseArticleContent, parseSourceDocument } from "../article-parser";
 import { CONTENT_LAYOUTS, DESIGN_SCHEME_IDS, getContentLayout, getDesignScheme, VISUAL_THEMES } from "../design-schemes";
 import { analyzeArticleDesign } from "./local-analyzer";
 import { buildPlatformDesignPlans } from "./platform-planner";
@@ -97,6 +97,33 @@ describe("platform design planner", () => {
     expect(xhs.pages.flatMap((page) => page.blocks).every((block) => block.provenance === "source" || block.provenance === "structuralSummary")).toBe(true);
   });
 
+  it("maps each selected content skeleton to distinct carousel page roles", () => {
+    const article = parseArticleContent(FULL_SEMANTIC_ARTICLE, { mode: "narrative" });
+    const story = analyzeArticleDesign(article, { recommendedScheme: "storyNarrative" });
+    const checklist = analyzeArticleDesign(article, { recommendedScheme: "checklistGuide" });
+    const dataArticle = parseArticleContent(`# 数据复盘
+
+报告显示，样本中的使用比例达到42%，项目在3个月内完成4项改造。
+
+## 结果对比
+
+相比只做演示，双线推进能更早暴露基础缺口。
+
+## 边界
+
+这些数字只说明当前项目范围，不能外推为行业结论。`, { mode: "knowledge" });
+    const data = analyzeArticleDesign(dataArticle, { recommendedScheme: "dataInsight" });
+
+    const storyKinds = story.platformPlans.xiaohongshu.pages.map((page) => page.kind);
+    const checklistKinds = checklist.platformPlans.xiaohongshu.pages.map((page) => page.kind);
+    const dataKinds = data.platformPlans.xiaohongshu.pages.map((page) => page.kind);
+
+    expect(storyKinds).toEqual(expect.arrayContaining(["conflict", "transition", "epilogue"]));
+    expect(checklistKinds).toEqual(expect.arrayContaining(["checklist", "step", "callToAction"]));
+    expect(dataKinds).toEqual(expect.arrayContaining(["keyMetric", "boundary"]));
+    expect(new Set(storyKinds)).not.toEqual(new Set(checklistKinds));
+  });
+
   it("uses semantic chapters for the enterprise AI article instead of mechanically filling cards", () => {
     const article = parseArticleContent(FULL_SEMANTIC_ARTICLE, { mode: "narrative" });
     const plan = analyzeArticleDesign(article);
@@ -125,6 +152,20 @@ describe("platform design planner", () => {
     expect(plan.platformPlans.douyinImage.pages.length).toBeGreaterThan(baseline.platformPlans.douyinImage.pages.length);
     expect(plan.blueprint.sourceFacts.map((fact) => fact.text).join("")).toBe(sourceSnapshot);
     expect(plan.platformPlans.xiaohongshu.pages.every((page) => page.blocks.length > 0)).toBe(true);
+  });
+
+  it("does not turn pagination test prose into boundary or golden cards", () => {
+    const body = Array.from({ length: 18 }, (_, index) =>
+      `第 ${index + 1} 段：内容排版系统需要在真实容量内分页，不能因为段落多就丢掉后半部分。这里保留不同长度的句子，用来检查重排、页码和导出顺序。`,
+    ).join("\n\n");
+    const article = parseSourceDocument(`# 岗位 AI 提效复盘\n\n这是一篇用于分页压力测试的长文。\n\n${body}\n\n总结：长文验收的重点不是页数少，而是每一页都没有裁切和顺序错乱。`, { mode: "knowledge" });
+    const plan = analyzeArticleDesign(article);
+    const boundarySections = plan.blueprint.sections.filter((section) => section.role === "boundary");
+    const xiaohongshuBlocks = plan.platformPlans.xiaohongshu.pages.flatMap((page) => page.blocks);
+
+    expect(boundarySections.length).toBeLessThan(3);
+    expect(plan.platformPlans.xiaohongshu.pages.length).toBeLessThanOrEqual(10);
+    expect(xiaohongshuBlocks.filter((block) => block.role === "focus").length).toBeLessThan(4);
   });
 
   it("uses metric, interpretation and boundary pages for grounded data content", () => {

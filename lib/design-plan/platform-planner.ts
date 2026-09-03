@@ -102,7 +102,9 @@ export function buildXiaohongshuPlan(input: PlatformPlannerInput): PlatformDesig
   const sections = sectionsForPlanner(source, blueprint, units, editorialPlan);
   const pages: PagePlan[] = [createPage("xiaohongshu", 0, "cover", createCoverBlocks(source, blueprint, "xiaohongshu", true, layout.id, editorialPlan))];
   const claimedUnitIds = new Set<string>();
-  const budget = Math.min(110, Math.max(72, layout.paginationRules.cardCharacterBudget.xiaohongshu));
+  // The layout catalog owns the readable capacity for each theme. A smaller
+  // global cap turns ordinary paragraphs into one-card-per-sentence output.
+  const budget = Math.max(180, layout.paginationRules.cardCharacterBudget.xiaohongshu);
 
   for (const [sectionIndex, section] of sections.entries()) {
     const editorialSection = editorialPlan?.sections.find((candidate) => candidate.id === section.id);
@@ -112,7 +114,7 @@ export function buildXiaohongshuPlan(input: PlatformPlannerInput): PlatformDesig
     const seeds = packSectionUnits(
       sectionUnits,
       budget,
-      2,
+      layout.paginationRules.cardMaxUnits.xiaohongshu,
       layout.paginationRules.shortPageThreshold,
       true,
     );
@@ -148,15 +150,21 @@ export function buildDouyinImagePlan(input: PlatformPlannerInput): PlatformDesig
     const sectionUnits = (editorialSection ? editorialUnitsForCardSection(section, editorialSection, editorialPlan!, source) : unitsForSection(section, units))
       .filter((unit) => isAvailableUnit(unit, claimedUnitIds));
     markClaimedUnits(sectionUnits, claimedUnitIds);
-    const seeds = packSectionUnits(sectionUnits, budget, 2, layout.paginationRules.shortPageThreshold, true);
+    const seeds = packSectionUnits(
+      sectionUnits,
+      budget,
+      layout.paginationRules.cardMaxUnits.douyinImage,
+      layout.paginationRules.shortPageThreshold,
+      true,
+    );
     const sectionHeader = sectionTitleBlock("douyinImage", section, source);
     if (!seeds.length) {
-      if (sectionHeader) pages.push(createPage("douyinImage", pages.length, douyinImagePageKind(section, sectionIndex, sections.length), [sectionHeader]));
+      if (sectionHeader) pages.push(createPage("douyinImage", pages.length, douyinImagePageKind(section, sectionIndex, sections.length, layout.id), [sectionHeader]));
       continue;
     }
     seeds.forEach((seed, pageIndex) => {
       const blocks = pageIndex === 0 && sectionHeader ? [sectionHeader, ...seed.units] : seed.units;
-      pages.push(createPage("douyinImage", pages.length, douyinImagePageKind(section, sectionIndex, sections.length), blocks));
+      pages.push(createPage("douyinImage", pages.length, douyinImagePageKind(section, sectionIndex, sections.length, layout.id), blocks));
     });
   }
 
@@ -181,7 +189,13 @@ export function buildDouyinLongformPlan(input: PlatformPlannerInput): PlatformDe
     const sectionUnits = (editorialSection ? editorialUnitsForSection(editorialSection, source) : unitsForSection(section, units))
       .filter((unit) => isAvailableUnit(unit, claimedUnitIds));
     markClaimedUnits(sectionUnits, claimedUnitIds);
-    const seeds = packSectionUnits(sectionUnits, budget, 4, layout.paginationRules.shortPageThreshold, true);
+    const seeds = packSectionUnits(
+      sectionUnits,
+      budget,
+      Math.max(3, layout.blockRules.find((rule) => rule.role === "argument")?.maxBlocks ?? 4),
+      layout.paginationRules.shortPageThreshold,
+      true,
+    );
     const sectionHeader = sectionTitleBlock("douyinLongform", section, source);
     if (!seeds.length) {
       if (sectionHeader) pages.push(createPage("douyinLongform", pages.length, douyinLongformPageKind(section, sectionIndex), [sectionHeader]));
@@ -238,7 +252,7 @@ function publishCopyFor(units: SourceUnit[], editorialPlan?: EditorialPlan) {
 }
 
 function markClaimedUnits(units: SourceUnit[], claimedUnitIds: Set<string>) {
-  units.filter((unit) => unit.usage === "body").forEach((unit) => claimedUnitIds.add(unit.unitId));
+  units.filter((unit) => unit.usage === "body").forEach((unit) => claimedUnitIds.add(sourceUnitClaimKey(unit)));
 }
 
 function wechatPageKind(section: ContentSection, sectionIndex: number): PagePlanKind {
@@ -282,7 +296,27 @@ function xiaohongshuPageKind(section: ContentSection, sectionIndex: number, sect
   return "argument";
 }
 
-function douyinImagePageKind(section: ContentSection, sectionIndex: number, sectionCount: number): PagePlanKind {
+function douyinImagePageKind(section: ContentSection, sectionIndex: number, sectionCount: number, layoutId: ContentLayoutId): PagePlanKind {
+  if (layoutId === "story") {
+    if (sectionIndex === 0) return "intro";
+    if (sectionIndex === sectionCount - 1) return "epilogue";
+    if (["problem", "conflict", "counterArgument"].includes(section.role)) return "conflict";
+    if (sectionIndex === sectionCount - 2) return "transition";
+    return section.role === "example" ? "chapter" : "turning";
+  }
+  if (layoutId === "checklist") {
+    if (sectionIndex === sectionCount - 1) return "callToAction";
+    if (section.role === "boundary") return "warning";
+    if (section.role === "method") return "action";
+    if (section.role === "conclusion") return "summary";
+    return sectionIndex === 0 ? "intro" : "checklist";
+  }
+  if (layoutId === "data") {
+    if (section.role === "boundary") return "boundary";
+    if (section.role === "evidence" || section.role === "result") return "keyMetric";
+    if (section.displayHeading?.text && /对比|相比|同比|环比|高于|低于/u.test(section.displayHeading.text)) return "comparison";
+    return "interpretation";
+  }
   if (sectionIndex === 0 || section.role === "hook" || section.role === "background") return "intro";
   if (section.role === "evidence") return "keyMetric";
   if (section.role === "method") return "action";
@@ -341,11 +375,12 @@ function editorialUnitsForCardSection(
     return editorialUnitsForSection(primarySection, source);
   }
 
-  const seenUnitIds = new Set<string>();
+  const seenUnitKeys = new Set<string>();
   return matchingSections.flatMap((candidate) => editorialUnitsForSection(candidate, source)).filter((unit) => {
     const matchesSection = unit.sourceBlockIds.some((id) => sectionSourceIds.has(id));
-    const isNewUnit = !seenUnitIds.has(unit.unitId);
-    seenUnitIds.add(unit.unitId);
+    const unitKey = sourceUnitClaimKey(unit);
+    const isNewUnit = !seenUnitKeys.has(unitKey);
+    seenUnitKeys.add(unitKey);
     return matchesSection && isNewUnit;
   });
 }
@@ -391,8 +426,7 @@ export function calculateContentIntegrity(source: UnifiedArticleContent, pages: 
   const missingSourceBlockIds = [...requiredSourceBlockIds].filter((id) => !coveredSourceBlockIds.has(id));
   const bodyOccurrences = new Map<string, number>();
   for (const block of bodyBlocks) {
-    const baseUnitId = (block.unitId ?? block.id).replace(/:part:\d+$/u, "");
-    const key = `${baseUnitId}\u0000${normalizeMeaning(block.text)}`;
+    const key = `${[...block.sourceBlockIds].sort().join("+")}\u0000${normalizeMeaning(block.text)}`;
     bodyOccurrences.set(key, (bodyOccurrences.get(key) ?? 0) + 1);
   }
   const duplicatedBodyUnitIds = [...bodyOccurrences.entries()]
@@ -445,7 +479,11 @@ function unitsForSection(section: ContentSection, units: SourceUnit[]) {
 }
 
 function isAvailableUnit(unit: SourceUnit, claimedUnitIds: Set<string>) {
-  return unit.usage !== "body" || !claimedUnitIds.has(unit.unitId);
+  return unit.usage !== "body" || !claimedUnitIds.has(sourceUnitClaimKey(unit));
+}
+
+function sourceUnitClaimKey(unit: SourceUnit) {
+  return `${[...unit.sourceBlockIds].sort().join("+")}\u0000${normalizeMeaning(unit.text)}`;
 }
 
 function sectionTitleBlock(platform: PlatformId, section: ContentSection, source: UnifiedArticleContent): PlannedContentBlock | undefined {

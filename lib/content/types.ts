@@ -14,6 +14,13 @@ export type SourcePosition = {
   sourceText: string;
 };
 
+export type SourceSegment = {
+  id: string;
+  blockId: string;
+  text: string;
+  sourceRange: SourcePosition;
+};
+
 type UnifiedBlockBase<TType extends UnifiedContentBlockType> = {
   id: string;
   type: TType;
@@ -75,9 +82,22 @@ export type UnifiedArticleContent = {
   sourceText: string;
   sourceFormat: ArticleSourceFormat;
   parseMode: ArticleParseMode;
+  /** Stable fingerprint of the exact source text when available. */
+  sourceRevision?: string;
+  /** Sentence-level source anchors used by semantic analysis and trace views. */
+  segments?: SourceSegment[];
   title?: string;
   blocks: UnifiedArticleBlock[];
   warnings: ContentWarning[];
+};
+
+/**
+ * Syntax-only source contract. Semantic roles and platform copy are deliberately
+ * absent so later stages cannot mistake parser classifications for meaning.
+ */
+export type SourceDocument = UnifiedArticleContent & {
+  sourceRevision: string;
+  segments: SourceSegment[];
 };
 
 export type ArticleContentParseOptions = {

@@ -5,6 +5,8 @@ export type {
   ContentWarning,
   ContentWarningCode,
   SourcePosition,
+  SourceSegment,
+  SourceDocument,
   StructuralContentBlockType,
   UnifiedArticleBlock,
   UnifiedArticleContent,
@@ -15,4 +17,4 @@ export type {
   UnifiedTextBlock,
 } from "./types";
 
-export { sourcePositionSchema, unifiedArticleBlockSchema, unifiedArticleContentSchema } from "./schemas";
+export { sourcePositionSchema, sourceSegmentSchema, unifiedArticleBlockSchema, unifiedArticleContentSchema } from "./schemas";

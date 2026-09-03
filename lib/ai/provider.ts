@@ -67,6 +67,61 @@ const generatedEditorialResponseSchema = z.strictObject({
 
 const generatedResponseSchema = z.union([generatedEditorialResponseSchema, legacyGeneratedResponseSchema]);
 
+const semanticAnalysisRoleSchema = z.enum([
+  "hook",
+  "context",
+  "background",
+  "problem",
+  "conflict",
+  "argument",
+  "reason",
+  "evidence",
+  "fact",
+  "case",
+  "example",
+  "comparison",
+  "steps",
+  "method",
+  "result",
+  "boundary",
+  "warning",
+  "conclusion",
+  "cta",
+]);
+
+const semanticAnalysisReferenceSchema = z.strictObject({
+  sourceSegmentIds: z.array(z.string().min(1).max(160)).max(64).optional(),
+  sourceBlockIds: z.array(z.string().min(1).max(160)).max(64).optional(),
+});
+
+/**
+ * The model-facing semantic contract is intentionally smaller than the
+ * internal ContentBlueprint. The model classifies and anchors source text;
+ * local code owns the complete blueprint, copy and page geometry.
+ */
+const semanticAnalysisResponseSchema = z.strictObject({
+  schemaVersion: z.literal(1).optional(),
+  documentType: z.string().min(1).max(80).optional(),
+  audience: z.string().min(1).max(160).optional(),
+  tone: z.enum(["理性", "叙事", "实用", "轻松"]).optional(),
+  thesis: z.string().min(1).max(500).optional(),
+  titleCandidates: z.array(z.string().min(1).max(120)).max(3).optional(),
+  sections: z.array(z.strictObject({
+    id: z.string().min(1).max(160),
+    role: semanticAnalysisRoleSchema,
+    title: z.string().min(1).max(160).optional(),
+    sourceSegmentIds: z.array(z.string().min(1).max(160)).max(64).optional(),
+    sourceBlockIds: z.array(z.string().min(1).max(160)).max(64).optional(),
+    confidence: z.number().min(0).max(1).optional(),
+    emphasis: z.boolean().optional(),
+    allowSplit: z.boolean().optional(),
+  })).max(32).optional(),
+  facts: z.array(semanticAnalysisReferenceSchema).max(64).optional(),
+  quoteCandidates: z.array(semanticAnalysisReferenceSchema).max(16).optional(),
+});
+
+type SemanticAnalysisResponse = z.infer<typeof semanticAnalysisResponseSchema>;
+
 const openAIChatCompletionSchema = z.object({
   id: z.string().optional(),
   model: z.string().optional(),
@@ -384,10 +439,21 @@ export class OpenAICompatibleProvider {
       if (!envelope.success) throw this.schemaError(["OpenAI-compatible response envelope is invalid."], responseDiagnostics);
       const parsedContent = parseAssistantJson(envelope.data.choices[0]?.message.content ?? "");
       if (!parsedContent.ok) throw this.schemaError(["Assistant semantic content is not valid JSON."], responseDiagnostics);
-      const parsedBlueprint = semanticBlueprintSchema.safeParse(parsedContent.value);
-      if (!parsedBlueprint.success) throw this.schemaError(compactZodIssues(parsedBlueprint.error), responseDiagnostics);
       const fallback = analyzeArticleDesign(options.source, { generationMode: options.generationMode }).blueprint;
-      const blueprint = mergeSemanticBlueprint(parsedBlueprint.data, fallback, options.source);
+      const parsedBlueprint = semanticBlueprintSchema.safeParse(parsedContent.value);
+      const blueprint = parsedBlueprint.success
+        ? mergeSemanticBlueprint(parsedBlueprint.data, fallback, options.source)
+        : buildBlueprintFromSemanticResponse(parsedContent.value, fallback, options.source, options.generationMode);
+      if (!blueprint) {
+        const minimalResponse = normalizeSemanticAnalysisResponse(parsedContent.value);
+        const blueprintIssues = parsedBlueprint.success ? [] : compactZodIssues(parsedBlueprint.error);
+        throw this.schemaError(
+          minimalResponse
+            ? ["Semantic analysis did not contain any source-anchored sections."]
+            : [...blueprintIssues, "Minimal semantic response is invalid."],
+          responseDiagnostics,
+        );
+      }
       const trace = validateSemanticBlueprint(blueprint, options.source);
       if (!trace.ok) {
         throw this.schemaError([
@@ -442,7 +508,7 @@ export class OpenAICompatibleProvider {
       messages: [
         {
           role: "system",
-          content: "只返回符合语义分析 Schema 的 JSON，不要返回 HTML、CSS、JavaScript 或解释文字。每个 facts、opinions、examples、methods、results、counterArguments、boundaries、goldenSentences 单元的 text 必须逐字来自对应源文块，sourceBlockIds 必须真实存在。不要把个人体验当事实，不要把作者判断当事实，不要补充源文没有的数据、人物、案例或结论。role、purpose、recommendedPageRole 和 title 仅是内部分析 metadata，不能直接写成文章标题。没有原文小标题时，title 置为空并省略 displayHeading；不要生成“先补背景”“真正的冲突”“最后总结”等导航套话。只有原文已有小标题才能使用 provenance=source 的 displayHeading；只有 reachOptimized 模式且确有表达优化时才使用 provenance=expressionOptimization。所有 displayHeading 都必须是自然、具体的对外文案。",
+          content: "只返回一个 JSON 对象，不要返回 HTML、CSS、JavaScript、完整 ContentBlueprint 或解释文字。JSON 只能包含 schemaVersion:1、documentType、audience、tone、thesis、titleCandidates、sections、facts、quoteCandidates。sections 是数组，每项包含 id、role、sourceSegmentIds，可选 title、confidence、emphasis、allowSplit；role 只能使用 hook、context、background、problem、conflict、argument、reason、evidence、fact、case、example、comparison、steps、method、result、boundary、warning、conclusion、cta。facts 和 quoteCandidates 只填写 sourceSegmentIds，不要填写改写后的 text。所有 sourceSegmentIds 必须来自源文 segments；不要把 sourceBlockIds 当成句段 ID。不要把个人体验当事实，不要把作者判断当事实，不要补充源文没有的数据、人物、政策、案例或结论。title 只是内部分析 metadata：没有原文小标题时置空；不要生成“先补背景”“真正的冲突”“最后总结”等导航套话。模型只负责语义角色和来源引用，完整蓝图、正文、平台页型和分页由本地程序生成。",
         },
         {
           role: "user",
@@ -497,6 +563,11 @@ function buildModelSource(source: UnifiedArticleContent) {
       type: block.type,
       text: block.text,
     })),
+    segments: (source.segments ?? []).map((segment) => ({
+      id: segment.id,
+      blockId: segment.blockId,
+      text: segment.text,
+    })),
   };
 }
 
@@ -511,7 +582,390 @@ function buildSemanticModelSource(source: UnifiedArticleContent) {
       type: block.type,
       text: block.text,
     })),
+    segments: (source.segments ?? []).map((segment) => ({
+      id: segment.id,
+      blockId: segment.blockId,
+      text: segment.text,
+    })),
   };
+}
+
+function normalizeSemanticAnalysisResponse(value: unknown): SemanticAnalysisResponse | undefined {
+  const direct = semanticAnalysisResponseSchema.safeParse(value);
+  if (direct.success && direct.data.sections?.length) {
+    return direct.data;
+  }
+
+  if (!isRecord(value)) return undefined;
+  const rawSections = Array.isArray(value.sections)
+    ? value.sections
+    : looksLikeLegacySemanticSection(value)
+      ? [value]
+      : [];
+  const sections = rawSections.flatMap((item, index) => {
+    if (!isRecord(item)) return [];
+    const role = semanticAnalysisRole(item.role ?? item.purpose ?? item.recommendedPageRole)
+      ?? (rawSections.length === 1 && rawSections[0] === value ? "argument" : undefined);
+    if (!role) return [];
+    const refs = referenceFromUnknown(item);
+    if (!refs.sourceSegmentIds?.length && !refs.sourceBlockIds?.length) return [];
+    const id = typeof item.id === "string" && item.id.trim() ? item.id.trim() : `model-section-${index + 1}`;
+    const title = safeSemanticText(
+      typeof item.title === "string" ? item.title : displayHeadingText(item.displayHeading),
+      160,
+    );
+    return [{
+      id,
+      role,
+      ...(title ? { title } : {}),
+      ...(refs.sourceSegmentIds?.length ? { sourceSegmentIds: refs.sourceSegmentIds } : {}),
+      ...(refs.sourceBlockIds?.length ? { sourceBlockIds: refs.sourceBlockIds } : {}),
+      ...(typeof item.confidence === "number" && Number.isFinite(item.confidence) ? { confidence: clamp01(item.confidence) } : {}),
+      ...(typeof item.emphasis === "boolean" ? { emphasis: item.emphasis } : {}),
+      ...(typeof item.allowSplit === "boolean" ? { allowSplit: item.allowSplit } : {}),
+    }];
+  });
+  if (!sections.length) return undefined;
+
+  const facts = referenceListFromUnknown(value.facts);
+  const quoteCandidates = referenceListFromUnknown(value.quoteCandidates ?? value.goldenSentences);
+  const candidate = {
+    schemaVersion: 1 as const,
+    ...(stringValue(value.documentType ?? value.primaryContentType ?? value.contentType) ? { documentType: stringValue(value.documentType ?? value.primaryContentType ?? value.contentType) } : {}),
+    ...(safeSemanticText(value.audience ?? value.targetAudience, 160) ? { audience: safeSemanticText(value.audience ?? value.targetAudience, 160) } : {}),
+    ...(toneValue(value.tone) ? { tone: toneValue(value.tone) } : {}),
+    ...(safeSemanticText(value.thesis ?? value.centralThesis ?? value.coreMessage, 500) ? { thesis: safeSemanticText(value.thesis ?? value.centralThesis ?? value.coreMessage, 500) } : {}),
+    ...(titleCandidatesFromUnknown(value.titleCandidates) ? { titleCandidates: titleCandidatesFromUnknown(value.titleCandidates) } : {}),
+    sections,
+    ...(facts.length ? { facts } : {}),
+    ...(quoteCandidates.length ? { quoteCandidates } : {}),
+  };
+  const parsed = semanticAnalysisResponseSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function looksLikeLegacySemanticSection(value: Record<string, unknown>) {
+  return Array.isArray(value.sourceBlockIds)
+    || Array.isArray(value.sourceSegmentIds)
+    || Array.isArray(value.facts) && (typeof value.role === "string" || typeof value.purpose === "string");
+}
+
+function referenceFromUnknown(value: Record<string, unknown>) {
+  const sourceSegmentIds = stringArray(value.sourceSegmentIds ?? value.segmentIds);
+  const sourceBlockIds = stringArray(value.sourceBlockIds ?? value.blockIds);
+  return {
+    ...(sourceSegmentIds.length ? { sourceSegmentIds } : {}),
+    ...(sourceBlockIds.length ? { sourceBlockIds } : {}),
+  };
+}
+
+function referenceListFromUnknown(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const reference = referenceFromUnknown(item);
+    return reference.sourceSegmentIds?.length || reference.sourceBlockIds?.length ? [reference] : [];
+  });
+}
+
+function semanticAnalysisRole(value: unknown): z.infer<typeof semanticAnalysisRoleSchema> | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  const aliases: Record<string, z.infer<typeof semanticAnalysisRoleSchema>> = {
+    lead: "hook",
+    opening: "hook",
+    intro: "context",
+    background: "background",
+    context: "context",
+    problem: "problem",
+    conflict: "conflict",
+    claim: "argument",
+    argument: "argument",
+    opinion: "argument",
+    reason: "reason",
+    evidence: "evidence",
+    fact: "fact",
+    example: "example",
+    case: "case",
+    comparison: "comparison",
+    steps: "steps",
+    step: "steps",
+    method: "method",
+    result: "result",
+    boundary: "boundary",
+    warning: "warning",
+    conclusion: "conclusion",
+    cta: "cta",
+    calltoaction: "cta",
+  };
+  return aliases[normalized] ?? aliases[normalized.replace(/[—_\s-]/gu, "")];
+}
+
+function sourceBlockIdsForReference(
+  reference: { sourceSegmentIds?: string[]; sourceBlockIds?: string[] },
+  source: UnifiedArticleContent,
+) {
+  const validBlockIds = new Set(source.blocks.map((block) => block.id));
+  const segmentMap = new Map((source.segments ?? []).map((segment) => [segment.id, segment]));
+  return uniqueStrings([
+    ...(reference.sourceBlockIds ?? []).filter((id) => validBlockIds.has(id)),
+    ...(reference.sourceSegmentIds ?? []).flatMap((id) => {
+      const segment = segmentMap.get(id);
+      return segment && validBlockIds.has(segment.blockId) ? [segment.blockId] : [];
+    }),
+  ]);
+}
+
+function sourceTextForReference(
+  reference: { sourceSegmentIds?: string[]; sourceBlockIds?: string[] },
+  source: UnifiedArticleContent,
+  fallbackUnits: ContentBlueprint["facts"],
+) {
+  const segmentMap = new Map((source.segments ?? []).map((segment) => [segment.id, segment]));
+  const segmentText = (reference.sourceSegmentIds ?? [])
+    .map((id) => segmentMap.get(id)?.text)
+    .filter((text): text is string => Boolean(text?.trim()))
+    .join(" ");
+  if (segmentText) return segmentText;
+  const blockIds = sourceBlockIdsForReference(reference, source);
+  return fallbackUnits.find((unit) => unit.sourceBlockIds.some((id) => blockIds.includes(id)))?.text ?? "";
+}
+
+function buildBlueprintFromSemanticResponse(
+  raw: unknown,
+  fallback: ContentBlueprint,
+  source: UnifiedArticleContent,
+  generationMode: GenerationMode,
+): ContentBlueprint | undefined {
+  const semantic = normalizeSemanticAnalysisResponse(raw);
+  if (!semantic?.sections?.length) return undefined;
+
+  const modelSections = semantic.sections.flatMap((section, index) => {
+    const sourceBlockIds = sourceBlockIdsForReference(section, source);
+    if (!sourceBlockIds.length) return [];
+    const base = fallback.sections
+      .filter((candidate) => candidate.sourceBlockIds.some((id) => sourceBlockIds.includes(id)))
+      .sort((left, right) => overlapCount(right.sourceBlockIds, sourceBlockIds) - overlapCount(left.sourceBlockIds, sourceBlockIds))[0];
+    const title = safeSemanticText(section.title, 160);
+    const sourceHeading = title && sourceBlockIds.some((id) => {
+      const block = source.blocks.find((candidate) => candidate.id === id);
+      return (block?.type === "section" || block?.type === "subsection") && cleanSemanticText(block.text) === cleanSemanticText(title);
+    });
+    const displayHeading = sourceHeading
+      ? { text: title, provenance: "source" as const, confidence: 1 }
+      : generationMode === "reachOptimized" && title && !isGenericStructureHeading(title)
+        ? { text: title, provenance: "expressionOptimization" as const, confidence: section.confidence ?? 0.7 }
+        : undefined;
+    const sourceText = sourceBlockIds
+      .map((id) => source.blocks.find((block) => block.id === id)?.plainText ?? "")
+      .filter(Boolean)
+      .join(" ");
+    const keyMessage = base?.keyMessage || firstSemanticSentence(sourceText) || title || fallback.centralThesis;
+    return {
+      id: section.id || `model-section-${index + 1}`,
+      title: displayHeading?.text ?? "",
+      role: semanticRoleToBlueprintRole(section.role),
+      summary: base?.summary || firstSemanticSentence(sourceText) || keyMessage,
+      sourceBlockIds,
+      keyMessage,
+      importance: section.confidence ?? base?.importance ?? 0.72,
+      canSplit: section.allowSplit ?? base?.canSplit ?? sourceText.length > 240,
+      recommendedPageRole: base?.recommendedPageRole || pageRoleForSemanticRole(section.role),
+      ...(sourceHeading ? { titleProvenance: "source" as const } : {}),
+      ...(displayHeading ? { displayHeading } : {}),
+      purpose: base?.purpose,
+    };
+  });
+  if (!modelSections.length) return undefined;
+
+  const claimedFallbackSections = new Set(
+    modelSections.flatMap((section) => fallback.sections
+      .filter((candidate) => candidate.sourceBlockIds.some((id) => section.sourceBlockIds.includes(id)))
+      .map((candidate) => candidate.id)),
+  );
+  const sections = [
+    ...modelSections,
+    ...fallback.sections.filter((section) => !claimedFallbackSections.has(section.id)),
+  ];
+  const facts = mergeSemanticUnits(
+    fallback.facts,
+    semantic.facts?.flatMap((reference, index) => semanticUnitFromReference(reference, source, fallback.facts, `ai-fact-${index + 1}`)) ?? [],
+  );
+  const goldenSentences = mergeSemanticUnits(
+    fallback.goldenSentences,
+    semantic.quoteCandidates?.flatMap((reference, index) => semanticUnitFromReference(reference, source, fallback.goldenSentences, `ai-quote-${index + 1}`)) ?? [],
+  ).slice(0, 16);
+  const centralThesis = safeSemanticText(semantic.thesis, 500) || fallback.centralThesis;
+  const primaryContentType = contentTypeFromModel(semantic.documentType) ?? fallback.primaryContentType;
+  const titleCandidates = generationMode === "reachOptimized"
+    ? safeModelTitleCandidates(semantic.titleCandidates, source, fallback.titleCandidates)
+    : fallback.titleCandidates;
+  const blueprint = {
+    ...fallback,
+    primaryContentType,
+    contentType: primaryContentType,
+    centralThesis,
+    coreMessage: centralThesis,
+    targetAudience: safeSemanticText(semantic.audience, 160) || fallback.targetAudience,
+    tone: semantic.tone ?? fallback.tone,
+    sections,
+    facts,
+    goldenSentences,
+    sourceFacts: facts.map((fact) => ({ id: fact.id, text: fact.text, sourceBlockIds: [...fact.sourceBlockIds] })),
+    titleCandidates,
+    modificationSummary: fallback.modificationSummary,
+  } satisfies ContentBlueprint;
+  return migrateSemanticBlueprintSections(blueprint, source);
+}
+
+function semanticUnitFromReference(
+  reference: { sourceSegmentIds?: string[]; sourceBlockIds?: string[] },
+  source: UnifiedArticleContent,
+  fallbackUnits: ContentBlueprint["facts"],
+  id: string,
+) {
+  const sourceBlockIds = sourceBlockIdsForReference(reference, source);
+  const text = sourceTextForReference(reference, source, fallbackUnits);
+  return text && sourceBlockIds.length
+    ? [{ id, text: cleanSemanticText(text).slice(0, 1000), sourceBlockIds, certainty: "uncertain" as const, confidence: 0.68 }]
+    : [];
+}
+
+function mergeSemanticUnits(base: ContentBlueprint["facts"], additions: ContentBlueprint["facts"]) {
+  const result = [...base];
+  const keys = new Set(result.map((unit) => cleanSemanticText(unit.text)));
+  for (const unit of additions) {
+    const key = cleanSemanticText(unit.text);
+    if (!key || keys.has(key)) continue;
+    keys.add(key);
+    result.push(unit);
+  }
+  return result;
+}
+
+function semanticRoleToBlueprintRole(role: z.infer<typeof semanticAnalysisRoleSchema>) {
+  const mapping: Record<z.infer<typeof semanticAnalysisRoleSchema>, ContentBlueprint["sections"][number]["role"]> = {
+    hook: "hook",
+    context: "background",
+    background: "background",
+    problem: "problem",
+    conflict: "conflict",
+    argument: "argument",
+    reason: "argument",
+    evidence: "evidence",
+    fact: "evidence",
+    case: "example",
+    example: "example",
+    comparison: "argument",
+    steps: "method",
+    method: "method",
+    result: "result",
+    boundary: "boundary",
+    warning: "boundary",
+    conclusion: "conclusion",
+    cta: "callToAction",
+  };
+  return mapping[role];
+}
+
+function pageRoleForSemanticRole(role: z.infer<typeof semanticAnalysisRoleSchema>): ContentBlueprint["sections"][number]["recommendedPageRole"] {
+  if (["hook", "context", "background"].includes(role)) return "intro";
+  if (["problem", "conflict"].includes(role)) return "conflict";
+  if (["evidence", "fact"].includes(role)) return "evidence";
+  if (["case", "example"].includes(role)) return "chapter";
+  if (["steps", "method"].includes(role)) return "step";
+  if (role === "result") return "summary";
+  if (["boundary", "warning"].includes(role)) return "boundary";
+  if (role === "conclusion") return "conclusion";
+  if (role === "cta") return "callToAction";
+  return "argument";
+}
+
+function contentTypeFromModel(value: string | undefined): ContentType | undefined {
+  if (!value) return undefined;
+  if (isContentType(value)) return value;
+  const aliases: Record<string, ContentType> = {
+    knowledge: "knowledgeTutorial",
+    tutorial: "knowledgeTutorial",
+    checklist: "checklistGuide",
+    guide: "checklistGuide",
+    opinion: "opinionAnalysis",
+    analysis: "opinionAnalysis",
+    data: "dataInsight",
+    case: "caseReview",
+    story: "storyNarrative",
+    narrative: "storyNarrative",
+    product: "productIntroduction",
+    experience: "experienceSharing",
+    知识教程: "knowledgeTutorial",
+    清单教程: "checklistGuide",
+    观点分析: "opinionAnalysis",
+    数据洞察: "dataInsight",
+    案例复盘: "caseReview",
+    故事叙事: "storyNarrative",
+    产品介绍: "productIntroduction",
+    经验分享: "experienceSharing",
+  };
+  return aliases[value.trim().toLowerCase()];
+}
+
+function safeModelTitleCandidates(value: string[] | undefined, source: UnifiedArticleContent, fallback: string[]) {
+  const candidates = (value ?? [])
+    .map((candidate) => safeSemanticText(candidate, 120))
+    .filter((candidate): candidate is string => Boolean(candidate))
+    .filter((candidate) => validateGeneratedFacts(candidate, source).ok)
+    .slice(0, 3);
+  return candidates.length ? candidates : fallback;
+}
+
+function titleCandidatesFromUnknown(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  const candidates = value.map((item) => safeSemanticText(item, 120)).filter((item): item is string => Boolean(item)).slice(0, 3);
+  return candidates.length ? candidates : undefined;
+}
+
+function displayHeadingText(value: unknown) {
+  if (typeof value === "string") return value;
+  return isRecord(value) && typeof value.text === "string" ? value.text : undefined;
+}
+
+function toneValue(value: unknown): ContentBlueprint["tone"] | undefined {
+  return value === "理性" || value === "叙事" || value === "实用" || value === "轻松" ? value : undefined;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function stringArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim()).slice(0, 64) : [];
+}
+
+function safeSemanticText(value: unknown, maxLength: number) {
+  if (typeof value !== "string" || containsPresentationSyntax(value)) return undefined;
+  const text = sanitizeGeneratedText(value).slice(0, maxLength).trim();
+  return text || undefined;
+}
+
+function cleanSemanticText(value: string) {
+  return sanitizeGeneratedText(value).replace(/\s+/gu, "").trim();
+}
+
+function firstSemanticSentence(value: string) {
+  return value.split(/(?<=[。！？；])/u).map((item) => item.trim()).find(Boolean) ?? value.trim();
+}
+
+function overlapCount(left: string[], right: string[]) {
+  const rightSet = new Set(right);
+  return left.filter((id) => rightSet.has(id)).length;
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values)];
+}
+
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
 }
 
 function mergeSemanticBlueprint(

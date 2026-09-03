@@ -102,7 +102,7 @@ import { createInitialProjectId, describeAssetUploadStatus, type AssetUploadFail
 import { DesignPlanDrawer, type SchemeApplyMode } from "./design-plan-drawer";
 import { RegenerationDialog } from "./regeneration-dialog";
 import { WorkspaceHeader, type WorkspaceFocusMode } from "./workspace-header";
-import type { AssetPlaceholder, DraftHistory, LayoutSettings, PlatformDraft, WorkspaceMode, WorkspacePersistedState } from "./types";
+import type { AiWorkspaceSettings, AssetPlaceholder, DraftHistory, LayoutSettings, PlatformDraft, WorkspaceMode, WorkspacePersistedState } from "./types";
 
 type ProjectListItem = {
   id: string;
@@ -111,6 +111,7 @@ type ProjectListItem = {
 };
 
 const measurer = createApproximateTextMeasurer();
+const SEMANTIC_ANALYZER_VERSION = "semantic-v1";
 
 function cardPresetForDraft(draft: Pick<PlatformDraft, "schemeId" | "themeId" | "layoutId">) {
   const scheme = DESIGN_SCHEMES[draft.schemeId];
@@ -122,6 +123,10 @@ function cardPresetForDraft(draft: Pick<PlatformDraft, "schemeId" | "themeId" | 
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function semanticAnalysisCacheKey(sourceRevision: string, generationMode: GenerationMode, mode: AiWorkspaceSettings["mode"], baseUrl: string, model: string) {
+  return [SEMANTIC_ANALYZER_VERSION, sourceRevision, generationMode, mode, baseUrl.trim(), model.trim()].join("|");
 }
 
 function remapAssetTokens(value: unknown, replacements: Map<string, string>): unknown {
@@ -303,6 +308,7 @@ export default function UnifiedWorkspace() {
   const revisionRef = React.useRef(0);
   const aiAbortRef = React.useRef<AbortController | undefined>(undefined);
   const analysisAbortRef = React.useRef<AbortController | undefined>(undefined);
+  const semanticAnalysisCacheRef = React.useRef(new Map<string, { designPlan: DesignPlan; engine: "本地基础分析" | "AI 智能分析" }>());
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const backupInputRef = React.useRef<HTMLInputElement>(null);
   const activeDraft = workspace.platforms[activePlatform];
@@ -890,6 +896,11 @@ export default function UnifiedWorkspace() {
     const article = parseSourceMarkdown(current.sourceMarkdown);
     const localState = updateWorkspaceSource(current, current.sourceMarkdown);
     const localPlan = localState.designPlan;
+    const remoteAnalysis = current.ai.mode !== "deterministic";
+    const cacheKey = remoteAnalysis
+      ? semanticAnalysisCacheKey(localState.sourceRevision, current.designPlan.generationMode, current.ai.mode, current.ai.baseUrl, current.ai.model)
+      : undefined;
+    const cachedAnalysis = cacheKey ? semanticAnalysisCacheRef.current.get(cacheKey) : undefined;
     const controller = new AbortController();
     analysisAbortRef.current?.abort();
     analysisAbortRef.current = controller;
@@ -898,10 +909,14 @@ export default function UnifiedWorkspace() {
     setStatusMessage(current.ai.mode === "deterministic" ? "正在进行本地基础分析" : "正在进行 AI 智能分析");
 
     let designPlan = localPlan;
-    let engineLabel = "本地基础分析";
+    let engineLabel: "本地基础分析" | "AI 智能分析" = "本地基础分析";
     let fallbackNotice = "";
     try {
-      if (current.ai.mode !== "deterministic") {
+      if (cachedAnalysis) {
+        designPlan = cachedAnalysis.designPlan;
+        engineLabel = cachedAnalysis.engine;
+        fallbackNotice = "；已复用相同源文版本的语义分析结果";
+      } else if (remoteAnalysis) {
         const analyzer = current.ai.mode === "hosted"
           ? new HostedSemanticAnalyzer()
           : new OpenAICompatibleSemanticAnalyzer({
@@ -918,6 +933,7 @@ export default function UnifiedWorkspace() {
         });
         designPlan = applySemanticBlueprint(article, result.blueprint, { generationMode: current.designPlan.generationMode });
         engineLabel = "AI 智能分析";
+        if (cacheKey) semanticAnalysisCacheRef.current.set(cacheKey, { designPlan, engine: engineLabel });
       }
     } catch (error) {
       if (error instanceof AIProviderError && error.code === "cancelled") {
