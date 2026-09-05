@@ -106,6 +106,14 @@ describe("publishing integrity gate", () => {
     expect(layout.pages.flatMap((page) => page.nodes).some((node) => node.text === "。" || node.text === "乙。")).toBe(false);
   });
 
+  it("does not force a mostly empty page for a short spill before the next chapter", () => {
+    const source = parseSourceDocument("# 标题\n\n很短的导语。\n\n## 第一章\n\n完整保留正文。\n\n## 第二章\n\n继续保留正文。");
+    const output = buildPlatformArticle(source, "xiaohongshu", analyzeArticleDesign(source));
+    const layout = layoutCardPages(output);
+    expect(layout.pages).toHaveLength(2);
+    expect(collectLayoutText(layout)).toBe(source.blocks.map((block) => block.plainText).join(""));
+  });
+
   it("detects loss, duplication, altered numbers and order in actual content", () => {
     const source = parseSourceDocument(MIXED);
     expect(checkSourceIntegrity(source, { ...source, blocks: source.blocks.slice(1) }).missing).toHaveLength(1);

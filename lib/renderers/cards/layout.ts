@@ -176,7 +176,7 @@ function createFlowEntries(blocks: UnifiedArticleBlock[]): FlowEntry[] {
   blocks.forEach((block, blockIndex) => {
     if (block.type === "divider") return;
     if (block.type === "pageBreak") {
-      entries.push({ id: `${block.id}:break`, blockId: block.id, kind: "pageBreak", text: "", sourceIndex: blockIndex * 1_000 });
+      entries.push({ id: `${block.id}:break`, blockId: block.id, kind: "pageBreak", text: "", sourceIndex: blockIndex * 1_000, softBreak: block.id.includes(":page:") && !block.id.includes(":page:cover:") });
       return;
     }
     if (block.type === "list" && block.syntax === "markdown") {
@@ -223,6 +223,7 @@ function createFlowEntries(blocks: UnifiedArticleBlock[]): FlowEntry[] {
       text: block.syntax === "markdown" && block.type !== "image" && block.type !== "code" ? markdownPublicationText(block.markdown) : block.plainText,
       sourceIndex: blockIndex * 1_000,
       keepWithNext: kind === "title" || kind === "heading",
+      headingDepth: block.headingDepth,
     });
   });
   return entries.filter((entry) => entry.kind === "pageBreak" || entry.kind === "image" || entry.text.trim().length > 0);
@@ -433,7 +434,7 @@ function paginateEntries(
 
     const entry = entries[entryIndex];
     if (entry.kind === "pageBreak") {
-      if (page.nodes.length > 0) pushPage();
+      if (page.nodes.length > 0 && (!entry.softBreak || y - safeArea.y >= safeArea.height * 0.5)) pushPage();
       entryIndex += 1;
       continue;
     }
@@ -537,7 +538,7 @@ function placeEntry(
     return placeImageEntry(page, entry, y, remainingHeight, options);
   }
 
-  const style = styleForEntry(entry.kind, typography);
+  const style = styleForEntry(entry.kind, typography, entry.headingDepth);
   const lineHeight = style.lineHeight;
   const paragraphGap = gapForEntry(entry.kind, typography);
   const textWidth = textColumnWidth(safeWidth);
@@ -632,12 +633,12 @@ function estimateEntryHeight(
   firstLineOnly = false,
 ) {
   if (entry.kind === "image") return (options.defaultImageBox ?? DEFAULT_IMAGE_BOX).height + 24;
-  const style = styleForEntry(entry.kind, typography);
+  const style = styleForEntry(entry.kind, typography, entry.headingDepth);
   const lines = wrapText(entry.text, textColumnWidth(safeWidth), style, measurer);
   return (firstLineOnly ? Math.min(1, lines.length) : lines.length) * style.lineHeight + gapForEntry(entry.kind, typography);
 }
 
-function styleForEntry(kind: FlowEntry["kind"], typography: CardTypography): TextStyle {
+function styleForEntry(kind: FlowEntry["kind"], typography: CardTypography, depth?: number): TextStyle {
   if (kind === "title") {
     return {
       fontFamily: typography.fontFamily,
@@ -647,11 +648,12 @@ function styleForEntry(kind: FlowEntry["kind"], typography: CardTypography): Tex
     };
   }
   if (kind === "heading") {
+    const fontSize = Math.round(typography.headingFontSize * (depth && depth >= 4 ? 0.76 : depth === 3 ? 0.86 : 1));
     return {
       fontFamily: typography.fontFamily,
-      fontSize: typography.headingFontSize,
-      fontWeight: 700,
-      lineHeight: Math.round(typography.headingFontSize * typography.lineSpacing),
+      fontSize,
+      fontWeight: depth && depth >= 4 ? 600 : 700,
+      lineHeight: Math.round(fontSize * typography.lineSpacing),
     };
   }
   if (kind === "focus") {

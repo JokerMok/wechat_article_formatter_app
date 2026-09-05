@@ -18,7 +18,7 @@ The block editor is the single editing surface for new drafts. Preview is read-o
 
 ## Automated evidence
 
-- `npm test`: 31 files, 282 tests passed.
+- `npm test`: 31 files, 283 tests passed.
 - `npm run lint`: passed.
 - `npm run build`: passed (Next.js production build and TypeScript).
 - Added whole-pipeline tests using the existing fixed article corpus and a mixed-structure fixture on all four platforms.
@@ -52,3 +52,11 @@ Actual Xiaohongshu PNG inspection exposed duplicated tail characters in multilin
 Douyin image switched successfully from 1080×1440 to 1080×1920. Actual hosted analysis reached `POST /api/ai/analyze` but returned HTTP 503; UI reported “服务端 AI 尚未配置完整”. Preview AI configuration is a release blocker. No real AI success is claimed. Failure feedback was additionally made visible in focused preview mode, and analysis now disables duplicate generation while offering cancellation.
 
 Download-event notifications timed out in this browser, but the actual HTML and PNG files arrived in the shared download directory and were inspected. Browser extension metadata errors were observed; they are distinct from application errors.
+
+## Second Preview findings
+
+Deployment `dpl_4yDXoNa9WbDkUqjp9rcDREkPsSd8` used commit `a4a8c8b`. Actual Xiaohongshu ZIP download contained all five PNGs plus copy, tags and manifest. Inspection confirmed corrected multiline endings, nested ordered-list markers, loaded remote images and the preserved 来源 section. A sparse code-only continuation page remained; the next patch treats automatically generated chapter breaks as soft when the preceding page is under half full. Explicit user breaks and the cover boundary remain hard. H3 and H4 card headings now have distinct sizes.
+
+Actual Douyin longform text download retained full source text, link destinations, nested list markers, code, both image references and special symbols. Applying editorial theme A retained the mixed content. A browser reload recovered the saved project and source; the selected platform reset to WeChat, so platform-selection persistence is not claimed.
+
+Remaining release gates: successful real hosted AI (Preview returns AI_NOT_CONFIGURED), all fixture/platform browser combinations, actual mobile viewport and external-editor paste fidelity. GitHub write access remains blocked. Do not promote these previews to production.
