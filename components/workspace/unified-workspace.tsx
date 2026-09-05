@@ -43,7 +43,7 @@ import {
 import { HostedAIProvider, HostedSemanticAnalyzer, OpenAICompatibleProvider, OpenAICompatibleSemanticAnalyzer, generatePlatformVersions } from "@/lib/ai";
 import { AIProviderError } from "@/lib/ai";
 import type { WechatImageNode } from "@/lib/renderers/wechat";
-import { markdownTree, markdownPlainText } from "@/lib/content/markdown";
+import { markdownPublicationText } from "@/lib/content/markdown";
 import { renderWechatContentHtml } from "@/lib/renderers/wechat";
 import {
   createAssetBlobRepository,
@@ -217,6 +217,7 @@ function blockLabel(block: UnifiedArticleBlock) {
     list: "列表",
     card: "卡片",
     code: "代码",
+    table: "表格",
     divider: "分隔",
     pageBreak: "分页",
   };
@@ -910,6 +911,7 @@ export default function UnifiedWorkspace() {
   }
 
   async function reparseCurrentPlatform() {
+    if (analysisAbortRef.current && !analysisAbortRef.current.signal.aborted) return false;
     if (!hydratedRef.current) {
       setStatusMessage("本地项目仍在恢复，请稍候再试；当前编辑稿未改变");
       return;
@@ -1001,8 +1003,9 @@ export default function UnifiedWorkspace() {
     replaceWorkspace(next);
     setParsedDrafts((currentDrafts) => ({ ...currentDrafts, [analysisPlatform]: nextParsedDraft }));
     setSourceAnalysisNotice(`${engineLabel}完成 · ${designPlan.blueprint.sections.length} 个章节 · ${designPlan.blueprint.facts.length} 条事实${fallbackNotice}`);
-    setAiRunState("idle");
-    setAiStatusMessage(undefined);
+    const failedRemote = remoteAnalysis && engineLabel !== "AI 智能分析";
+    setAiRunState(failedRemote ? "error" : "idle");
+    setAiStatusMessage(failedRemote ? `${fallbackNotice.replace(/^；/, "")}。当前成稿未改变，可重试或切换本地。` : undefined);
     setStatusMessage(`源文分析完成，已生成“${getVisualTheme(designPlan.recommendedThemeId ?? DESIGN_SCHEMES[designPlan.recommendedScheme].themeId).name}”结构建议；平台稿尚未覆盖${fallbackNotice}`);
     return !remoteAnalysis || engineLabel === "AI 智能分析";
   }
@@ -1076,6 +1079,7 @@ export default function UnifiedWorkspace() {
   }
 
   function cancelAiGeneration() {
+    analysisAbortRef.current?.abort();
     aiAbortRef.current?.abort();
   }
 
@@ -1334,7 +1338,7 @@ export default function UnifiedWorkspace() {
         ])) as Record<PlatformId, string>}
         mode={mode}
         focusMode={focusMode}
-        generating={aiRunState === "generating"}
+        generating={analysisRunning || aiRunState === "generating"}
         onProjectTitleChange={setProjectTitle}
         onOpenProject={(id) => void openProject(id)}
         onPlatformChange={setActivePlatform}
@@ -1405,7 +1409,7 @@ export default function UnifiedWorkspace() {
             analysisEngine={analysisEngine}
             history={history[activePlatform]}
             draftMode={parsedDraft ? "parsed" : "generated"}
-            generating={aiRunState === "generating"}
+            generating={analysisRunning || aiRunState === "generating"}
             onDraftChange={(nextDraft) => {
               if (parsedDraft) {
                 setParsedDrafts((currentDrafts) => ({ ...currentDrafts, [activePlatform]: nextDraft }));
@@ -1447,12 +1451,15 @@ export default function UnifiedWorkspace() {
             generationMode={workspace.designPlan.generationMode}
             aiBaseUrl={workspace.ai.baseUrl}
             aiModel={workspace.ai.model}
-            aiRunState={aiRunState}
+            aiRunState={analysisRunning ? "generating" : aiRunState}
             aiFallbackReason={workspace.ai.lastFallbackReason}
-            aiStatusMessage={aiStatusMessage}
+            aiStatusMessage={analysisRunning ? "AI 正在理解原文结构，完成后进行排版。当前成稿已保留。" : aiStatusMessage}
             statusMessage={statusMessage}
             sessionApiKey={sessionApiKey}
             onAiModeChange={(modeValue) => {
+              analysisAbortRef.current?.abort();
+              aiAbortRef.current?.abort();
+              setAiRunState("idle");
               setAiStatusMessage(undefined);
               updateWorkspace({
                 ai: {
@@ -1798,7 +1805,7 @@ function SemanticAnalysisSummary(props: {
                 <label className="inline-flex items-center gap-1.5">
                   <input
                     type="checkbox"
-                    checked={section.importance >= 0.7}
+                    checked={section.importance >= 0.85}
                     onChange={(event) => updateSection(section.id, { importance: event.target.checked ? 0.9 : 0.45 })}
                   />
                   作为重点
@@ -1981,7 +1988,7 @@ function LongformPreview({ draft, imageUrlByBlock }: { draft: PlatformDraft; ima
   const text = draft.content.blocks.filter((block) => block.type !== "pageBreak").map((block) => {
     if (block.type === "image") return block.markdown;
     if (block.type === "code") return block.text;
-    return block.syntax ? markdownPlainText(markdownTree(block.markdown)) : blockText(block);
+    return block.syntax ? markdownPublicationText(block.markdown) : blockText(block);
   }).join("\n\n");
   return <div className="space-y-3">
     <div className="flex flex-wrap gap-2">

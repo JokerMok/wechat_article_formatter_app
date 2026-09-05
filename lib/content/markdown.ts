@@ -84,3 +84,27 @@ export function renderMarkdown(value: string, accent = "#963d3a", inline = false
   };
   return render(tree);
 }
+
+/** Readable text for image/text publishing, retaining link destinations and list hierarchy. */
+export function markdownPublicationText(value: string): string {
+  const tree = markdownTree(value);
+  const definitions = new Map((tree.children ?? []).filter((node) => node.type === "definition").map((node) => [node.identifier, node.url]));
+  const render = (node: MarkdownNode, indent = ""): string => {
+    if (node.type === "definition") return "";
+    if (node.type === "list") return (node.children ?? []).map((item, index) => {
+      const marker = node.ordered ? `${(node.start ?? 1) + index}. ` : "• ";
+      const checked = item.checked === undefined || item.checked === null ? "" : item.checked ? "☑ " : "☐ ";
+      return indent + marker + checked + (item.children ?? []).map((child) => child.type === "list" ? "\n" + render(child, indent + "    ") : render(child, indent)).join("\n");
+    }).join("\n");
+    const children = () => (node.children ?? []).map((child) => render(child, indent)).filter(Boolean).join(["root", "blockquote", "table"].includes(node.type) ? "\n" : node.type === "tableRow" ? " | " : "");
+    if (node.type === "link" || node.type === "linkReference") {
+      const label = children();
+      const href = safeLink(node.url ?? definitions.get(node.identifier) ?? "");
+      return href && href !== label ? `${label}（${href}）` : label;
+    }
+    if (node.type === "break") return "\n";
+    if (node.type === "image" || node.type === "imageReference") return node.alt ?? "";
+    return node.value ?? children();
+  };
+  return render(tree);
+}

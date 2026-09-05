@@ -18,7 +18,7 @@ The block editor is the single editing surface for new drafts. Preview is read-o
 
 ## Automated evidence
 
-- `npm test`: 31 files, 281 tests passed.
+- `npm test`: 31 files, 282 tests passed.
 - `npm run lint`: passed.
 - `npm run build`: passed (Next.js production build and TypeScript).
 - Added whole-pipeline tests using the existing fixed article corpus and a mixed-structure fixture on all four platforms.
@@ -40,3 +40,15 @@ Use isolated acceptance projects, never overwrite real user drafts. For ordinary
 5. Check mobile layout, browser console and real hosted AI.
 
 Do not claim publishing-platform paste compatibility without testing an actual publishing editor. Do not claim remote AI success from a mocked endpoint. No production merge until material P0/P1 issues found by these checks are resolved.
+
+## First Preview findings (2026-09-05)
+
+Preview deployment: `dpl_BVESfWthKoPukBAh85nR2ZjuwxCB`, from local commit `df791f4` using Vercel's deployment API. It is not a production deployment. Git push has no CLI credentials and the GitHub connector's create-tree operation returned `403 Resource not accessible by integration`; the branch is currently local only.
+
+Actual mixed-article WeChat generation retained headings through H4, nested lists, a table, code, reference URL, number/symbol text, image and the section named 来源. Edited title appeared in the preview and actual downloaded HTML. The copy action reported success but the browser clipboard inspection returned no entries, so paste fidelity has not been independently verified.
+
+Actual Xiaohongshu PNG inspection exposed duplicated tail characters in multiline quotes/lists. Root cause: wrapping dropped newline characters while pagination advanced offsets by the rendered character count. Fixed by retaining raw newline offsets separately from visible canvas lines, with a regression test. The checklist heading rule was drawn at the full node height (including paragraph spacing), crossing the next paragraph; it now follows the last heading line.
+
+Douyin image switched successfully from 1080×1440 to 1080×1920. Actual hosted analysis reached `POST /api/ai/analyze` but returned HTTP 503; UI reported “服务端 AI 尚未配置完整”. Preview AI configuration is a release blocker. No real AI success is claimed. Failure feedback was additionally made visible in focused preview mode, and analysis now disables duplicate generation while offering cancellation.
+
+Download-event notifications timed out in this browser, but the actual HTML and PNG files arrived in the shared download directory and were inspected. Browser extension metadata errors were observed; they are distinct from application errors.

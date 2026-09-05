@@ -1,3 +1,4 @@
+import { markdownPublicationText } from "../../content/markdown";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../../content";
 import { createApproximateTextMeasurer } from "./measurement";
 import type {
@@ -178,6 +179,10 @@ function createFlowEntries(blocks: UnifiedArticleBlock[]): FlowEntry[] {
       entries.push({ id: `${block.id}:break`, blockId: block.id, kind: "pageBreak", text: "", sourceIndex: blockIndex * 1_000 });
       return;
     }
+    if (block.type === "list" && block.syntax === "markdown") {
+      entries.push({ id: block.id, blockId: block.id, kind: "body", text: markdownPublicationText(block.markdown), sourceIndex: blockIndex * 1_000 });
+      return;
+    }
     if (block.type === "list") {
       block.items.forEach((item, itemIndex) => {
         entries.push({
@@ -215,7 +220,7 @@ function createFlowEntries(blocks: UnifiedArticleBlock[]): FlowEntry[] {
       id: block.id,
       blockId: block.id,
       kind,
-      text: block.plainText,
+      text: block.syntax === "markdown" && block.type !== "image" && block.type !== "code" ? markdownPublicationText(block.markdown) : block.plainText,
       sourceIndex: blockIndex * 1_000,
       keepWithNext: kind === "title" || kind === "heading",
     });
@@ -555,10 +560,10 @@ function placeEntry(
     sourceIndex: sourceIndexForTextOffset(entry.sourceIndex, sourceOffset, sourceLength),
     text: visibleText,
     lines: visibleLines.map((line, index) => ({
-      text: line,
+      text: line.replace(/\r?\n$/, ""),
       x,
       y: y + index * lineHeight,
-      width: measurer.measureText(line, style).width,
+      width: measurer.measureText(line.replace(/\r?\n$/, ""), style).width,
       height: lineHeight,
     })),
     x,
@@ -680,28 +685,21 @@ function textColumnWidth(safeWidth: number) {
 
 function wrapText(text: string, maxWidth: number, style: TextStyle, measurer: TextMeasurer): string[] {
   const lines: string[] = [];
-  const sourceLines = text.split("\n");
-  for (const sourceLine of sourceLines) {
-    let line = "";
-    for (const char of Array.from(sourceLine)) {
-      const candidate = line + char;
-      if (line && measurer.measureText(candidate, style).width > maxWidth) {
-        if (BREAK_BEFORE_CHARS.test(char)) {
-          line = candidate;
-          continue;
-        }
-        measurer.measureText(line, style);
-        lines.push(line);
-        line = char;
-      } else {
-        line = candidate;
-      }
+  let line = "";
+  for (const char of Array.from(text)) {
+    if (char === "\n") {
+      // Newlines occupy source offsets even though canvas draws no newline glyph.
+      lines.push(line + char);
+      line = "";
+      continue;
     }
-    if (line) {
-      measurer.measureText(line, style);
+    const candidate = line + char;
+    if (line && measurer.measureText(candidate, style).width > maxWidth && !BREAK_BEFORE_CHARS.test(char)) {
       lines.push(line);
-    }
+      line = char;
+    } else line = candidate;
   }
+  if (line) lines.push(line);
   return lines.length > 0 ? lines : [""];
 }
 

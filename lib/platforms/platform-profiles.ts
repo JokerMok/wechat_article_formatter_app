@@ -297,7 +297,7 @@ const PUBLISHING_TAG_PATTERNS = [
 ];
 
 export function collectTags(content: UnifiedArticleContent, maxCount: number) {
-  const searchableText = content.blocks.map((block) => renderBlockText(block) ?? "").join(" ");
+  const searchableText = content.blocks.filter((block) => block.type !== "code" && block.type !== "image").map((block) => block.plainText).join(" ");
   const domainCandidates = PUBLISHING_TAG_PATTERNS.filter((tag) => searchableText.includes(tag));
   const latinCandidates = [...searchableText.matchAll(/\b(?:AI|[A-Z][A-Za-z0-9.+-]{2,18}|[A-Z]{2,12})\b/g)]
     .map((match) => match[0]);

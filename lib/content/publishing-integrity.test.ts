@@ -7,6 +7,7 @@ import { layoutCardPages, collectLayoutText } from "../renderers/cards";
 import { sanitizeWechatHtml, createPlatformDraft, updatePlatformBlock, updatePlatformTitle } from "../../components/workspace/state";
 import { fixedArticles } from "../../tests/fixtures/content/articles";
 import { checkSourceIntegrity } from "./integrity";
+import { markdownPublicationText } from "./markdown";
 import { unifiedArticleContentSchema } from "./schemas";
 
 const MIXED = `# 保留原意与格式
@@ -93,6 +94,16 @@ describe("publishing integrity gate", () => {
       expect(collectLayoutText(layout)).toBe(source.blocks.map((block) => block.plainText).join(""));
       expect(layout.pages.every((page) => page.nodes.length > 0)).toBe(true);
     }
+  });
+
+  it("consumes newline offsets exactly and retains nested markers and link destinations", () => {
+    const source = parseSourceDocument("# 换行回归\n\n> 第一行。\n> 第二行。\n\n1. 第一项。\n2. 第二项。\n   - 子项目甲。\n   - 子项目乙。\n\n[出处](https://example.com/source)");
+    const expected = source.blocks.map((block) => markdownPublicationText(block.markdown)).join("");
+    const layout = layoutCardPages(source);
+    expect(collectLayoutText(layout)).toBe(expected);
+    expect(collectLayoutText(layout)).toContain("    • 子项目甲。");
+    expect(collectLayoutText(layout)).toContain("https://example.com/source");
+    expect(layout.pages.flatMap((page) => page.nodes).some((node) => node.text === "。" || node.text === "乙。")).toBe(false);
   });
 
   it("detects loss, duplication, altered numbers and order in actual content", () => {
