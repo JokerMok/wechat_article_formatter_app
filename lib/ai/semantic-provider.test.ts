@@ -15,11 +15,11 @@ function completionForSource() {
 }
 
 describe("OpenAI-compatible semantic analyzer", () => {
-  it("posts the source blocks and returns a validated blueprint", async () => {
+  it("posts source text once with references and returns a validated blueprint", async () => {
     const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       expect(String(input)).toBe("https://example.test/v1/chat/completions");
       const body = JSON.parse(String(init?.body));
-      expect(body.messages[1].content).toContain('"blocks"');
+      expect(body.messages[1].content).toContain('"segments"');
       expect(body.messages[1].content).not.toContain("server-secret");
       return new Response(completionForSource(), { status: 200 });
     }) as unknown as typeof fetch;
@@ -58,6 +58,8 @@ describe("OpenAI-compatible semantic analyzer", () => {
 
     const result = await new OpenAICompatibleSemanticAnalyzer({ ...baseConfig, fetchImpl: fetchMock }).analyze({ source, generationMode: "layoutOnly" });
 
+    const claimed = new Set(result.blueprint.sections.flatMap((section) => section.sourceBlockIds));
+    expect(source.blocks.filter((block) => block.type === "paragraph").every((block) => claimed.has(block.id))).toBe(true);
     expect(result.blueprint.primaryContentType).toBe("opinionAnalysis");
     expect(result.blueprint.centralThesis).toBe("先解决问题，再保留边界。");
     expect(result.blueprint.sections.some((section) => section.role === "argument" && section.sourceBlockIds.includes(paragraph!.id))).toBe(true);

@@ -2,7 +2,7 @@ import type { ArticleBlock, ArticleParseMode, BlockType } from "../article-types
 
 export type ArticleSourceFormat = "markdown" | "plainText";
 
-export type StructuralContentBlockType = "divider" | "pageBreak" | "code";
+export type StructuralContentBlockType = "divider" | "pageBreak" | "code" | "table";
 
 export type UnifiedContentBlockType = BlockType | StructuralContentBlockType;
 
@@ -25,6 +25,11 @@ type UnifiedBlockBase<TType extends UnifiedContentBlockType> = {
   id: string;
   type: TType;
   source: SourcePosition;
+  /** Syntax metadata, never inferred or rewritten by the semantic model. */
+  syntax?: "markdown";
+  headingDepth?: number;
+  ordered?: boolean;
+  listStart?: number;
 };
 
 type UnifiedTextBlockBase<TType extends Exclude<BlockType, "list" | "card">> = UnifiedBlockBase<TType> & {

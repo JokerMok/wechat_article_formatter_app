@@ -94,4 +94,9 @@ describe("workspace card image actions", () => {
     expect(createCardPngFilename("", "douyinImage", 2)).toBe("douyinImage-2.png");
     expect(createCardPngFilename("人工标题", "xiaohongshu", 1)).toBe("人工标题-xiaohongshu-1.png");
   });
+  it("blocks incomplete image exports rather than silently drawing an empty image", async () => {
+    await expect(loadCardCanvasImages(imagePage(), {}, undefined, true)).rejects.toThrow("图片素材缺失");
+    await expect(loadCardCanvasImages(imagePage(), { "image-block": "https://example.com/a.png" }, async () => { throw new Error("CORS"); }, true)).rejects.toThrow("跨域");
+  });
+
 });

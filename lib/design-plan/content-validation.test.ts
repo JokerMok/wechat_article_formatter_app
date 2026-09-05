@@ -66,12 +66,13 @@ describe("content output quality gate", () => {
     }
   });
 
-  it("uses different skeletons for each platform", () => {
+  it("adapts output media without artificially changing longform structure", () => {
     const article = parseArticleContent(OPINION_ARTICLE, { mode: "narrative" });
     const plan = analyzeArticleDesign(article);
     const signatures = Object.values(plan.platformPlans).map((platformPlan) => platformPlan.pages.map((page) => page.kind).join("/"));
 
-    expect(new Set(signatures).size).toBe(4);
+    expect(plan.platformPlans.wechat.pages.flatMap((page) => page.sourceBlockIds)).toEqual(article.blocks.map((block) => block.id));
+    expect(new Set(signatures).size).toBeGreaterThanOrEqual(2);
     expect(plan.platformPlans.wechat.exportSpec.format).toBe("html");
     expect(plan.platformPlans.xiaohongshu.exportSpec.format).toBe("png");
     expect(plan.platformPlans.douyinImage.exportSpec.format).toBe("png");

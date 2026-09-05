@@ -1,9 +1,9 @@
 import type { ArticleBlock, ArticleParseMode } from "./article-types";
+import { parseSyntaxDocument } from "./content/source-document";
 import type {
   ArticleContentParseOptions,
   ArticleSourceFormat,
   SourcePosition,
-  SourceSegment,
   SourceDocument,
   UnifiedArticleBlock,
   UnifiedArticleContent,
@@ -540,6 +540,7 @@ export function articleContentToBlocks(content: UnifiedArticleContent): ArticleB
       case "pageBreak":
         return [];
       case "code":
+      case "table":
         return block.text ? [{ type: "paragraph", text: block.text }] : [];
     }
   });
@@ -554,49 +555,7 @@ export function parseArticle(raw: string, options: ParseOptions = {}): ArticleBl
  * not infer semantic roles; that belongs to the semantic analyzer stage.
  */
 export function parseSourceDocument(raw: string, options: ParseOptions = {}): SourceDocument {
-  const content = parseArticleContentInternal(raw, options, false);
-  return {
-    ...content,
-    sourceRevision: sourceRevisionFor(raw),
-    segments: buildSourceSegments(content.blocks),
-  };
-}
-
-function buildSourceSegments(blocks: UnifiedArticleBlock[]): SourceSegment[] {
-  return blocks.flatMap((block) => {
-    if (block.type === "divider" || block.type === "pageBreak" || block.type === "code") return [];
-    const texts = block.type === "list"
-      ? block.items
-      : block.type === "card"
-        ? [block.text]
-        : [block.text];
-    return texts.flatMap((text, itemIndex) => {
-      const normalized = text.trim();
-      if (!normalized) return [];
-      const sentenceParts = block.type === "list"
-        ? [normalized]
-        : normalized.split(/(?<=[。！？；.!?;])\s*/u).map((part) => part.trim()).filter(Boolean);
-      let searchOffset = 0;
-      return sentenceParts.map((part, sentenceIndex) => {
-        const localStart = Math.max(0, normalized.indexOf(part, searchOffset));
-        const localEnd = localStart + part.length;
-        searchOffset = localEnd;
-        const sourceStart = block.source.startOffset + localStart;
-        const sourceEnd = Math.min(block.source.endOffset, sourceStart + part.length);
-        return {
-          id: `${block.id}:segment:${itemIndex + 1}:${sentenceIndex + 1}`,
-          blockId: block.id,
-          text: part,
-          sourceRange: {
-            ...block.source,
-            startOffset: sourceStart,
-            endOffset: sourceEnd,
-            sourceText: part,
-          },
-        };
-      });
-    });
-  });
+  return parseSyntaxDocument(raw, options);
 }
 
 function isQuoteBoundary(line: SourceLine, mode: ArticleParseMode, legacyPresentationBlocks: boolean) {
@@ -604,11 +563,3 @@ function isQuoteBoundary(line: SourceLine, mode: ArticleParseMode, legacyPresent
   return legacyPresentationBlocks && shouldPromoteQuote(line, mode);
 }
 
-function sourceRevisionFor(value: string) {
-  let hash = 2166136261;
-  for (const char of value) {
-    hash ^= char.codePointAt(0) ?? 0;
-    hash = Math.imul(hash, 16777619);
-  }
-  return `src-${(hash >>> 0).toString(16).padStart(8, "0")}`;
-}

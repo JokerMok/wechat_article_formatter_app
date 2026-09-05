@@ -64,12 +64,12 @@ describe("buildPlatformArticle", () => {
     expect(result.blocks.some((block) => block.type === "list")).toBe(true);
   });
 
-  it("splits long WeChat paragraphs without losing their text", () => {
+  it("preserves paragraph boundaries and wording in layout-only mode", () => {
     const paragraph = "这是用于验证公众号长段拆分的完整句子。".repeat(28);
     const article = parseArticleContent(`# 长段测试\n\n${paragraph}`, { mode: "knowledge" });
     const result = buildPlatformArticle(article, "wechat", analyzeArticleDesign(article));
     const paragraphs = result.blocks.filter((block) => block.type === "paragraph");
-    expect(paragraphs.length).toBeGreaterThan(1);
+    expect(paragraphs).toHaveLength(1);
     expect(paragraphs.map((block) => block.text).join("")).toBe(paragraph);
   });
 
@@ -81,7 +81,7 @@ describe("buildPlatformArticle", () => {
     expect(pages.length).toBeLessThanOrEqual(10);
     expect(output.pages).toHaveLength(pages.length);
     expect(pages[0]?.map((block) => block.type)).toEqual(["title"]);
-    expect(result.blocks.some((block) => block.id.includes(":page:callToAction:"))).toBe(true);
+    expect(result.blocks.filter((block) => block.type !== "pageBreak")).toEqual(source.blocks);
   });
 
   it("builds a lower-density 4-8 page Douyin image sequence", () => {
@@ -95,15 +95,15 @@ describe("buildPlatformArticle", () => {
     expect(pages.slice(1).every((page) => page.reduce((count, block) => count + blockText(block).length, 0) <= 240)).toBe(true);
   });
 
-  it("keeps cover titles compact for long source titles", () => {
+  it("does not shorten cover titles without explicit editorial optimization", () => {
     const article = parseArticleContent(`# 这是一个非常非常长而且包含许多限定条件的企业人工智能项目落地标题用于验证封面不会溢出
 
 正文说明真实边界。`, { mode: "knowledge" });
     const articlePlan = analyzeArticleDesign(article);
     const xhs = buildPlatformArticle(article, "xiaohongshu", articlePlan);
     const douyin = buildPlatformArticle(article, "douyinImage", articlePlan);
-    expect(xhs.blocks.find((block) => block.type === "title")?.text.length).toBeLessThanOrEqual(16);
-    expect(douyin.blocks.find((block) => block.type === "title")?.text.length).toBeLessThanOrEqual(14);
+    expect(xhs.blocks.find((block) => block.type === "title")?.text).toBe(article.title);
+    expect(douyin.blocks.find((block) => block.type === "title")?.text).toBe(article.title);
   });
 
   it("does not bind unrelated fallback paragraphs to checklist points", () => {
@@ -131,7 +131,7 @@ describe("buildPlatformArticle", () => {
     expect(pageBodies.filter((text) => text.includes("旧模型输出"))).toHaveLength(1);
   });
 
-  it("filters publishing metadata sections and internal wiki links", () => {
+  it("does not silently classify user sections as disposable metadata", () => {
     const article = parseArticleContent(`# 项目复盘
 
 ## 素材类型
@@ -148,7 +148,7 @@ describe("buildPlatformArticle", () => {
     const result = buildPlatformArticle(article, "wechat", analyzeArticleDesign(article));
     const text = result.blocks.map(blockText).join("\n");
     expect(text).toContain("先整理事实，再形成判断");
-    expect(text).not.toMatch(/公众号案例草稿|待核验|发布边界|internal\/method/);
+    expect(result.blocks).toEqual(article.blocks);
   });
 });
 

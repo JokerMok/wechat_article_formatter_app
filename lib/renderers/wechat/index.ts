@@ -1,6 +1,7 @@
 import type { ArticleBlock, InlineStyle, StyleTemplate } from "../../article-types";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../../content";
 import { styleTemplates } from "../../style-templates";
+import { renderMarkdown } from "../../content/markdown";
 
 export type WechatImageNode = {
   id?: string;
@@ -146,7 +147,7 @@ function isSafeImageSrc(src: string) {
 }
 
 function parseMarkdownImage(block: RenderableBlock) {
-  const candidates = [getBlockSourceText(block), getBlockMarkdown(block), getBlockText(block)];
+  const candidates = [getBlockMarkdown(block), getBlockText(block), getBlockSourceText(block)];
 
   for (const candidate of candidates) {
     const match = candidate.match(/!\[([^\]]*)]\(([^)\s]+)(?:\s+"[^"]*")?\)/);
@@ -321,6 +322,16 @@ export function renderWechatBlockHtml(block: RenderableBlock, template: StyleTem
   const styles = template.blocks;
   const visual = template.visual;
 
+  if ("syntax" in block && block.syntax === "markdown" && block.type !== "image" && block.type !== "code" && block.type !== "divider" && block.type !== "pageBreak") {
+    const content = renderMarkdown(block.markdown, visual.primary, !["list", "table", "quote"].includes(block.type));
+    if (block.type === "table") return `<section data-wechat-block-type="table" style="margin:24px 0">${content}</section>`;
+    if (block.type === "list") return `<section style="${toWechatStyle(styles.list)}">${content}</section>`;
+    if (block.type === "quote") return `<section style="${toWechatStyle({ color: template.body.color, "line-height": template.body.lineHeight, margin: "24px 0" })}">${content}</section>`;
+    const style = styles[block.type as keyof typeof styles] ?? styles.paragraph;
+    if (block.headingDepth) return `<h${block.headingDepth} style="${toWechatStyle(style)}">${content}</h${block.headingDepth}>`;
+    return paragraph(style, content);
+  }
+
   switch (block.type) {
     case "title":
       return renderTitle(block, template);
@@ -373,7 +384,7 @@ export function renderWechatBlockHtml(block: RenderableBlock, template: StyleTem
     case "pageBreak":
       return `<section data-wechat-block-type="page-break" style="${toWechatStyle({ margin: "30px 0", color: visual.muted, "font-size": "13px", "text-align": "center" })}">分页</section>`;
     case "code":
-      return `<section data-wechat-block-type="code" style="${toWechatStyle(codeBlockStyle)}">${escapeHtml(block.text)}</section>`;
+      return `<pre data-wechat-block-type="code" style="${toWechatStyle(codeBlockStyle)}"><code>${escapeHtml(block.text)}</code></pre>`;
     default:
       return "";
   }

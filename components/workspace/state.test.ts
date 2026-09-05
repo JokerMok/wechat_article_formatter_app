@@ -196,7 +196,7 @@ describe("workspace state", () => {
     expect(selection).toMatchObject({ themeId: "storyMagazine", layoutId: "story" });
     expect(after.themeId).toBe("storyMagazine");
     expect(after.layoutId).toBe("story");
-    expect(plan.platformPlans.xiaohongshu.pages.map((page) => page.kind)).toEqual(expect.arrayContaining(["intro", "conflict", "epilogue"]));
+    expect(after.content.blocks.filter((block) => block.type !== "pageBreak").map((block) => block.text)).toEqual(parseArticleContent(state.sourceMarkdown, { mode: "knowledge" }).blocks.filter((block) => block.type !== "pageBreak").map((block) => block.text));
   });
 
   it("switches B to the checklist layout when applying structure", () => {
@@ -219,7 +219,7 @@ describe("workspace state", () => {
     expect(selection).toMatchObject({ themeId: "informationCard", layoutId: "checklist" });
     expect(plan.platformPlans.xiaohongshu.themeId).toBe("informationCard");
     expect(plan.platformPlans.xiaohongshu.layoutId).toBe("checklist");
-    expect(plan.platformPlans.xiaohongshu.pages.map((page) => page.kind).some((kind) => ["step", "warning", "callToAction"].includes(kind))).toBe(true);
+    expect(plan.platformPlans.xiaohongshu.pages.map((page) => page.kind).some((kind) => ["checklist", "step"].includes(kind))).toBe(true);
   });
 
   it("uses the new recommendation for an untouched draft and keeps a manual theme", () => {

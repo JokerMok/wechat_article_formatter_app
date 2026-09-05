@@ -105,7 +105,7 @@ describe("OpenAICompatibleProvider", () => {
     expect(requestBody.messages[1]?.content).not.toContain('"startLine"');
   });
 
-  it("keeps source wording when layout-only mode is selected even if the model rewrites it", async () => {
+  it("renders layout-only mode without any model generation request", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       void input;
       void init;
@@ -121,6 +121,7 @@ describe("OpenAICompatibleProvider", () => {
     });
 
     expectOk(result);
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(result.designPlan.generationMode).toBe("layoutOnly");
     expect(result.versions.wechat?.title).toBe("知识库重构");
     expect(result.versions.wechat?.content.blocks.map((block) => block.plainText).join("\n")).toContain("资料散落在不同地方。");

@@ -21,6 +21,10 @@ const baseBlockSchema = z.object({
   text: z.string(),
   plainText: z.string(),
   markdown: z.string(),
+  syntax: z.literal("markdown").optional(),
+  headingDepth: z.number().int().min(1).max(6).optional(),
+  ordered: z.boolean().optional(),
+  listStart: z.number().int().nonnegative().optional(),
 });
 
 export const unifiedArticleBlockSchema = z.discriminatedUnion("type", [
@@ -36,6 +40,7 @@ export const unifiedArticleBlockSchema = z.discriminatedUnion("type", [
   baseBlockSchema.extend({ type: z.literal("image") }),
   baseBlockSchema.extend({ type: z.literal("divider") }),
   baseBlockSchema.extend({ type: z.literal("pageBreak") }),
+  baseBlockSchema.extend({ type: z.literal("table") }),
   baseBlockSchema.extend({
     type: z.literal("code"),
     language: z.string().optional(),

@@ -75,7 +75,7 @@ function measuringSpy(base: TextMeasurer) {
 }
 
 describe("card image layout engine", () => {
-  it("balances compact semantic pages inside the safe area without shrinking typography", () => {
+  it("keeps ordinary reading pages at the top without shrinking typography", () => {
     const blocks = [
       textBlock("xiaohongshu:page:conflict:3:block:title", "section", "第一次汇报后，方向变了"),
       textBlock("xiaohongshu:page:conflict:3:block:body", "paragraph", "短页仍要保留清楚的上下阅读节奏。"),
@@ -86,7 +86,7 @@ describe("card image layout engine", () => {
     const firstNode = page.nodes[0];
 
     expect(page.pageKind).toBe("conflict");
-    expect(firstNode.y).toBeGreaterThan(page.safeArea.y + 200);
+    expect(firstNode.y).toBe(page.safeArea.y);
     expect(firstNode.style?.fontSize).toBe(42);
     expect(result.overflow).toEqual([]);
   });

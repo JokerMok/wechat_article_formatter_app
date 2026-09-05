@@ -524,6 +524,7 @@ function assertPagesMatchRatio(pages: CardLayoutPage[], ratio: CardAspectRatio) 
 export async function exportXiaohongshuPackage(input: {
   content: UnifiedArticleContent;
   output?: XiaohongshuImageTextOutput;
+  editedCopy?: { title: string; caption?: string; tags: string[] };
   pages?: CardLayoutPage[];
   renderer?: CardPageRenderer;
   images?: CardRenderImages;
@@ -532,14 +533,14 @@ export async function exportXiaohongshuPackage(input: {
   exportedAt?: ExportTimestamp;
   preset?: CardRenderPreset;
 }): Promise<PlatformImageExportResult<XiaohongshuImageTextOutput>> {
-  const output = input.output ?? toXiaohongshuImageText(input.content);
+  const output = { ...(input.output ?? toXiaohongshuImageText(input.content)), ...(input.editedCopy ? { title: input.editedCopy.title, tags: input.editedCopy.tags } : {}) };
   const exportedAt = toExportedAt(input.exportedAt);
   const baseName = createExportBaseName(output.title, exportedAt, "xiaohongshu");
   const pages = resolveCardPages({ content: input.content, ratio: "3:4", pages: input.pages, layoutOptions: input.layoutOptions, measurer: input.measurer });
   assertPagesMatchRatio(pages, "3:4");
   const renderImages = await resolveCardRenderImages({ content: input.content, pages, images: input.images });
   const images = await renderImageFiles({ pages, platform: "xiaohongshu", ratio: "3:4", baseName, renderer: input.renderer, images: renderImages, preset: input.preset });
-  const copyText = buildXiaohongshuCopy(output);
+  const copyText = input.editedCopy?.caption ?? buildXiaohongshuCopy(output);
   const packaged = await packagePlatformImageExport({ output, platform: "xiaohongshu", ratio: "3:4", exportedAt, images, copyText });
   return {
     output,
@@ -556,6 +557,7 @@ export async function exportDouyinImagePackage(input: {
   content: UnifiedArticleContent;
   ratio?: DouyinImageRatio;
   output?: DouyinImageOutput;
+  editedCopy?: { title: string; caption?: string; tags: string[] };
   pages?: CardLayoutPage[];
   renderer?: CardPageRenderer;
   images?: CardRenderImages;
@@ -564,14 +566,14 @@ export async function exportDouyinImagePackage(input: {
   exportedAt?: ExportTimestamp;
   preset?: CardRenderPreset;
 }): Promise<PlatformImageExportResult<DouyinImageOutput>> {
-  const output = input.output ?? toDouyinImageText(input.content, { ratio: input.ratio });
+  const output = { ...(input.output ?? toDouyinImageText(input.content, { ratio: input.ratio })), ...(input.editedCopy ? { title: input.editedCopy.title, tags: input.editedCopy.tags } : {}) };
   const exportedAt = toExportedAt(input.exportedAt);
   const baseName = createExportBaseName(output.title, exportedAt, `douyin-${output.ratio.replace(":", "x")}`);
   const pages = resolveCardPages({ content: input.content, ratio: output.ratio, pages: input.pages, layoutOptions: input.layoutOptions, measurer: input.measurer });
   assertPagesMatchRatio(pages, output.ratio);
   const renderImages = await resolveCardRenderImages({ content: input.content, pages, images: input.images });
   const images = await renderImageFiles({ pages, platform: "douyinImage", ratio: output.ratio, baseName, renderer: input.renderer, images: renderImages, preset: input.preset });
-  const copyText = buildDouyinImageCopy(output);
+  const copyText = input.editedCopy?.caption ?? buildDouyinImageCopy(output);
   const packaged = await packagePlatformImageExport({ output, platform: "douyinImage", ratio: output.ratio, exportedAt, images, copyText });
   return {
     output,
