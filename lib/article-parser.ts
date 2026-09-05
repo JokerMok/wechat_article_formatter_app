@@ -1,10 +1,9 @@
 import type { ArticleBlock, ArticleParseMode } from "./article-types";
+import { parseSyntaxDocument } from "./content/source-document";
 import type {
   ArticleContentParseOptions,
   ArticleSourceFormat,
   SourcePosition,
-  SourceSegment,
-  SourceSegmentType,
   SourceDocument,
   UnifiedArticleBlock,
   UnifiedArticleContent,
@@ -541,6 +540,7 @@ export function articleContentToBlocks(content: UnifiedArticleContent): ArticleB
       case "pageBreak":
         return [];
       case "code":
+      case "table":
         return block.text ? [{ type: "paragraph", text: block.text }] : [];
     }
   });
@@ -555,88 +555,10 @@ export function parseArticle(raw: string, options: ParseOptions = {}): ArticleBl
  * not infer semantic roles; that belongs to the semantic analyzer stage.
  */
 export function parseSourceDocument(raw: string, options: ParseOptions = {}): SourceDocument {
-  const content = parseArticleContentInternal(raw, options, false);
-  return {
-    ...content,
-    sourceRevision: sourceRevisionFor(raw),
-    segments: buildSourceSegments(content.blocks),
-    rawSource: raw,
-    format: content.sourceFormat === "plainText" ? "plain-text" : "markdown",
-  };
-}
-
-function buildSourceSegments(blocks: UnifiedArticleBlock[]): SourceSegment[] {
-  let order = 0;
-  return blocks.flatMap((block) => {
-    if (block.type === "divider" || block.type === "pageBreak" || block.type === "code") return [];
-    const texts = block.type === "list"
-      ? block.items
-      : block.type === "card"
-        ? [block.text]
-        : [block.text];
-    return texts.flatMap((text, itemIndex) => {
-      const normalized = text.trim();
-      if (!normalized) return [];
-      const sentenceParts = block.type === "list"
-        ? [normalized]
-        : normalized.split(/(?<=[。！？；.!?;])\s*/u).map((part) => part.trim()).filter(Boolean);
-      let searchOffset = 0;
-      return sentenceParts.map((part, sentenceIndex) => {
-        const localStart = Math.max(0, normalized.indexOf(part, searchOffset));
-        const localEnd = localStart + part.length;
-        searchOffset = localEnd;
-        const sourceStart = block.source.startOffset + localStart;
-        const sourceEnd = Math.min(block.source.endOffset, sourceStart + part.length);
-        const segmentType: SourceSegmentType = sourceSegmentTypeFor(block.type);
-        const rawText = block.source.sourceText.slice(
-          Math.max(0, sourceStart - block.source.startOffset),
-          Math.max(0, sourceEnd - block.source.startOffset),
-        ) || part;
-        order += 1;
-        return {
-          id: `${block.id}:segment:${itemIndex + 1}:${sentenceIndex + 1}`,
-          blockId: block.id,
-          text: part,
-          order,
-          type: segmentType,
-          rawText,
-          normalizedText: part.replace(/\s+/gu, " ").trim(),
-          ...(block.type === "image" ? { imageId: part.replace(/^此处插入：/u, "").trim() || undefined } : {}),
-          sourceRange: {
-            ...block.source,
-            startOffset: sourceStart,
-            endOffset: sourceEnd,
-            start: sourceStart,
-            end: sourceEnd,
-            sourceText: part,
-          },
-        };
-      });
-    });
-  });
-}
-
-function sourceSegmentTypeFor(type: UnifiedArticleBlock["type"]): SourceSegmentType {
-  if (type === "title") return "title";
-  if (type === "section" || type === "subsection") return "heading";
-  if (type === "list") return "list-item";
-  if (type === "image") return "image";
-  if (type === "card") return "card";
-  if (type === "lead") return "lead";
-  if (type === "quote" || type === "golden" || type === "summary" || type === "cta") return "quote";
-  return "paragraph";
+  return parseSyntaxDocument(raw, options);
 }
 
 function isQuoteBoundary(line: SourceLine, mode: ArticleParseMode, legacyPresentationBlocks: boolean) {
   if (line.quoted) return true;
   return legacyPresentationBlocks && shouldPromoteQuote(line, mode);
-}
-
-function sourceRevisionFor(value: string) {
-  let hash = 2166136261;
-  for (const char of value) {
-    hash ^= char.codePointAt(0) ?? 0;
-    hash = Math.imul(hash, 16777619);
-  }
-  return `src-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }

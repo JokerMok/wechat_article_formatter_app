@@ -150,7 +150,7 @@ export type AIErrorCode =
   | "internal";
 
 export type AIDiagnostics = {
-  provider: "openai-compatible";
+  provider: "openai-compatible" | "deterministic";
   model: string;
   sourceVersionId?: string;
   endpoint?: string;
@@ -588,17 +588,13 @@ function buildSemanticModelSource(source: UnifiedArticleContent) {
     title: source.title,
     parseMode: source.parseMode,
     sourceFormat: source.sourceFormat,
-    sourceText: source.sourceText,
-    blocks: source.blocks.map((block) => ({
-      id: block.id,
-      type: block.type,
-      text: block.text,
-    })),
-    segments: (source.segments ?? []).map((segment) => ({
+    // Send the text once, with stable references used by the semantic response.
+    segments: source.segments?.length ? source.segments.map((segment) => ({
       id: segment.id,
       blockId: segment.blockId,
+      type: source.blocks.find((block) => block.id === segment.blockId)?.type,
       text: segment.text,
-    })),
+    })) : source.blocks.map((block) => ({ id: block.id, blockId: block.id, type: block.type, text: block.plainText })),
   };
 }
 
@@ -790,15 +786,17 @@ function buildBlueprintFromSemanticResponse(
   });
   if (!modelSections.length) return undefined;
 
-  const claimedFallbackSections = new Set(
-    modelSections.flatMap((section) => fallback.sections
-      .filter((candidate) => candidate.sourceBlockIds.some((id) => section.sourceBlockIds.includes(id)))
-      .map((candidate) => candidate.id)),
-  );
+  // A model can identify only part of a local section. Keep every unclaimed
+  // source block instead of dropping the entire overlapping fallback section.
+  const claimed = new Set(modelSections.flatMap((section) => section.sourceBlockIds));
+  const positions = new Map(source.blocks.map((block, index) => [block.id, index]));
   const sections = [
     ...modelSections,
-    ...fallback.sections.filter((section) => !claimedFallbackSections.has(section.id)),
-  ];
+    ...fallback.sections.flatMap((section) => {
+      const sourceBlockIds = section.sourceBlockIds.filter((id) => !claimed.has(id));
+      return sourceBlockIds.length ? [{ ...section, id: `${section.id}:remaining`, sourceBlockIds }] : [];
+    }),
+  ].sort((a, b) => Math.min(...a.sourceBlockIds.map((id) => positions.get(id) ?? Infinity)) - Math.min(...b.sourceBlockIds.map((id) => positions.get(id) ?? Infinity)));
   const facts = mergeSemanticUnits(
     fallback.facts,
     semantic.facts?.flatMap((reference, index) => semanticUnitFromReference(reference, source, fallback.facts, `ai-fact-${index + 1}`)) ?? [],
@@ -1503,7 +1501,7 @@ async function readCompactErrorBody(response: Response) {
 
 function parseAssistantJson(content: string) {
   try {
-    return { ok: true as const, value: JSON.parse(content) as unknown };
+    return { ok: true as const, value: JSON.parse(content.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i, "$1")) as unknown };
   } catch {
     return { ok: false as const };
   }

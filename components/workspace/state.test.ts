@@ -31,6 +31,7 @@ import {
   updatePlatformBlock,
   updatePlatformCaption,
   updatePlatformRatio,
+  updatePlatformTags,
   updatePlatformTitle,
   updateWorkspaceSource,
   updateWorkspaceSourceDraft,
@@ -196,7 +197,7 @@ describe("workspace state", () => {
     expect(selection).toMatchObject({ themeId: "storyMagazine", layoutId: "story" });
     expect(after.themeId).toBe("storyMagazine");
     expect(after.layoutId).toBe("story");
-    expect(plan.platformPlans.xiaohongshu.pages.map((page) => page.kind)).toEqual(expect.arrayContaining(["intro", "conflict", "epilogue"]));
+    expect(after.content.blocks.filter((block) => block.type !== "pageBreak").map((block) => block.text)).toEqual(parseArticleContent(state.sourceMarkdown, { mode: "knowledge" }).blocks.filter((block) => block.type !== "pageBreak").map((block) => block.text));
   });
 
   it("switches B to the checklist layout when applying structure", () => {
@@ -219,7 +220,7 @@ describe("workspace state", () => {
     expect(selection).toMatchObject({ themeId: "informationCard", layoutId: "checklist" });
     expect(plan.platformPlans.xiaohongshu.themeId).toBe("informationCard");
     expect(plan.platformPlans.xiaohongshu.layoutId).toBe("checklist");
-    expect(plan.platformPlans.xiaohongshu.pages.map((page) => page.kind).some((kind) => ["step", "warning", "callToAction"].includes(kind))).toBe(true);
+    expect(plan.platformPlans.xiaohongshu.pages.map((page) => page.kind).some((kind) => ["checklist", "step"].includes(kind))).toBe(true);
   });
 
   it("uses the new recommendation for an untouched draft and keeps a manual theme", () => {
@@ -270,6 +271,16 @@ describe("workspace state", () => {
     expect(edited.title).toBe("人工标题");
     expect(edited.meta.caption).toBe("人工发布文案");
     expect(edited.content.blocks.find((block) => block.id === paragraph!.id && "text" in block)?.text).toBe("正文改动。");
+  });
+
+  it("preserves an edited caption and deliberately cleared tags when changing aspect ratio", () => {
+    const state = createWorkspaceState("# 标题\n\n正文。");
+    const draft = updatePlatformTags(updatePlatformCaption(state.platforms.douyinImage, "人工发布文案"), "");
+    const resized = updatePlatformRatio(draft, "9:16");
+    expect(resized.meta.caption).toBe("人工发布文案");
+    expect(resized.meta.tags).toEqual([]);
+    expect(resized.content).toBe(draft.content);
+    expect(resized.ratio).toBe("9:16");
   });
 
   it("restores persisted workspace state with social reflow settings", () => {

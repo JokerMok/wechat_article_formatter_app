@@ -1,3 +1,4 @@
+import { markdownPublicationText } from "../../content/markdown";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../../content";
 import { createApproximateTextMeasurer } from "./measurement";
 import type {
@@ -173,9 +174,13 @@ function mergeOverflow(issues: CardOverflowIssue[]) {
 function createFlowEntries(blocks: UnifiedArticleBlock[]): FlowEntry[] {
   const entries: FlowEntry[] = [];
   blocks.forEach((block, blockIndex) => {
-    if (block.type === "divider" || block.type === "code") return;
+    if (block.type === "divider") return;
     if (block.type === "pageBreak") {
-      entries.push({ id: `${block.id}:break`, blockId: block.id, kind: "pageBreak", text: "", sourceIndex: blockIndex * 1_000 });
+      entries.push({ id: `${block.id}:break`, blockId: block.id, kind: "pageBreak", text: "", sourceIndex: blockIndex * 1_000, softBreak: block.id.includes(":page:") && !block.id.includes(":page:cover:") });
+      return;
+    }
+    if (block.type === "list" && block.syntax === "markdown") {
+      entries.push({ id: block.id, blockId: block.id, kind: "body", text: markdownPublicationText(block.markdown), sourceIndex: blockIndex * 1_000 });
       return;
     }
     if (block.type === "list") {
@@ -184,7 +189,7 @@ function createFlowEntries(blocks: UnifiedArticleBlock[]): FlowEntry[] {
           id: `${block.id}:item:${itemIndex}`,
           blockId: block.id,
           kind: "body",
-          text: item,
+          text: block.syntax ? `${block.ordered ? `${(block.listStart ?? 1) + itemIndex}.` : "•"} ${item}` : item,
           sourceIndex: blockIndex * 1_000 + itemIndex,
         });
       });
@@ -215,12 +220,13 @@ function createFlowEntries(blocks: UnifiedArticleBlock[]): FlowEntry[] {
       id: block.id,
       blockId: block.id,
       kind,
-      text: block.plainText,
+      text: block.syntax === "markdown" && block.type !== "image" && block.type !== "code" ? markdownPublicationText(block.markdown) : block.plainText,
       sourceIndex: blockIndex * 1_000,
       keepWithNext: kind === "title" || kind === "heading",
+      headingDepth: block.headingDepth,
     });
   });
-  return entries.filter((entry) => entry.kind === "pageBreak" || entry.text.trim().length > 0);
+  return entries.filter((entry) => entry.kind === "pageBreak" || entry.kind === "image" || entry.text.trim().length > 0);
 }
 
 function insertBreaksAroundReservedEntries(entries: FlowEntry[], reservedSourceIndexes: number[]): FlowEntry[] {
@@ -428,7 +434,7 @@ function paginateEntries(
 
     const entry = entries[entryIndex];
     if (entry.kind === "pageBreak") {
-      if (page.nodes.length > 0) pushPage();
+      if (page.nodes.length > 0 && (!entry.softBreak || y - safeArea.y >= safeArea.height * 0.5)) pushPage();
       entryIndex += 1;
       continue;
     }
@@ -532,7 +538,7 @@ function placeEntry(
     return placeImageEntry(page, entry, y, remainingHeight, options);
   }
 
-  const style = styleForEntry(entry.kind, typography);
+  const style = styleForEntry(entry.kind, typography, entry.headingDepth);
   const lineHeight = style.lineHeight;
   const paragraphGap = gapForEntry(entry.kind, typography);
   const textWidth = textColumnWidth(safeWidth);
@@ -555,10 +561,10 @@ function placeEntry(
     sourceIndex: sourceIndexForTextOffset(entry.sourceIndex, sourceOffset, sourceLength),
     text: visibleText,
     lines: visibleLines.map((line, index) => ({
-      text: line,
+      text: line.replace(/\r?\n$/, ""),
       x,
       y: y + index * lineHeight,
-      width: measurer.measureText(line, style).width,
+      width: measurer.measureText(line.replace(/\r?\n$/, ""), style).width,
       height: lineHeight,
     })),
     x,
@@ -627,12 +633,12 @@ function estimateEntryHeight(
   firstLineOnly = false,
 ) {
   if (entry.kind === "image") return (options.defaultImageBox ?? DEFAULT_IMAGE_BOX).height + 24;
-  const style = styleForEntry(entry.kind, typography);
+  const style = styleForEntry(entry.kind, typography, entry.headingDepth);
   const lines = wrapText(entry.text, textColumnWidth(safeWidth), style, measurer);
   return (firstLineOnly ? Math.min(1, lines.length) : lines.length) * style.lineHeight + gapForEntry(entry.kind, typography);
 }
 
-function styleForEntry(kind: FlowEntry["kind"], typography: CardTypography): TextStyle {
+function styleForEntry(kind: FlowEntry["kind"], typography: CardTypography, depth?: number): TextStyle {
   if (kind === "title") {
     return {
       fontFamily: typography.fontFamily,
@@ -642,11 +648,12 @@ function styleForEntry(kind: FlowEntry["kind"], typography: CardTypography): Tex
     };
   }
   if (kind === "heading") {
+    const fontSize = Math.round(typography.headingFontSize * (depth && depth >= 4 ? 0.76 : depth === 3 ? 0.86 : 1));
     return {
       fontFamily: typography.fontFamily,
-      fontSize: typography.headingFontSize,
-      fontWeight: 700,
-      lineHeight: Math.round(typography.headingFontSize * typography.lineSpacing),
+      fontSize,
+      fontWeight: depth && depth >= 4 ? 600 : 700,
+      lineHeight: Math.round(fontSize * typography.lineSpacing),
     };
   }
   if (kind === "focus") {
@@ -680,28 +687,21 @@ function textColumnWidth(safeWidth: number) {
 
 function wrapText(text: string, maxWidth: number, style: TextStyle, measurer: TextMeasurer): string[] {
   const lines: string[] = [];
-  const sourceLines = text.split("\n");
-  for (const sourceLine of sourceLines) {
-    let line = "";
-    for (const char of Array.from(sourceLine)) {
-      const candidate = line + char;
-      if (line && measurer.measureText(candidate, style).width > maxWidth) {
-        if (BREAK_BEFORE_CHARS.test(char)) {
-          line = candidate;
-          continue;
-        }
-        measurer.measureText(line, style);
-        lines.push(line);
-        line = char;
-      } else {
-        line = candidate;
-      }
+  let line = "";
+  for (const char of Array.from(text)) {
+    if (char === "\n") {
+      // Newlines occupy source offsets even though canvas draws no newline glyph.
+      lines.push(line + char);
+      line = "";
+      continue;
     }
-    if (line) {
-      measurer.measureText(line, style);
+    const candidate = line + char;
+    if (line && measurer.measureText(candidate, style).width > maxWidth && !BREAK_BEFORE_CHARS.test(char)) {
       lines.push(line);
-    }
+      line = char;
+    } else line = candidate;
   }
+  if (line) lines.push(line);
   return lines.length > 0 ? lines : [""];
 }
 
@@ -761,7 +761,9 @@ function inferPageKind(page: Pick<CardLayoutPage, "nodes">): CardLayoutPage["pag
     const match = node.blockId.match(/:page:([A-Za-z]+):\d+:block:/u);
     if (match?.[1]) return match[1] as CardLayoutPage["pageKind"];
   }
-  return undefined;
+  if (page.nodes.some((node) => node.kind === "title")) return "cover";
+  if (page.nodes.every((node) => node.kind === "focus")) return "quote";
+  return "argument";
 }
 
 function applyPageSkeleton(page: CardLayoutPage): CardLayoutPage {
@@ -774,18 +776,11 @@ function applyPageSkeleton(page: CardLayoutPage): CardLayoutPage {
 
   const centered = page.pageKind === "cover" || page.pageKind === "summary" || page.pageKind === "ending" || page.pageKind === "conclusion" || page.pageKind === "epilogue";
   const lowered = page.pageKind === "turning" || page.pageKind === "transition" || page.pageKind === "quote" || page.pageKind === "keyMetric";
-  const compact = contentHeight <= page.safeArea.height * 0.68;
-  // Short pages need editorial breathing room, not a forced vertical center.
-  // Keeping them closer to the reading start makes the remaining whitespace
-  // intentional and leaves room for the page marker without creating a blank
-  // lower half. Covers retain more air than body pages.
   const targetTop = centered
     ? page.safeArea.y + Math.round(available * (page.pageKind === "cover" ? 0.35 : 0.25))
     : lowered
-      ? page.safeArea.y + Math.round(available * 0.28)
-      : compact
-        ? page.safeArea.y + Math.round(available * 0.30)
-        : top;
+      ? page.safeArea.y + Math.round(available * 0.46)
+      : top;
   const delta = Math.max(0, targetTop - top);
   if (!delta) return page;
 

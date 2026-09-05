@@ -1,3 +1,4 @@
+import { checkSourceIntegrity } from "../content/integrity";
 import type { SourcePosition, UnifiedArticleBlock, UnifiedArticleContent } from "../content";
 import { getDesignScheme } from "../design-schemes";
 import type { PlatformId } from "../platforms/types";
@@ -6,8 +7,25 @@ import { buildPlatformDesignPlans } from "./platform-planner";
 import type { DesignPlan, PagePlan, PlannedContentBlock, PlatformDesignPlan } from "./types";
 
 export function buildPlatformArticle(source: UnifiedArticleContent, platform: PlatformId, plan: DesignPlan): UnifiedArticleContent {
-  const platformPlan = resolvePlatformPlan(source, platform, plan);
   const sourceBlocks = new Map(source.blocks.map((block) => [block.id, block]));
+  if (plan.generationMode === "layoutOnly") {
+    // Rebuild from immutable source even for plans saved by older, lossy versions.
+    const preserved = buildPlatformDesignPlans(source, plan.blueprint, getDesignScheme(plan.recommendedScheme), {
+      themeId: plan.recommendedThemeId, contentLayoutId: plan.contentLayoutId,
+    })[platform];
+    const cards = platform === "xiaohongshu" || platform === "douyinImage";
+    const blocks = preserved.pages.flatMap((page, index) => {
+      const originals = page.blocks.flatMap((block) => block.sourceBlockIds.flatMap((id) => {
+        const original = sourceBlocks.get(id);
+        return original ? [{ ...original, source: { ...original.source }, ...(original.type === "list" ? { items: [...original.items] } : {}) }] : [];
+      }));
+      return cards && index < preserved.pages.length - 1 ? [...originals, createPageBreak(source, `${page.id}:break`)] : originals;
+    });
+    const output = { ...source, blocks };
+    if (!checkSourceIntegrity(source, output).ok) throw new Error("排版完整性校验失败，已阻止生成不完整的成稿。");
+    return output;
+  }
+  const platformPlan = resolvePlatformPlan(source, platform, plan);
   const blocks = platform === "wechat"
     ? renderWechatPages(platformPlan.pages, source, sourceBlocks)
     : platform === "xiaohongshu"

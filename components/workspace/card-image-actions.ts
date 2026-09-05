@@ -21,30 +21,38 @@ export function createCardPngFilename(title: string, platform: PlatformId, pageN
 }
 
 export async function renderCardPagePngBlob(page: CardLayoutPage, imageUrlByBlock: Record<string, string>, options: CardImageRenderOptions = {}) {
+  if (page.overflow.length) throw new Error("页面存在溢出，请调整字号或拆页后再导出。");
+  if (typeof document !== "undefined" && document.fonts?.ready) await document.fonts.ready;
   const canvas = options.createCanvas?.() ?? document.createElement("canvas");
   canvas.width = page.canvas.width;
   canvas.height = page.canvas.height;
   const ctx = canvas.getContext("2d");
-  if (!ctx) return undefined;
-  const images = await loadCardCanvasImages(page, imageUrlByBlock, options.loadImage);
+  if (!ctx) throw new Error("浏览器无法创建图片画布，请刷新后重试。");
+  const images = await loadCardCanvasImages(page, imageUrlByBlock, options.loadImage, true);
   const drawPage = options.platform === "douyinImage" ? drawDouyinImagePage : drawXiaohongshuImagePage;
   drawPage(ctx, page, { images, preset: options.preset, platform: options.platform });
   return canvasToBlob(canvas, "image/png");
 }
 
-export async function loadCardCanvasImages(page: CardLayoutPage, imageUrlByBlock: Record<string, string>, loadImage: CardImageLoader = loadBrowserImage) {
+export async function loadCardCanvasImages(page: CardLayoutPage, imageUrlByBlock: Record<string, string>, loadImage: CardImageLoader = loadBrowserImage, strict = false) {
   const entries = await Promise.all(
     page.nodes.flatMap((node) => {
       if (node.kind !== "image") return [];
       const url = imageUrlByBlock[node.blockId] ?? imageUrlByBlock[node.entryId];
-      if (!url) return [];
+      if (!url) {
+        if (strict) throw new Error("图片素材缺失，请重新上传或替换后导出。");
+        return [];
+      }
       return [
         loadImage(url)
           .then((image) => [
             [node.blockId, image],
             [node.entryId, image],
           ])
-          .catch(() => []),
+          .catch(() => {
+            if (strict) throw new Error("图片无法加载或不允许跨域导出，请下载图片后上传到素材库。");
+            return [];
+          }),
       ];
     }),
   );
@@ -60,6 +68,7 @@ function canvasToBlob(canvas: CardCanvas, type: string) {
 async function loadBrowserImage(src: string): Promise<CanvasImageSource> {
   const image = new Image();
   image.decoding = "async";
+  if (/^https?:/i.test(src)) image.crossOrigin = "anonymous";
   image.src = src;
   if (image.decode) {
     await image.decode();

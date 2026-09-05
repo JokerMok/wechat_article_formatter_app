@@ -142,7 +142,7 @@ function drawNode(ctx: CardImageCanvasContext, node: CardLayoutNode, preset: Car
       ctx.fillRect(node.x - 18, node.y + 4, 7, Math.max(28, node.height - 18));
     } else if (preset.variant === "checklist") {
       ctx.fillStyle = preset.rule;
-      ctx.fillRect(node.x - 10, node.y + node.height + 4, Math.min(node.width * 0.34, 260), 8);
+      ctx.fillRect(node.x - 10, (node.lines.at(-1)?.y ?? node.y) + (node.lines.at(-1)?.height ?? 0) + 6, Math.min(node.width * 0.34, 260), 6);
     } else if (preset.variant === "data") {
       ctx.fillStyle = preset.title;
       ctx.fillRect(node.x - 16, node.y - 8, 6, node.height + 12);

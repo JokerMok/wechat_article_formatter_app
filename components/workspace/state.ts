@@ -265,6 +265,8 @@ export function createPlatformDraftSignature(draft: PlatformDraft): string {
     content: draft.content,
     meta: draft.meta,
     editedWechatHtml: draft.editedWechatHtml,
+    ratio: draft.ratio, themeId: draft.themeId, layoutId: draft.layoutId,
+    lockedPageIds: draft.lockedPageIds, manualPages: draft.manualPages,
   });
 }
 
@@ -369,13 +371,9 @@ export function updatePlatformBlock(draft: PlatformDraft, blockId: string, text:
 }
 
 export function updatePlatformTitle(draft: PlatformDraft, title: string): PlatformDraft {
-  return {
-    ...draft,
-    title,
-    meta: { ...draft.meta },
-    status: "edited",
-    updatedAt: new Date().toISOString(),
-  };
+  const firstTitleId = draft.content.blocks.find((block) => block.type === "title")?.id;
+  const content = { ...draft.content, title, blocks: draft.content.blocks.map((block) => block.id === firstTitleId ? updateBlockText(block, title) : block) };
+  return { ...draft, title, content, meta: { ...draft.meta }, status: "edited", updatedAt: new Date().toISOString() };
 }
 
 export function updatePlatformTags(draft: PlatformDraft, tagsText: string): PlatformDraft {
@@ -401,7 +399,7 @@ export function updatePlatformRatio(draft: PlatformDraft, ratio: RatioMode): Pla
   return {
     ...draft,
     ratio,
-    meta: { ...meta, tags: draft.meta.tags.length ? draft.meta.tags : meta.tags },
+    meta: { ...meta, caption: draft.meta.caption, tags: draft.meta.tags },
     status: "edited",
     updatedAt: new Date().toISOString(),
   };
@@ -703,6 +701,18 @@ function cloneBlock(block: UnifiedArticleBlock): UnifiedArticleBlock {
 }
 
 function updateBlockText(block: UnifiedArticleBlock, text: string): UnifiedArticleBlock {
+  if (block.syntax === "markdown" && block.type !== "divider" && block.type !== "pageBreak") {
+    const markdown = block.type === "title" || block.type === "section" || block.type === "subsection"
+      ? `${"#".repeat(block.headingDepth ?? (block.type === "title" ? 1 : 2))} ${text}`
+      : block.type === "quote" ? text.split("\n").map((line) => `> ${line}`).join("\n")
+      : block.type === "code" ? `\`\`\`${block.language ?? ""}\n${text}\n\`\`\`` : text;
+    const parsed = parseSourceDocument(markdown).blocks;
+    if (parsed.length === 1 && parsed[0].type === block.type) {
+      return { ...parsed[0], id: block.id, source: { ...block.source } };
+    }
+    // Keep incompatible edits as visible Markdown; never silently discard them.
+    return { ...block, text, plainText: text, markdown };
+  }
   if (block.type === "list") {
     const items = text
       .split("\n")
@@ -1074,7 +1084,7 @@ function filterEmptyAutomaticCardPages(result: CardLayoutResult, manualPages: Ca
 
 function sanitizeNode(parent: ParentNode) {
   const blockedTags = new Set(["script", "style", "iframe", "object", "embed", "svg", "math", "template", "meta", "link", "base", "form", "input"]);
-  const allowedTags = new Set(["section", "div", "p", "span", "strong", "b", "em", "i", "br", "img", "blockquote", "ul", "ol", "li", "code", "pre", "hr", "a"]);
+  const allowedTags = new Set(["section", "div", "p", "span", "strong", "b", "em", "i", "br", "img", "blockquote", "ul", "ol", "li", "code", "pre", "hr", "a", "h1", "h2", "h3", "h4", "h5", "h6", "table", "thead", "tbody", "tr", "th", "td", "del"]);
   const elements = Array.from(parent.querySelectorAll("*"));
 
   for (const element of elements) {
@@ -1095,6 +1105,7 @@ function sanitizeAttributes(element: Element, tagName: string) {
   const globalAttributes = new Set(["style", "title", "data-wechat-block-type"]);
   const tagAttributes: Record<string, Set<string>> = {
     a: new Set(["href"]),
+    ol: new Set(["start"]),
     img: new Set(["src", "alt", "width", "height"]),
   };
   for (const attribute of Array.from(element.attributes)) {

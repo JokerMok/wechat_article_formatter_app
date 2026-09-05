@@ -143,6 +143,7 @@ describe("OpenAICompatibleProvider", () => {
     });
 
     expectOk(result);
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(result.designPlan.generationMode).toBe("layoutOnly");
     expect(result.versions.wechat?.title).toBe("知识库重构");
     expect(result.versions.wechat?.content.blocks.map((block) => block.plainText).join("\n")).toContain("资料散落在不同地方。");

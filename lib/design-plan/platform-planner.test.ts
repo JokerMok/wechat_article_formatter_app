@@ -70,10 +70,9 @@ describe("platform design planner", () => {
     expect(new Set(plans.map((plan) => plan.recommendedThemeId)).size).toBe(3);
     expect(Object.keys(VISUAL_THEMES)).toHaveLength(3);
     expect(Object.keys(CONTENT_LAYOUTS)).toHaveLength(4);
-    expect(new Set(skeletons).size).toBe(4);
-    expect(skeletons.find((value) => value.includes("step"))).toBeTruthy();
-    expect(skeletons.find((value) => value.includes("conflict") || value.includes("turning"))).toBeTruthy();
-    expect(skeletons.find((value) => value.includes("evidence") || value.includes("interpretation"))).toBeTruthy();
+    // Theme changes must not invent sections or new wording in layout-only mode.
+    expect(skeletons.every(Boolean)).toBe(true);
+    expect(plans.every((plan) => plan.platformPlans.wechat.pages.flatMap((page) => page.sourceBlockIds).join() === article.blocks.map((block) => block.id).join())).toBe(true);
   });
 
   it("creates independent platform plans and keeps layout-only wording traceable", () => {
@@ -99,8 +98,8 @@ describe("platform design planner", () => {
 
   it("maps each selected content skeleton to distinct carousel page roles", () => {
     const article = parseArticleContent(FULL_SEMANTIC_ARTICLE, { mode: "narrative" });
-    const story = analyzeArticleDesign(article, { recommendedScheme: "storyNarrative" });
-    const checklist = analyzeArticleDesign(article, { recommendedScheme: "checklistGuide" });
+    const story = analyzeArticleDesign(article, { recommendedScheme: "storyNarrative", generationMode: "reachOptimized" });
+    const checklist = analyzeArticleDesign(article, { recommendedScheme: "checklistGuide", generationMode: "reachOptimized" });
     const dataArticle = parseArticleContent(`# 数据复盘
 
 报告显示，样本中的使用比例达到42%，项目在3个月内完成4项改造。
@@ -112,7 +111,7 @@ describe("platform design planner", () => {
 ## 边界
 
 这些数字只说明当前项目范围，不能外推为行业结论。`, { mode: "knowledge" });
-    const data = analyzeArticleDesign(dataArticle, { recommendedScheme: "dataInsight" });
+    const data = analyzeArticleDesign(dataArticle, { recommendedScheme: "dataInsight", generationMode: "reachOptimized" });
 
     const storyKinds = story.platformPlans.xiaohongshu.pages.map((page) => page.kind);
     const checklistKinds = checklist.platformPlans.xiaohongshu.pages.map((page) => page.kind);
@@ -134,7 +133,7 @@ describe("platform design planner", () => {
     expect(xhsPages.length).toBeGreaterThanOrEqual(7);
     expect(xhsPages.length).toBeLessThanOrEqual(9);
     expect(douyinPages.length).toBeGreaterThanOrEqual(4);
-    expect(douyinPages.length).toBeLessThanOrEqual(8);
+    expect(douyinPages.length).toBeLessThanOrEqual(article.blocks.length);
     expect([...sectionRoles]).toEqual(expect.arrayContaining(["background", "example", "conflict", "method", "boundary"]));
     const visibleHeadings = xhsPages.flatMap((page) => page.blocks).filter((block) => block.role === "heading");
     expect(visibleHeadings.length).toBeGreaterThan(0);
@@ -172,7 +171,7 @@ describe("platform design planner", () => {
 
   it("uses metric, interpretation and boundary pages for grounded data content", () => {
     const article = parseArticleContent(`# 3 个月企业 AI 复盘\n\n3 个月内完成 4 类资料盘点，并把项目拆成 2 条推进线。\n\n## 结果对比\n\n相比只做演示，双线推进能同时暴露应用问题和基础缺口。\n\n## 判断边界\n\n这些数字只说明当前项目范围，不能外推为行业结论。`, { mode: "narrative" });
-    const plan = analyzeArticleDesign(article, { recommendedScheme: "dataInsight" });
+    const plan = analyzeArticleDesign(article, { recommendedScheme: "dataInsight", generationMode: "reachOptimized" });
     const kinds = plan.platformPlans.xiaohongshu.pages.map((page) => page.kind);
 
     expect(kinds).toContain("keyMetric");
@@ -218,7 +217,7 @@ describe("platform design planner", () => {
 第一段原文提供背景信息。
 
 第二段原文给出后续判断。`, { mode: "knowledge" });
-    const base = analyzeArticleDesign(article);
+    const base = analyzeArticleDesign(article, { generationMode: "reachOptimized" });
     const paragraphIds = article.blocks.filter((block) => block.type === "paragraph").map((block) => block.id);
     const editorialPlan: EditorialPlan = {
       schemaVersion: 1,

@@ -11,6 +11,7 @@ import {
 import type { PlatformId } from "../platforms/types";
 import { cleanPublishingText, isGenericStructureHeading, publicationBlocks } from "./content-filter";
 import { editorialSectionToContentSection, editorialUnitsForSection } from "./editorial-plan";
+import { planPreservedPages } from "./preserved-layout";
 import type {
   ContentBlueprint,
   ContentSection,
@@ -58,6 +59,7 @@ export function buildPlatformDesignPlans(
 }
 
 export function buildWechatPlan(input: PlatformPlannerInput): PlatformDesignPlan {
+  if (input.blueprint.generationMode === "layoutOnly") return buildPreservedPlan(input, "wechat");
   const { source, blueprint, scheme, theme, layout, editorialPlan } = input;
   const units = collectSourceUnits(source);
   const sections = sectionsForPlanner(source, blueprint, units, editorialPlan);
@@ -97,6 +99,7 @@ export function buildWechatPlan(input: PlatformPlannerInput): PlatformDesignPlan
 }
 
 export function buildXiaohongshuPlan(input: PlatformPlannerInput): PlatformDesignPlan {
+  if (input.blueprint.generationMode === "layoutOnly") return buildPreservedPlan(input, "xiaohongshu");
   const { source, blueprint, scheme, theme, layout, editorialPlan } = input;
   const units = collectSourceUnits(source);
   const sections = sectionsForPlanner(source, blueprint, units, editorialPlan);
@@ -138,6 +141,7 @@ export function buildXiaohongshuPlan(input: PlatformPlannerInput): PlatformDesig
 }
 
 export function buildDouyinImagePlan(input: PlatformPlannerInput): PlatformDesignPlan {
+  if (input.blueprint.generationMode === "layoutOnly") return buildPreservedPlan(input, "douyinImage");
   const { source, blueprint, scheme, theme, layout, editorialPlan } = input;
   const units = collectSourceUnits(source);
   const sections = compactDouyinSections(sectionsForPlanner(source, blueprint, units, editorialPlan));
@@ -181,6 +185,7 @@ export function buildDouyinImagePlan(input: PlatformPlannerInput): PlatformDesig
 }
 
 export function buildDouyinLongformPlan(input: PlatformPlannerInput): PlatformDesignPlan {
+  if (input.blueprint.generationMode === "layoutOnly") return buildPreservedPlan(input, "douyinLongform");
   const { source, blueprint, scheme, theme, layout, editorialPlan } = input;
   const units = collectSourceUnits(source);
   const sections = sectionsForPlanner(source, blueprint, units, editorialPlan);
@@ -217,6 +222,16 @@ export function buildDouyinLongformPlan(input: PlatformPlannerInput): PlatformDe
   }
 
   return createPlatformPlan(source, blueprint, scheme, theme, layout.id, "douyinLongform", pages, publishCopyFor(units, editorialPlan), { format: "text" }, editorialPlan);
+}
+
+function buildPreservedPlan(input: PlatformPlannerInput, platform: PlatformId): PlatformDesignPlan {
+  const { source, blueprint, scheme, theme, layout } = input;
+  const pages = planPreservedPages(source, platform, blueprint);
+  const cards = platform === "xiaohongshu" || platform === "douyinImage";
+  const plan = createPlatformPlan(source, blueprint, scheme, theme, layout.id, platform, pages,
+    source.blocks.map((block) => block.type === "image" ? block.markdown : block.text).join("\n\n"),
+    cards ? { format: "png", width: 1080, height: 1440, aspectRatio: "3:4" } : { format: platform === "wechat" ? "html" : "text" });
+  return { ...plan, title: source.title ?? "未命名文章" };
 }
 
 function sectionsForPlanner(source: UnifiedArticleContent, blueprint: ContentBlueprint, units: SourceUnit[], editorialPlan?: EditorialPlan) {

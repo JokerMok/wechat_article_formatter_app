@@ -149,4 +149,6 @@ export type FlowEntry = {
   sourceLength?: number;
   fragmentIndex?: number;
   keepWithNext?: boolean;
+  softBreak?: boolean;
+  headingDepth?: number;
 };
