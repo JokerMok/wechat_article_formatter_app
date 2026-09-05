@@ -192,6 +192,7 @@ export type GeneratedPlatformDraft = z.infer<typeof generatedPlatformDraftSchema
 export type GeneratedPlatformResponse = z.infer<typeof generatedResponseSchema>;
 
 export type GeneratePlatformVersionsOptions = {
+  analyzedDesignPlan?: DesignPlan;
   provider?: AIProvider;
   source: UnifiedArticleContent;
   sourceVersionId?: string;
@@ -234,8 +235,20 @@ export type ProviderGenerateOptions = {
   sourceVersionId?: string;
   generationMode?: GenerationMode;
   platforms: PlatformId[];
+  analysis?: GenerationAnalysis;
+  validationFeedback?: string[];
   signal?: AbortSignal;
 };
+
+export const generationAnalysisSchema = z.strictObject({
+  centralThesis: z.string().max(2000),
+  sections: z.array(z.strictObject({
+    id: z.string().max(200),
+    role: z.string().max(50),
+    sourceBlockIds: z.array(z.string().max(200)).min(1).max(1000),
+  })).max(300),
+});
+export type GenerationAnalysis = z.infer<typeof generationAnalysisSchema>;
 
 export type ProviderGenerateResult = {
   response: GeneratedPlatformResponse;
@@ -336,7 +349,7 @@ export class OpenAICompatibleProvider {
           "content-type": "application/json",
           authorization: `Bearer ${this.apiKey}`,
         },
-        body: JSON.stringify(this.buildRequestBody(options.source, options.platforms, options.generationMode ?? "layoutOnly")),
+        body: JSON.stringify(this.buildRequestBody(options.source, options.platforms, options.generationMode ?? "layoutOnly", options.analysis, options.validationFeedback)),
         signal: abortController.signal,
       });
       throwIfAborted();
@@ -369,9 +382,35 @@ export class OpenAICompatibleProvider {
       }
 
       const sanitized = sanitizeGeneratedResponse(parsedContent.value, options.source, options.generationMode ?? "layoutOnly");
-      const generated = generatedResponseSchema.safeParse(sanitized);
+      const generated = isRecord(sanitized) && "editorialPlans" in sanitized
+        ? generatedEditorialResponseSchema.safeParse(sanitized)
+        : generatedResponseSchema.safeParse(sanitized);
       if (!generated.success) {
         throw this.schemaError(compactZodIssues(generated.error), responseDiagnostics);
+      }
+      if ("editorialPlans" in generated.data) {
+        const sourceIds = new Set(options.source.blocks.map((block) => block.id));
+        const plans = generated.data.editorialPlans;
+        if (new Set(plans.map((plan) => plan.platform)).size !== plans.length || plans.some((plan) => !options.platforms.includes(plan.platform))) {
+          throw this.schemaError(["Unexpected or duplicate platform."], responseDiagnostics);
+        }
+        for (const plan of plans) {
+          assertEditorialBodyReferences(plan, options.source);
+          if (containsPresentationSyntax(editorialPlanText(plan))) throw this.schemaError(["Model output contains executable or presentation markup."], responseDiagnostics);
+          if (new Set(plan.sections.map((section) => section.id)).size !== plan.sections.length || plan.sections.some((section) => section.sourceBlockIds.some((id) => !sourceIds.has(id)))) {
+            throw this.schemaError(["Section identity or source reference is invalid."], responseDiagnostics);
+          }
+          if (!validateGeneratedFacts(editorialPlanText(plan), options.source).ok) {
+            throw this.schemaError(["Unsupported numeric or quoted claim."], responseDiagnostics);
+          }
+          for (const section of plan.sections) {
+            const referenced = options.source.blocks.filter((block) => section.sourceBlockIds.includes(block.id));
+            const scopedSource = { ...options.source, sourceText: referenced.map((block) => block.markdown).join("\n"), blocks: referenced };
+            if (!validateGeneratedFacts([section.heading, section.body, ...(section.bullets ?? [])].filter(Boolean).join("\n"), scopedSource).ok) {
+              throw this.schemaError(["Claim is not supported by its referenced source blocks."], responseDiagnostics);
+            }
+          }
+        }
       }
 
       return {
@@ -487,7 +526,7 @@ export class OpenAICompatibleProvider {
     }
   }
 
-  private buildRequestBody(source: UnifiedArticleContent, platforms: PlatformId[], generationMode: GenerationMode) {
+  private buildRequestBody(source: UnifiedArticleContent, platforms: PlatformId[], generationMode: GenerationMode, analysis?: GenerationAnalysis, validationFeedback?: string[]) {
     return {
       model: this.model,
       temperature: 0.2,
@@ -498,13 +537,15 @@ export class OpenAICompatibleProvider {
         {
           role: "system",
           content:
-            `Return only JSON with schemaVersion:1 and editorialPlans[]. Each editorial plan must contain platform, contentType, title, optional hook, sections, optional summary and tags. Each section must contain id, role, sourceBlockIds, and optional heading, body or bullets. role must be one of context, claim, evidence, example, comparison, method, warning, conclusion. sourceBlockIds must refer to the supplied source blocks. Do not return designPlan, drafts, UnifiedArticleContent, HTML, CSS, JavaScript, or page geometry. ${generationInstruction(generationMode)} ${platformGenerationInstruction(platforms, source.sourceText.length)} Preserve source facts and important limitations; do not invent data, cases, people, policies, quotes, or outcomes.`,
+            `Return only JSON matching this exact schema: ${JSON.stringify(z.toJSONSchema(generatedEditorialResponseSchema))}. Optional fields without content must be omitted, not null or empty strings. Use only the requested platforms and the enumerated contentType and role values. sourceBlockIds must refer to the supplied source blocks; each section must include every source block supporting its claims. Do not return designPlan, drafts, UnifiedArticleContent, HTML, CSS, JavaScript, or page geometry. ${generationInstruction(generationMode)} ${platformGenerationInstruction(platforms, source.sourceText.length)} Preserve source facts and important limitations; do not invent data, cases, people, policies, quotes, or outcomes. Keep numeric quantities and their units exactly as written in the source; do not turn authored lists into unsupported numeric claims. Quotation marks are only for verbatim source quotes.`,
         },
         {
           role: "user",
           content: JSON.stringify({
             platforms,
             source: buildModelSource(source),
+            ...(analysis ? { analysis } : {}),
+            ...(validationFeedback?.length ? { validationFeedback, correction: "The previous attempt failed validation. Correct these issues against the supplied schema and source. Return the complete corrected editorial plan, without extra fields." } : {}),
           }),
         },
       ],
@@ -515,6 +556,7 @@ export class OpenAICompatibleProvider {
     return {
       model: this.model,
       temperature: 0.1,
+      ...(this.reasoningEffort ? { reasoning_effort: this.reasoningEffort } : {}),
       ...(this.maxOutputTokens ? { max_tokens: Math.min(this.maxOutputTokens, 6000) } : {}),
       response_format: { type: "json_object" },
       messages: [
@@ -569,16 +611,10 @@ function buildModelSource(source: UnifiedArticleContent) {
     title: source.title,
     parseMode: source.parseMode,
     sourceFormat: source.sourceFormat,
-    sourceText: source.sourceText,
     blocks: source.blocks.map((block) => ({
       id: block.id,
       type: block.type,
-      text: block.text,
-    })),
-    segments: (source.segments ?? []).map((segment) => ({
-      id: segment.id,
-      blockId: segment.blockId,
-      text: segment.text,
+      text: block.markdown,
     })),
   };
 }
@@ -1021,7 +1057,7 @@ function platformGenerationInstruction(platforms: PlatformId[], sourceLength: nu
 function generationInstruction(mode: GenerationMode) {
   return mode === "layoutOnly"
     ? "Layout-only mode: preserve the original title, wording, facts, conclusions, qualifiers, and order. Only identify structure and platform presentation; do not add a call to action or new conclusion."
-    : "Reach-optimized mode: you may improve title candidates, opening hook, order, repetition, summary, and platform expression. Include a concise modificationSummary and never overwrite or contradict source facts.";
+    : "Reach-optimized mode: you may improve the title, opening hook, order, repetition, summary, and platform expression. Never contradict source facts. Do not add modificationSummary or fields outside the schema; the application computes the before/after change summary.";
 }
 
 export async function generatePlatformVersions(options: GeneratePlatformVersionsOptions): Promise<GeneratePlatformVersionsResult> {
@@ -1031,7 +1067,10 @@ export async function generatePlatformVersions(options: GeneratePlatformVersions
   const generationMode = options.generationMode ?? "reachOptimized";
   const now = options.now?.() ?? new Date().toISOString();
   const fallbackVersions = buildFallbackPlatformVersions(options.source, platforms, now);
-  const fallbackDesignPlan = analyzeArticleDesign(options.source, { generationMode });
+  const fallbackDesignPlan = options.analyzedDesignPlan && options.analyzedDesignPlan.sourceRevision === options.sourceVersionId
+    && options.analyzedDesignPlan.generationMode === generationMode
+    ? options.analyzedDesignPlan
+    : analyzeArticleDesign(options.source, { generationMode });
   const currentVersions = options.existingVersions ?? {};
 
   // Layout-only is deterministic by contract. The semantic analysis may have
@@ -1083,6 +1122,10 @@ export async function generatePlatformVersions(options: GeneratePlatformVersions
       sourceVersionId: options.sourceVersionId,
       generationMode,
       platforms,
+      analysis: {
+        centralThesis: fallbackDesignPlan.blueprint.centralThesis,
+        sections: fallbackDesignPlan.blueprint.sections.map(({ id, role, sourceBlockIds }) => ({ id, role, sourceBlockIds })),
+      },
       signal: options.signal,
     });
     let designPlan: DesignPlan;
@@ -1179,7 +1222,8 @@ export function buildPlatformChangeRecords(
 
 export function validateGeneratedFacts(generatedText: string, source: UnifiedArticleContent) {
   const sourceText = sourceSupportedText(source);
-  const unsupportedNumbers = unique(extractNumbers(generatedText).filter((number) => !sourceText.includes(number)));
+  const sourceNumbers = new Set(extractNumbers(sourceText));
+  const unsupportedNumbers = unique(extractNumbers(generatedText).filter((number) => !sourceNumbers.has(number)));
   const unsupportedQuotes = unique(extractQuotedClaims(generatedText).filter((quote) => !sourceText.includes(quote)));
 
   return {
@@ -1217,12 +1261,18 @@ function buildGeneratedPlatformVersions(
 
     const factCheck = validateGeneratedFacts(generatedFactText(draft), source);
     if (!factCheck.ok) {
-      if (factCheck.unsupportedNumbers.length > 0) {
-        factCheckWarnings.push(`${platform}:fact_check_warning:unsupported_number_count:${factCheck.unsupportedNumbers.length}`);
-      }
-      if (factCheck.unsupportedQuotes.length > 0) {
-        factCheckWarnings.push(`${platform}:fact_check_warning:unsupported_quote_count:${factCheck.unsupportedQuotes.length}`);
-      }
+      throw new AIProviderError({
+        code: "schema",
+        message: "优化稿包含无法在原文核对的数据或引用，已保留原稿。请检查原文或重新生成。",
+        retryable: false,
+        diagnostics: {
+          provider: "openai-compatible", model: "unknown", errorCode: "schema",
+          details: [
+            `${platform}:fact_check_rejected:unsupported_number_count:${factCheck.unsupportedNumbers.length}`,
+            `${platform}:fact_check_rejected:unsupported_quote_count:${factCheck.unsupportedQuotes.length}`,
+          ],
+        },
+      });
     }
 
     versions[platform] = {
@@ -1239,6 +1289,13 @@ function buildGeneratedPlatformVersions(
   }
 
   return { versions, factCheckWarnings };
+}
+
+function assertEditorialBodyReferences(plan: EditorialPlan, source: UnifiedArticleContent) {
+  const bodyIds = new Set(source.blocks.filter((block) => !["title", "section", "subsection", "divider", "pageBreak"].includes(block.type) && block.plainText.trim()).map((block) => block.id));
+  if (bodyIds.size && !plan.sections.some((section) => section.sourceBlockIds.some((id) => bodyIds.has(id)))) {
+    throw new AIProviderError({ code: "schema", message: "AI 未返回有效正文，已保留当前编辑稿。请重试。", retryable: true, diagnostics: { provider: "openai-compatible", model: "unknown", errorCode: "schema", details: ["No section references source body."] } });
+  }
 }
 
 function buildEditorialPlatformVersions(
@@ -1272,14 +1329,21 @@ function buildEditorialPlatformVersions(
     const plan = generationMode === "layoutOnly"
       ? buildLocalEditorialPlan(source, designPlan.blueprint, platform)
       : requestedPlan;
+    assertEditorialBodyReferences(plan, source);
     const factCheck = validateGeneratedFacts(editorialPlanText(plan), source);
     if (!factCheck.ok) {
-      if (factCheck.unsupportedNumbers.length > 0) {
-        factCheckWarnings.push(`${platform}:fact_check_warning:unsupported_number_count:${factCheck.unsupportedNumbers.length}`);
-      }
-      if (factCheck.unsupportedQuotes.length > 0) {
-        factCheckWarnings.push(`${platform}:fact_check_warning:unsupported_quote_count:${factCheck.unsupportedQuotes.length}`);
-      }
+      throw new AIProviderError({
+        code: "schema",
+        message: "优化稿包含无法在原文核对的数据或引用，已保留原稿。请检查原文或重新生成。",
+        retryable: false,
+        diagnostics: {
+          provider: "openai-compatible", model: "unknown", errorCode: "schema",
+          details: [
+            `${platform}:fact_check_rejected:unsupported_number_count:${factCheck.unsupportedNumbers.length}`,
+            `${platform}:fact_check_rejected:unsupported_quote_count:${factCheck.unsupportedQuotes.length}`,
+          ],
+        },
+      });
     }
 
     const summary = plan.summary || plan.sections.map((section) => section.body || section.bullets?.join("；") || "").find(Boolean) || designPlan.coreMessage;
@@ -1511,7 +1575,7 @@ function sanitizeGeneratedResponse(value: unknown, source: UnifiedArticleContent
   if (isRecord(value) && Array.isArray(value.editorialPlans)) {
     return {
       schemaVersion: 1,
-      editorialPlans: value.editorialPlans.map((plan) => sanitizeEditorialPlan(plan, source, generationMode)),
+      editorialPlans: value.editorialPlans.map(sanitizeEditorialPlan),
     };
   }
   if (!isRecord(value) || !Array.isArray(value.drafts)) {
@@ -1526,63 +1590,20 @@ function sanitizeGeneratedResponse(value: unknown, source: UnifiedArticleContent
   };
 }
 
-function sanitizeEditorialPlan(value: unknown, source: UnifiedArticleContent, generationMode: GenerationMode): unknown {
+function sanitizeEditorialPlan(value: unknown): unknown {
   if (!isRecord(value)) return value;
-  const platform = value.platform;
-  const fallback = typeof platform === "string" && isPlatformId(platform)
-    ? buildLocalEditorialPlan(source, analyzeArticleDesign(source, { generationMode }).blueprint, platform)
-    : undefined;
-  const validSourceIds = new Set(source.blocks.map((block) => block.id));
-  const sections = Array.isArray(value.sections)
-    ? value.sections.flatMap((item, index) => {
-        if (!isRecord(item) || typeof item.id !== "string" || !isEditorialSectionRole(item.role)) return [];
-        const sourceBlockIds = Array.isArray(item.sourceBlockIds)
-          ? item.sourceBlockIds.filter((id): id is string => typeof id === "string" && validSourceIds.has(id))
-          : [];
-        if (!sourceBlockIds.length) return [];
-        const heading = sanitizeEditorialText(item.heading, 160);
-        const body = sanitizeEditorialText(item.body, 12000);
-        const bullets = Array.isArray(item.bullets)
-          ? item.bullets.map((bullet) => sanitizeEditorialText(bullet, 500)).filter((bullet): bullet is string => Boolean(bullet)).slice(0, 12)
-          : undefined;
-        return [{
-          id: item.id || `editorial-section-${index + 1}`,
-          role: item.role,
-          ...(heading && !isGenericStructureHeading(heading) ? { heading } : {}),
-          ...(body ? { body } : {}),
-          ...(bullets?.length ? { bullets } : {}),
-          sourceBlockIds: [...new Set(sourceBlockIds)],
-        }];
-      })
-    : [];
-  if (!fallback || typeof platform !== "string" || !isPlatformId(platform)) return value;
-  const candidate = {
-    schemaVersion: 1 as const,
-    platform,
-    contentType: isContentType(value.contentType) ? value.contentType : fallback.contentType,
-    title: sanitizeEditorialText(value.title, 120) || fallback.title,
-    hook: sanitizeEditorialText(value.hook, 500),
-    sections: sections.length ? sections : fallback.sections,
-    summary: sanitizeEditorialText(value.summary, 500),
-    tags: Array.isArray(value.tags)
-      ? value.tags.map((tag) => sanitizeEditorialText(tag, 32)).filter((tag): tag is string => Boolean(tag)).slice(0, 8)
-      : fallback.tags,
+  // Normalize the optional per-plan version only. Never truncate body text,
+  // drop invalid sections, or silently replace model output with a local plan.
+  const candidate = { schemaVersion: 1, ...value };
+  const parsed = editorialPlanSchema.safeParse(candidate);
+  if (!parsed.success) return candidate;
+  return {
+    ...parsed.data,
+    sections: parsed.data.sections.map((section) => {
+      if (!section.heading || !isGenericStructureHeading(section.heading)) return section;
+      return { ...section, heading: undefined };
+    }),
   };
-  return editorialPlanSchema.safeParse(candidate).success ? candidate : value;
-}
-
-function sanitizeEditorialText(value: unknown, maxLength: number): string | undefined {
-  if (typeof value !== "string" || containsPresentationSyntax(value)) return undefined;
-  const sanitized = sanitizeGeneratedText(value).slice(0, maxLength).trim();
-  return sanitized || undefined;
-}
-
-function isPlatformId(value: string): value is PlatformId {
-  return (aiPlatformIds as readonly string[]).includes(value);
-}
-
-function isEditorialSectionRole(value: unknown): value is EditorialPlan["sections"][number]["role"] {
-  return ["context", "claim", "evidence", "example", "comparison", "method", "warning", "conclusion"].includes(value as string);
 }
 
 function sanitizeGeneratedDesignPlan(value: unknown, source: UnifiedArticleContent, generationMode: GenerationMode): DesignPlan | undefined {
@@ -1835,8 +1856,7 @@ function cloneUnifiedArticleContent(content: UnifiedArticleContent): UnifiedArti
 }
 
 function extractNumbers(text: string) {
-  const matches = text.match(/\d+(?:[.,]\d+)?%?/g) ?? [];
-  return matches.map((match) => match.replace(/%$/, ""));
+  return text.match(/\d+(?:[.,]\d+)*(?:\s*(?:%|％|万亿|亿元|万元|亿|万|元|倍|年|月|日|天|小时|分钟|秒|人|项|次|个))?/g)?.map((value) => value.replace(/\s/g, "").replace("％", "%")) ?? [];
 }
 
 function extractQuotedClaims(text: string) {
@@ -1900,7 +1920,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function compactZodIssues(error: z.ZodError) {
   return error.issues.slice(0, 5).map((issue) => {
     const path = issue.path.map(safePathSegment).join(".") || "response";
-    return `schema_issue path=${path} code=${issue.code}`;
+    const keys = issue.code === "unrecognized_keys" ? ` keys=${issue.keys.map(safePathSegment).join(",")}` : "";
+    return `schema_issue path=${path} code=${issue.code}${keys}`;
   });
 }
 

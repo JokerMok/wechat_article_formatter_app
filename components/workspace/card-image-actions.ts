@@ -21,6 +21,11 @@ export function createCardPngFilename(title: string, platform: PlatformId, pageN
 }
 
 export async function renderCardPagePngBlob(page: CardLayoutPage, imageUrlByBlock: Record<string, string>, options: CardImageRenderOptions = {}) {
+  const canvas = await renderCardPageCanvas(page, imageUrlByBlock, options);
+  return canvasToBlob(canvas, "image/png");
+}
+
+export async function renderCardPageCanvas(page: CardLayoutPage, imageUrlByBlock: Record<string, string>, options: CardImageRenderOptions = {}) {
   if (page.overflow.length) throw new Error("页面存在溢出，请调整字号或拆页后再导出。");
   if (typeof document !== "undefined" && document.fonts?.ready) await document.fonts.ready;
   const canvas = options.createCanvas?.() ?? document.createElement("canvas");
@@ -31,7 +36,7 @@ export async function renderCardPagePngBlob(page: CardLayoutPage, imageUrlByBloc
   const images = await loadCardCanvasImages(page, imageUrlByBlock, options.loadImage, true);
   const drawPage = options.platform === "douyinImage" ? drawDouyinImagePage : drawXiaohongshuImagePage;
   drawPage(ctx, page, { images, preset: options.preset, platform: options.platform });
-  return canvasToBlob(canvas, "image/png");
+  return canvas;
 }
 
 export async function loadCardCanvasImages(page: CardLayoutPage, imageUrlByBlock: Record<string, string>, loadImage: CardImageLoader = loadBrowserImage, strict = false) {
@@ -69,14 +74,17 @@ async function loadBrowserImage(src: string): Promise<CanvasImageSource> {
   const image = new Image();
   image.decoding = "async";
   if (/^https?:/i.test(src)) image.crossOrigin = "anonymous";
-  image.src = src;
-  if (image.decode) {
-    await image.decode();
-  } else {
-    await new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
-      image.onerror = () => reject(new Error("image load failed"));
-    });
-  }
+  await new Promise<void>((resolve, reject) => {
+    const finish = (error?: Error) => {
+      clearTimeout(timer);
+      image.onload = null;
+      image.onerror = null;
+      if (error) { image.src = ""; reject(error); } else resolve();
+    };
+    const timer = setTimeout(() => finish(new Error("image load timeout")), 15000);
+    image.onload = () => finish();
+    image.onerror = () => finish(new Error("image load failed"));
+    image.src = src;
+  });
   return image;
 }

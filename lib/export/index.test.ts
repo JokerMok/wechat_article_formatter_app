@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UnifiedArticleContent } from "../content";
 import type { CardAspectRatio, CardImageCanvasContext, CardLayoutPage } from "../renderers/cards";
 import type { AssetBlobRepository, ProjectDocument, StoredAssetRecord } from "../storage";
+import { toDouyinImageText } from "../platforms/douyin";
 import {
   createExportBaseName,
   ExportPackageError,
@@ -356,8 +357,10 @@ describe("platform exports", () => {
   });
 
   it("exports Douyin image packages for 9:16 with caption copy and tags", async () => {
+    const content = articleContent();
     const result = await exportDouyinImagePackage({
-      content: articleContent(),
+      content,
+      output: toDouyinImageText(content, { ratio: "9:16", topicTags: ["排版验证", "图文发布"] }),
       ratio: "9:16",
       exportedAt,
       pages: [page("douyin", 1, "Douyin page", "9:16")],
@@ -367,14 +370,32 @@ describe("platform exports", () => {
     expect(result.output.ratio).toBe("9:16");
     expect(result.images[0]?.path).toBe("images/original-title-20260102-030405-douyin-9x16-01.png");
     expect(result.copyText).toContain(result.output.caption);
-    expect(result.tagsText).toContain("#Original");
+    expect(result.tagsText).toBe("#排版验证 #图文发布");
+    expect(result.copyText).not.toContain("#Original");
     for (const tag of result.output.tags) {
       expect(result.copyText.split(`#${tag}`).length - 1).toBe(1);
     }
 
     const files = await zipEntries(result.zipBlob);
+    await expect(files["tags.txt"].async("text")).resolves.toBe("#排版验证 #图文发布");
     await expect(files["images/original-title-20260102-030405-douyin-9x16-01.png"].async("text")).resolves.toBe("png:9:16");
     await expect(files["manifest.json"].async("text")).resolves.toContain('"ratio": "9:16"');
+  });
+
+  it("exports an empty tag file rather than fabricating tags from a title", async () => {
+    const result = await exportDouyinImagePackage({
+      content: articleContent(),
+      ratio: "9:16",
+      exportedAt,
+      pages: [page("douyin", 1, "Douyin page", "9:16")],
+      renderer: async () => new Blob(["png"], { type: "image/png" }),
+    });
+    expect(result.output.tags).toEqual([]);
+    expect(result.tagsText).toBe("");
+    expect(result.copyText).toContain("Original Title");
+    expect(result.copyText).not.toContain("#Original");
+    const files = await zipEntries(result.zipBlob);
+    await expect(files["tags.txt"].async("text")).resolves.toBe("");
   });
 
   it("exports Douyin image packages for 3:4 with matching page geometry", async () => {

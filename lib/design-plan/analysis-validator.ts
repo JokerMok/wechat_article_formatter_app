@@ -53,7 +53,7 @@ export function validateAnalysisCompleteness(source: UnifiedArticleContent, blue
     .map(([id]) => id);
 
   const unsupportedItems = allSemanticUnits(blueprint)
-    .filter((unit) => !unit.sourceBlockIds.some((blockId) => validBlockIds.has(blockId)) || !containsSourceText(source, unit.text))
+    .filter((unit) => !unit.sourceBlockIds.some((blockId) => validBlockIds.has(blockId)) || !containsSourceText(source, unit))
     .map((unit) => unit.id);
   const contradictoryCounts = allSemanticUnits(blueprint)
     .filter((unit) => blueprint.facts.some((fact) => fact.id === unit.id) && looksSubjective(unit.text))
@@ -133,9 +133,10 @@ function fallbackSegments(source: UnifiedArticleContent): SourceSegment[] {
     });
 }
 
-function containsSourceText(source: UnifiedArticleContent, text: string) {
-  const normalized = normalize(text);
-  return normalized.length >= 2 && normalize(source.sourceText).includes(normalized);
+function containsSourceText(source: UnifiedArticleContent, unit: SemanticUnit) {
+  const normalized = normalize(unit.text);
+  const referencedText = unit.sourceBlockIds.map((id) => source.blocks.find((block) => block.id === id)?.plainText ?? "").join(" ");
+  return normalized.length >= 2 && normalize(referencedText).includes(normalized);
 }
 
 function looksSubjective(text: string) {

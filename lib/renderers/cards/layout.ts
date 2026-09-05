@@ -1,4 +1,4 @@
-import { markdownPublicationText } from "../../content/markdown";
+import { markdownPublicationParts, markdownPublicationText } from "../../content/markdown";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../../content";
 import { createApproximateTextMeasurer } from "./measurement";
 import type {
@@ -176,8 +176,22 @@ function createFlowEntries(blocks: UnifiedArticleBlock[]): FlowEntry[] {
   blocks.forEach((block, blockIndex) => {
     if (block.type === "divider") return;
     if (block.type === "pageBreak") {
-      entries.push({ id: `${block.id}:break`, blockId: block.id, kind: "pageBreak", text: "", sourceIndex: blockIndex * 1_000, softBreak: block.id.includes(":page:") && !block.id.includes(":page:cover:") });
+      entries.push({ id: `${block.id}:break`, blockId: block.id, kind: "pageBreak", text: "", sourceIndex: blockIndex * 1_000, softBreak: block.id.includes(":page:") && !block.id.includes(":page:cover:") && !block.id.includes(":semantic-boundary") });
       return;
+    }
+    if (block.syntax === "markdown" && block.type !== "image") {
+      const parts = markdownPublicationParts(block.markdown);
+      if (parts.some((part) => part.kind === "image")) {
+        parts.forEach((part, index) => entries.push({
+          id: `${block.id}:part:${index}`,
+          blockId: part.kind === "image" ? `${block.id}:inline-image:${part.index}` : block.id,
+          kind: part.kind === "image" ? "image" : "body",
+          text: part.text,
+          sourceIndex: blockIndex * 1_000 + index / parts.length * 999,
+          pageRole: block.presentation?.pageRole,
+        }));
+        return;
+      }
     }
     if (block.type === "list" && block.syntax === "markdown") {
       entries.push({ id: block.id, blockId: block.id, kind: "body", text: markdownPublicationText(block.markdown), sourceIndex: blockIndex * 1_000 });
@@ -226,7 +240,9 @@ function createFlowEntries(blocks: UnifiedArticleBlock[]): FlowEntry[] {
       headingDepth: block.headingDepth,
     });
   });
-  return entries.filter((entry) => entry.kind === "pageBreak" || entry.kind === "image" || entry.text.trim().length > 0);
+  const roles = new Map(blocks.map((block) => [block.id, block.presentation?.pageRole]));
+  return entries.filter((entry) => entry.kind === "pageBreak" || entry.kind === "image" || entry.text.trim().length > 0)
+    .map((entry) => ({ ...entry, pageRole: entry.pageRole ?? roles.get(entry.blockId) }));
 }
 
 function insertBreaksAroundReservedEntries(entries: FlowEntry[], reservedSourceIndexes: number[]): FlowEntry[] {
@@ -538,7 +554,7 @@ function placeEntry(
     return placeImageEntry(page, entry, y, remainingHeight, options);
   }
 
-  const style = styleForEntry(entry.kind, typography, entry.headingDepth);
+  const style = styleForEntry(entry.kind, typography, entry.headingDepth, entry.sourceLength ?? entry.text.length);
   const lineHeight = style.lineHeight;
   const paragraphGap = gapForEntry(entry.kind, typography);
   const textWidth = textColumnWidth(safeWidth);
@@ -557,6 +573,7 @@ function placeEntry(
     id: `${entry.id}:${continued ? "cont" : "node"}:${page.nodes.length}`,
     entryId: entry.id,
     blockId: entry.blockId,
+    pageRole: entry.pageRole,
     kind: entry.kind as CardLayoutNodeKind,
     sourceIndex: sourceIndexForTextOffset(entry.sourceIndex, sourceOffset, sourceLength),
     text: visibleText,
@@ -611,6 +628,7 @@ function placeImageEntry(
     id: `${entry.id}:image:${page.nodes.length}`,
     entryId: entry.id,
     blockId: entry.blockId,
+    pageRole: entry.pageRole,
     kind: "image",
     sourceIndex: entry.sourceIndex,
     text: entry.text,
@@ -633,18 +651,19 @@ function estimateEntryHeight(
   firstLineOnly = false,
 ) {
   if (entry.kind === "image") return (options.defaultImageBox ?? DEFAULT_IMAGE_BOX).height + 24;
-  const style = styleForEntry(entry.kind, typography, entry.headingDepth);
+  const style = styleForEntry(entry.kind, typography, entry.headingDepth, entry.sourceLength ?? entry.text.length);
   const lines = wrapText(entry.text, textColumnWidth(safeWidth), style, measurer);
   return (firstLineOnly ? Math.min(1, lines.length) : lines.length) * style.lineHeight + gapForEntry(entry.kind, typography);
 }
 
-function styleForEntry(kind: FlowEntry["kind"], typography: CardTypography, depth?: number): TextStyle {
+function styleForEntry(kind: FlowEntry["kind"], typography: CardTypography, depth?: number, textLength = 40): TextStyle {
   if (kind === "title") {
+    const fontSize = Math.min(128, Math.round(typography.titleFontSize * (textLength <= 16 ? 1.5 : textLength <= 26 ? 1.2 : 1)));
     return {
-      fontFamily: typography.fontFamily,
-      fontSize: typography.titleFontSize,
+      fontFamily: typography.titleFontFamily ?? typography.fontFamily,
+      fontSize,
       fontWeight: 800,
-      lineHeight: Math.round(typography.titleFontSize * 1.22),
+      lineHeight: Math.round(fontSize * 1.22),
     };
   }
   if (kind === "heading") {
@@ -757,6 +776,8 @@ function numberPages(pages: PageDraft[], aspectRatio: CardAspectRatio): CardLayo
 }
 
 function inferPageKind(page: Pick<CardLayoutPage, "nodes">): CardLayoutPage["pageKind"] {
+  const explicitRole = page.nodes.find((node) => node.pageRole)?.pageRole;
+  if (explicitRole) return explicitRole;
   for (const node of page.nodes) {
     const match = node.blockId.match(/:page:([A-Za-z]+):\d+:block:/u);
     if (match?.[1]) return match[1] as CardLayoutPage["pageKind"];

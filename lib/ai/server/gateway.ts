@@ -1,4 +1,4 @@
-import type { ProviderGenerateOptions, ProviderGenerateResult, ProviderSemanticAnalyzeOptions, ProviderSemanticAnalyzeResult } from "../provider";
+import { AIProviderError, type ProviderGenerateOptions, type ProviderGenerateResult, type ProviderSemanticAnalyzeOptions, type ProviderSemanticAnalyzeResult } from "../provider";
 import { readServerAIConfig, type ServerAIConfig, type ServerAIEnv } from "./config";
 import { normalizeServerAIError, ServerAIError } from "./errors";
 import { OpenAICompatibleAdapter } from "./providers/openai-compatible";
@@ -16,13 +16,14 @@ export async function generateWithServerAI(
   const createProvider = dependencies.createProvider ?? ((serverConfig, fetchImpl) => new OpenAICompatibleAdapter(serverConfig, fetchImpl));
   const provider = createProvider(config, dependencies.fetchImpl);
 
-  if (input.platforms.length > 1) {
+  return withHardTimeout(async (signal, assertActive) => {
+    const boundedInput = { ...input, signal };
+    if (input.platforms.length <= 1) {
+      return generateWithRetry(provider, boundedInput, config.maxRetries, assertActive);
+    }
     const results: ProviderGenerateResult[] = [];
     for (const platform of input.platforms) {
-      results.push(await withHardTimeout(
-        generateWithRetry(provider, { ...input, platforms: [platform] }, config.maxRetries),
-        config.timeoutMs,
-      ));
+      results.push(await generateWithRetry(provider, { ...boundedInput, platforms: [platform] }, config.maxRetries, assertActive));
     }
     const first = results[0];
     const editorialPlans = results.flatMap((result) => "editorialPlans" in result.response ? result.response.editorialPlans : []);
@@ -49,9 +50,7 @@ export async function generateWithServerAI(
         details: [...(first.diagnostics.details ?? []), `split_platform_requests:${results.length}`],
       },
     };
-  }
-
-  return withHardTimeout(generateWithRetry(provider, input, config.maxRetries), config.timeoutMs);
+  }, config.timeoutMs, input.signal);
 }
 
 export async function analyzeWithServerAI(
@@ -66,44 +65,90 @@ export async function analyzeWithServerAI(
   const config = readServerAIConfig(dependencies.env);
   const createAnalyzer = dependencies.createAnalyzer ?? ((serverConfig, fetchImpl) => new OpenAICompatibleAdapter(serverConfig, fetchImpl));
   const analyzer = createAnalyzer(config, dependencies.fetchImpl);
-  return withHardTimeout(analyzeWithRetry(analyzer, input, config.maxRetries), config.timeoutMs);
+  return withHardTimeout(
+    (signal, assertActive) => analyzeWithRetry(analyzer, { ...input, signal }, config.maxRetries, assertActive),
+    config.timeoutMs,
+    input.signal,
+  );
 }
 
-function withHardTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => {
-      reject(new ServerAIError("AI_TIMEOUT", "AI 服务响应超时，请稍后重试。", true, 504));
-    }, timeoutMs);
+async function withHardTimeout<T>(
+  operation: (signal: AbortSignal, assertActive: () => void) => Promise<T>,
+  timeoutMs: number,
+  callerSignal?: AbortSignal,
+): Promise<T> {
+  const controller = new AbortController();
+  const expiresAt = Date.now() + timeoutMs;
+  let rejectBoundary!: (error: ServerAIError) => void;
+  const boundary = new Promise<never>((_, reject) => {
+    rejectBoundary = reject;
   });
+  const stop = (error: ServerAIError) => {
+    if (controller.signal.aborted) return;
+    controller.abort(error);
+    rejectBoundary(error);
+  };
+  const timeout = () => stop(new ServerAIError("AI_TIMEOUT", "AI 服务响应超时，请稍后重试。", true, 504));
+  const cancel = () => stop(new ServerAIError("AI_ABORTED", "AI 请求已取消。", false));
+  const assertActive = () => {
+    if (callerSignal?.aborted) cancel();
+    // Check wall time as well: immediately rejected retries can starve timers.
+    if (Date.now() >= expiresAt) timeout();
+    controller.signal.throwIfAborted();
+  };
+  const timeoutId = setTimeout(timeout, timeoutMs);
+  callerSignal?.addEventListener("abort", cancel, { once: true });
 
-  return Promise.race([operation, deadline]).finally(() => {
-    if (timeoutId) clearTimeout(timeoutId);
-  });
+  try {
+    const task = Promise.resolve().then(() => {
+      assertActive();
+      return operation(controller.signal, assertActive);
+    }).then((result) => {
+      assertActive();
+      return result;
+    });
+    return await Promise.race([task, boundary]);
+  } finally {
+    clearTimeout(timeoutId);
+    callerSignal?.removeEventListener("abort", cancel);
+  }
 }
 
-async function generateWithRetry(provider: ServerAIProvider, input: ProviderGenerateOptions, maxRetries: number): Promise<ProviderGenerateResult> {
+async function generateWithRetry(provider: ServerAIProvider, input: ProviderGenerateOptions, maxRetries: number, assertActive: () => void): Promise<ProviderGenerateResult> {
   let attempt = 0;
+  let validationFeedback: string[] | undefined;
   while (true) {
+    assertActive();
     try {
-      return await provider.generate(input);
+      const result = await provider.generate({ ...input, ...(validationFeedback ? { validationFeedback } : {}) });
+      assertActive();
+      return result;
     } catch (error) {
+      assertActive();
       const normalized = normalizeServerAIError(error);
       const retryableSchemaResponse = normalized.code === "AI_INVALID_RESPONSE";
       if ((!normalized.retryable && !retryableSchemaResponse) || normalized.code === "AI_TIMEOUT" || attempt >= maxRetries) {
         throw normalized;
+      }
+      if (retryableSchemaResponse) {
+        const fields = error instanceof AIProviderError ? error.diagnostics.details?.filter((detail) => /^schema_issue path=[A-Za-z0-9_.-]+ code=[a-z_]+(?: keys=[A-Za-z0-9_,.-]+)?$/.test(detail)).slice(0, 5) : undefined;
+        validationFeedback = fields?.length ? fields : ["Output failed source or structure validation. Use only valid source references, verbatim numeric quantities and quotes, and the exact response schema."];
       }
       attempt += 1;
     }
   }
 }
 
-async function analyzeWithRetry(analyzer: ServerSemanticAnalyzer, input: ProviderSemanticAnalyzeOptions, maxRetries: number) {
+async function analyzeWithRetry(analyzer: ServerSemanticAnalyzer, input: ProviderSemanticAnalyzeOptions, maxRetries: number, assertActive: () => void) {
   let attempt = 0;
   while (true) {
+    assertActive();
     try {
-      return await analyzer.analyzeSemantic(input);
+      const result = await analyzer.analyzeSemantic(input);
+      assertActive();
+      return result;
     } catch (error) {
+      assertActive();
       const normalized = normalizeServerAIError(error);
       const retryableSchemaResponse = normalized.code === "AI_INVALID_RESPONSE";
       if ((!normalized.retryable && !retryableSchemaResponse) || normalized.code === "AI_TIMEOUT" || attempt >= maxRetries) {

@@ -51,6 +51,7 @@ export type PlatformDraft = {
   schemeId: DesignSchemeId;
   themeId?: VisualThemeId;
   layoutId?: ContentLayoutId;
+  manualStyleSelection?: boolean;
   title: string;
   content: UnifiedArticleContent;
   templateKey: TemplateKey;
@@ -70,6 +71,7 @@ export type AiWorkspaceSettings = {
 };
 
 export type WorkspacePersistedState = {
+  parsedDrafts?: Partial<Record<PlatformId, PlatformDraft>>;
   schemaVersion: 1;
   sourceMarkdown: string;
   sourceRevision: string;

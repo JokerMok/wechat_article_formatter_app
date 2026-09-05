@@ -329,6 +329,12 @@ export function renderWechatBlockHtml(block: RenderableBlock, template: StyleTem
     if (block.type === "quote") return `<section style="${toWechatStyle({ color: template.body.color, "line-height": template.body.lineHeight, margin: "24px 0" })}">${content}</section>`;
     const style = styles[block.type as keyof typeof styles] ?? styles.paragraph;
     if (block.headingDepth) return `<h${block.headingDepth} style="${toWechatStyle(style)}">${content}</h${block.headingDepth}>`;
+    if (block.type === "paragraph" && "presentation" in block && block.presentation?.sectionStart) {
+      const role = block.presentation.pageRole;
+      if (["intro", "opening"].includes(role)) return paragraph({ ...styles.paragraph, "font-size": "17px", "line-height": "1.85", "padding-bottom": "20px", "border-bottom": `1px solid ${visual.border}`, margin: "20px 0 28px" }, content);
+      if (["summary", "conclusion", "epilogue"].includes(role)) return paragraph({ ...styles.paragraph, "font-weight": 600, "padding-top": "20px", "border-top": `1px solid ${visual.border}`, margin: "28px 0 20px" }, content);
+      return paragraph({ ...styles.paragraph, "margin-top": "28px" }, content);
+    }
     return paragraph(style, content);
   }
 

@@ -27,6 +27,18 @@ const article = parseArticleContent(
 );
 
 describe("semantic analyzer", () => {
+  it("derives local topics from recognized concepts, not prose clauses or a blacklist", () => {
+    expect(analyzeArticleDesign(article).blueprint.topicTags).toEqual(["企业AI"]);
+    for (const source of [
+      "# 春雨停了，桥边传来脚步\n\n## 小船靠岸之后\n\n纸上的字被雨水打湿。",
+      "# A Different Story\n\n## The Unexpected Ending\n\nOne afternoon changed everything.",
+    ]) {
+      expect(analyzeArticleDesign(parseArticleContent(source)).blueprint.topicTags).toEqual([]);
+    }
+    const tagged = parseArticleContent("# 随笔\n\n记录一次经历。 #纪实摄影");
+    expect(analyzeArticleDesign(tagged).blueprint.topicTags).toEqual(["纪实摄影"]);
+  });
+
   it("keeps source traceability and distinguishes facts from opinions and examples", () => {
     const plan = analyzeArticleDesign(article);
     const blueprint = plan.blueprint;

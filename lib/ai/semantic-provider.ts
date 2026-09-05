@@ -153,6 +153,7 @@ function hostedErrorCode(code?: string): "timeout" | "rate_limit" | "cancelled" 
   if (code === "AI_NOT_CONFIGURED") return "not_configured";
   if (code === "AI_INVALID_REQUEST") return "invalid_request";
   if (code === "AI_UNAUTHORIZED_UPSTREAM") return "unauthorized";
+  if (code === "AI_FORBIDDEN") return "unauthorized";
   if (code === "AI_TIMEOUT") return "timeout";
   if (code === "AI_RATE_LIMITED") return "rate_limit";
   if (code === "AI_ABORTED") return "cancelled";

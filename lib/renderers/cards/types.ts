@@ -33,6 +33,7 @@ export type TextMeasurer = {
 export type CardTypography = {
   fontFamily: string;
   focusFontFamily?: string;
+  titleFontFamily?: string;
   titleFontSize: number;
   headingFontSize: number;
   bodyFontSize: number;
@@ -85,6 +86,7 @@ export type CardLayoutLine = {
 };
 
 export type CardLayoutNode = {
+  pageRole?: PagePlanKind;
   id: string;
   entryId: string;
   blockId: string;
@@ -140,6 +142,7 @@ export type CardLayoutResult = {
 export type FlowEntryKind = CardLayoutNodeKind | "pageBreak";
 
 export type FlowEntry = {
+  pageRole?: PagePlanKind;
   id: string;
   blockId: string;
   kind: FlowEntryKind;

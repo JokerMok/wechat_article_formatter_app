@@ -58,7 +58,7 @@ function readTimeout(value: string | undefined) {
   if (!Number.isInteger(parsed) || parsed < 1000) {
     throw new ServerAIError("AI_NOT_CONFIGURED", "服务端 AI 数值配置无效。", false);
   }
-  return Math.min(parsed, 30000);
+  return Math.min(parsed, 110000);
 }
 
 function readReasoningEffort(value: string | undefined): OpenAICompatibleProviderConfig["reasoningEffort"] {

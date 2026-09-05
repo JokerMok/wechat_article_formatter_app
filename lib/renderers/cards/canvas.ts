@@ -98,7 +98,14 @@ function drawNode(ctx: CardImageCanvasContext, node: CardLayoutNode, preset: Car
       ctx.translate(centerX, centerY);
       ctx.rotate(((node.image.rotation ?? 0) * Math.PI) / 180);
       ctx.globalAlpha = node.image.opacity ?? 1;
-      ctx.drawImage(image, -node.image.width / 2, -node.image.height / 2, node.image.width, node.image.height);
+      const intrinsic = image as { naturalWidth?: number; naturalHeight?: number; width?: number; height?: number };
+      const width = intrinsic.naturalWidth ?? intrinsic.width;
+      const height = intrinsic.naturalHeight ?? intrinsic.height;
+      const scale = typeof width === "number" && width > 0 && typeof height === "number" && height > 0
+        ? Math.min(node.image.width / width, node.image.height / height) : undefined;
+      const drawWidth = scale === undefined ? node.image.width : width! * scale;
+      const drawHeight = scale === undefined ? node.image.height : height! * scale;
+      ctx.drawImage(image, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
       ctx.globalAlpha = 1;
       ctx.restore();
     } else {
@@ -259,6 +266,14 @@ function storyLabel(kind: CardLayoutPage["pageKind"]) {
 
 function drawPageIndicator(ctx: CardImageCanvasContext, page: CardLayoutPage, preset: CardCanvasPreset) {
   if (page.totalPages <= 1) return;
+  if (page.totalPages > 12) {
+    ctx.fillStyle = preset.muted;
+    ctx.font = `500 24px ${preset.fontFamily ?? "sans-serif"}`;
+    ctx.textAlign = "center";
+    ctx.fillText(`${page.pageNumber} / ${page.totalPages}`, page.canvas.width / 2, page.canvas.height - 72);
+    ctx.textAlign = "left";
+    return;
+  }
   const dotGap = 24;
   const startX = page.canvas.width / 2 - ((page.totalPages - 1) * dotGap) / 2;
   const y = page.canvas.height - 62;

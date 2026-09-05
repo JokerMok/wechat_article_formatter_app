@@ -2,7 +2,9 @@ import { z } from "zod";
 import { GENERATION_MODE_IDS, type GenerationMode } from "../../../../lib/design-plan";
 import type { ProviderSemanticAnalyzeOptions } from "../../../../lib/ai/provider";
 import { unifiedArticleContentSchema } from "../../../../lib/content";
-import { analyzeWithServerAI } from "../../../../lib/ai/server/gateway";
+import { analyzeWithServerAI, assertServerAISemanticRequest } from "../../../../lib/ai/server/gateway";
+import { readBoundedBody } from "../../../../lib/ai/server/bounded-body";
+import { assertServerAIAccess } from "../../../../lib/ai/server/access";
 import { normalizeServerAIError, publicAIError, ServerAIError } from "../../../../lib/ai/server/errors";
 import { acquireServerAILimit, assertAllowedRequestOrigin } from "../../../../lib/ai/server/limits";
 
@@ -21,13 +23,8 @@ export async function POST(request: Request) {
   let releaseLimit: (() => void) | undefined;
   try {
     assertAllowedRequestOrigin(request);
-    releaseLimit = acquireServerAILimit(request);
-    const contentLength = Number(request.headers.get("content-length"));
-    if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
-      throw new ServerAIError("AI_INVALID_REQUEST", "请求内容过大，请拆分后再分析。", false, 413);
-    }
-
-    const rawBody = await readBodyWithLimit(request, MAX_BODY_BYTES);
+    assertServerAIAccess(request);
+    const rawBody = await readBoundedBody(request, MAX_BODY_BYTES);
     let parsedBody: unknown;
     try {
       parsedBody = JSON.parse(rawBody);
@@ -46,6 +43,8 @@ export async function POST(request: Request) {
       generationMode: parsed.data.generationMode as GenerationMode,
       signal: request.signal,
     };
+    assertServerAISemanticRequest(input);
+    releaseLimit = acquireServerAILimit(request);
     const data = await analyzeWithServerAI(input);
     return Response.json({ ok: true, data });
   } catch (error) {
@@ -65,27 +64,4 @@ function statusForError(error: ReturnType<typeof normalizeServerAIError>) {
   if (error.code === "AI_TIMEOUT") return 504;
   if (error.code === "AI_INTERNAL_ERROR") return 500;
   return 502;
-}
-
-async function readBodyWithLimit(request: Request, maxBytes: number) {
-  if (!request.body) return "";
-
-  const reader = request.body.getReader();
-  const decoder = new TextDecoder();
-  const chunks: string[] = [];
-  let byteLength = 0;
-
-  while (true) {
-    const next = await reader.read();
-    if (next.done) break;
-    byteLength += next.value.byteLength;
-    if (byteLength > maxBytes) {
-      await reader.cancel();
-      throw new ServerAIError("AI_INVALID_REQUEST", "请求内容过大，请拆分后再分析。", false, 413);
-    }
-    chunks.push(decoder.decode(next.value, { stream: true }));
-  }
-
-  chunks.push(decoder.decode());
-  return chunks.join("");
 }

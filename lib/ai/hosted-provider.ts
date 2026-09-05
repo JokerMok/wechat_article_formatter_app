@@ -35,6 +35,7 @@ export class HostedAIProvider implements AIProvider {
         sourceRevision: options.sourceVersionId,
         source: options.source,
         platforms: options.platforms,
+        ...(options.analysis ? { analysis: options.analysis } : {}),
       });
     } catch (error) {
       throw this.error("invalid_request", "当前文章内容无法发送，请检查文章数据后重试。", false, {
@@ -132,6 +133,7 @@ function hostedErrorCode(code?: string): "timeout" | "rate_limit" | "cancelled" 
   if (code === "AI_NOT_CONFIGURED") return "not_configured";
   if (code === "AI_INVALID_REQUEST") return "invalid_request";
   if (code === "AI_UNAUTHORIZED_UPSTREAM") return "unauthorized";
+  if (code === "AI_FORBIDDEN") return "unauthorized";
   if (code === "AI_TIMEOUT") return "timeout";
   if (code === "AI_RATE_LIMITED") return "rate_limit";
   if (code === "AI_ABORTED") return "cancelled";

@@ -91,7 +91,7 @@ export function cloneArticleContent(content: UnifiedArticleContent): UnifiedArti
 export function createPlatformDraft(
   platform: PlatformId,
   article: UnifiedArticleContent,
-  options: Partial<Pick<PlatformDraft, "templateKey" | "ratio" | "lockedPageIds" | "manualPages" | "sourceRevision" | "schemeId" | "themeId" | "layoutId">> & { designPlan?: DesignPlan } = {},
+  options: Partial<Pick<PlatformDraft, "templateKey" | "ratio" | "lockedPageIds" | "manualPages" | "sourceRevision" | "schemeId" | "themeId" | "layoutId" | "manualStyleSelection">> & { designPlan?: DesignPlan } = {},
 ): PlatformDraft {
   const designPlan = options.designPlan ?? analyzeArticleDesign(article);
   const ratio = options.ratio ?? defaultRatioForPlatform(platform);
@@ -101,7 +101,7 @@ export function createPlatformDraft(
   const layoutId = options.layoutId ?? designPlan.contentLayoutId ?? scheme.contentLayoutId;
   const templateKey = options.templateKey ?? scheme.templateKey;
   const content = buildPlatformArticle(article, platform, designPlan);
-  const meta = createPlatformMeta(platform, content, ratio);
+  const meta = createPlatformMeta(platform, content, ratio, designPlan.blueprint.topicTags);
 
   return {
     platform,
@@ -110,6 +110,7 @@ export function createPlatformDraft(
     schemeId,
     themeId,
     layoutId,
+    manualStyleSelection: options.manualStyleSelection ?? false,
     title: metaTitle(platform, content, meta),
     content,
     templateKey,
@@ -147,6 +148,48 @@ export function createWorkspaceState(sourceMarkdown = DEFAULT_SOURCE_MARKDOWN): 
   };
 }
 
+export function getCurrentParsedDraft(state: WorkspacePersistedState, platform: PlatformId) {
+  const pending = state.parsedDrafts?.[platform];
+  return pending?.sourceRevision === state.sourceRevision ? pending : undefined;
+}
+
+export function getPlatformGenerationInput(state: WorkspacePersistedState, platform: PlatformId) {
+  const pending = getCurrentParsedDraft(state, platform);
+  const usesWorkingDraft = pending?.status === "edited" || pending?.status === "locked";
+  // Reparse edited Markdown so text, segments, positions and revision all describe
+  // the authorized working draft, never its stale original sourceText.
+  const source = parseSourceMarkdown(usesWorkingDraft
+    ? pending.content.blocks.filter((block) => block.type !== "pageBreak" || !block.id.includes(":page:")).map(generationBlockMarkdown).join("\n\n")
+    : state.sourceMarkdown);
+  const designPlan = usesWorkingDraft ? analyzeArticleDesign(source, { generationMode: state.designPlan.generationMode }) : state.designPlan;
+  return { pending, source, designPlan, usesWorkingDraft };
+}
+
+function generationBlockMarkdown(block: UnifiedArticleBlock): string {
+  if (block.syntax === "markdown") return block.markdown;
+  if (block.type === "title") return `# ${block.text}`;
+  if (block.type === "section") return `## ${block.text}`;
+  if (block.type === "subsection") return `### ${block.text}`;
+  if (block.type === "list") return block.items.map((item) => `- ${item}`).join("\n");
+  if (block.type === "quote" || block.type === "golden") return block.text.split("\n").map((line) => `> ${line}`).join("\n");
+  if (block.type === "code") return `\`\`\`${block.language ?? ""}\n${block.text}\n\`\`\``;
+  if (block.type === "card") return [block.title ? `### ${block.title}` : "", block.body].filter(Boolean).join("\n\n");
+  return block.markdown;
+}
+
+export function selectGenerationVisuals(current: PlatformDraft, pending: PlatformDraft | undefined, plan: DesignPlan) {
+  const selected = pending?.manualStyleSelection ? pending : current.manualStyleSelection ? current : pending;
+  const schemeId = selected?.schemeId ?? plan.recommendedScheme;
+  const scheme = DESIGN_SCHEMES[schemeId];
+  return {
+    schemeId,
+    themeId: selected?.themeId ?? plan.recommendedThemeId ?? scheme.themeId,
+    layoutId: selected?.layoutId ?? plan.contentLayoutId ?? scheme.contentLayoutId,
+    templateKey: selected?.templateKey ?? scheme.templateKey,
+    manualStyleSelection: selected?.manualStyleSelection ?? false,
+  };
+}
+
 export function regeneratePlatformDraft(
   current: PlatformDraft,
   article: UnifiedArticleContent,
@@ -154,7 +197,7 @@ export function regeneratePlatformDraft(
   designPlan: DesignPlan = analyzeArticleDesign(article),
   options: { preserveManualSelection?: boolean } = {},
 ): PlatformDraft {
-  const preservesManualSelection = options.preserveManualSelection ?? current.status === "edited";
+  const preservesManualSelection = options.preserveManualSelection ?? current.manualStyleSelection === true;
   const schemeId = preservesManualSelection ? current.schemeId : designPlan.recommendedScheme;
   const selectedScheme = DESIGN_SCHEMES[schemeId];
   const selectedThemeId = preservesManualSelection ? current.themeId ?? selectedScheme.themeId : designPlan.recommendedThemeId ?? selectedScheme.themeId;
@@ -176,6 +219,7 @@ export function regeneratePlatformDraft(
     ratio: current.ratio,
     lockedPageIds: current.lockedPageIds,
     manualPages: current.manualPages,
+    manualStyleSelection: preservesManualSelection && current.manualStyleSelection === true,
   });
 
   return {
@@ -199,6 +243,7 @@ export function platformDraftFromVersion(current: PlatformDraft, version: Platfo
     ratio: current.ratio,
     lockedPageIds: current.lockedPageIds,
     manualPages: current.manualPages,
+    manualStyleSelection: current.manualStyleSelection,
   });
 
   return {
@@ -266,6 +311,7 @@ export function createPlatformDraftSignature(draft: PlatformDraft): string {
     meta: draft.meta,
     editedWechatHtml: draft.editedWechatHtml,
     ratio: draft.ratio, themeId: draft.themeId, layoutId: draft.layoutId,
+    manualStyleSelection: draft.manualStyleSelection,
     lockedPageIds: draft.lockedPageIds, manualPages: draft.manualPages,
   });
 }
@@ -347,7 +393,7 @@ export function resolveRegenerationPlatforms(
 
 export function updatePlatformBlock(draft: PlatformDraft, blockId: string, text: string): PlatformDraft {
   const content = cloneArticleContent(draft.content);
-  const previousMeta = createPlatformMeta(draft.platform, content, draft.ratio);
+  const previousMeta = createPlatformMeta(draft.platform, content, draft.ratio, draft.meta.tags);
   const previousTitle = metaTitle(draft.platform, content, previousMeta);
   const titleWasEdited = draft.title !== previousTitle;
   const captionWasEdited = draft.meta.caption !== undefined && draft.meta.caption !== previousMeta.caption;
@@ -357,7 +403,7 @@ export function updatePlatformBlock(draft: PlatformDraft, blockId: string, text:
     title: blocks.find((block) => block.type === "title" && "text" in block)?.text ?? content.title,
     blocks,
   };
-  const meta = createPlatformMeta(draft.platform, nextContent, draft.ratio);
+  const meta = createPlatformMeta(draft.platform, nextContent, draft.ratio, draft.meta.tags);
 
   return {
     ...draft,
@@ -538,6 +584,7 @@ export function applyDesignSchemeToDraft(draft: PlatformDraft, schemeId: DesignS
     themeId: scheme.themeId,
     layoutId: draft.layoutId ?? scheme.contentLayoutId,
     templateKey: scheme.templateKey,
+    manualStyleSelection: true,
     status: "edited",
     editedWechatHtml: undefined,
     updatedAt: new Date().toISOString(),
@@ -597,6 +644,14 @@ export function readPersistedWorkspace(value: unknown): WorkspacePersistedState 
   const platforms = readPlatformDrafts(rawPlatforms, fallback);
   if (!platforms) return undefined;
 
+  const parsedDrafts: Partial<Record<PlatformId, PlatformDraft>> = {};
+  if (isRecord(raw.parsedDrafts)) {
+    for (const platform of WORKSPACE_PLATFORM_IDS) {
+      const parsed = readPlatformDraft(raw.parsedDrafts[platform], platform, fallback.platforms[platform]);
+      if (parsed && parsed.sourceRevision === (raw.sourceRevision ?? designPlan.sourceRevision)) parsedDrafts[platform] = parsed;
+    }
+  }
+
   return {
     schemaVersion: 1,
     sourceMarkdown: raw.sourceMarkdown,
@@ -607,6 +662,7 @@ export function readPersistedWorkspace(value: unknown): WorkspacePersistedState 
     layout: readLayout(raw.layout, fallback.layout),
     ai: readAi(raw.ai, fallback.ai),
     platforms,
+    parsedDrafts,
   };
 }
 
@@ -637,7 +693,7 @@ function defaultRatioForPlatform(platform: PlatformId): CardAspectRatio {
   return platform === "douyinImage" ? "9:16" : "3:4";
 }
 
-function createPlatformMeta(platform: PlatformId, content: UnifiedArticleContent, ratio: RatioMode): PlatformMeta {
+function createPlatformMeta(platform: PlatformId, content: UnifiedArticleContent, ratio: RatioMode, topicTags?: readonly string[]): PlatformMeta {
   if (platform === "wechat") {
     const version = createWechatPlatformVersion(content, { template: styleTemplates.zhenyiKnowledgeMinimal });
     return {
@@ -648,7 +704,7 @@ function createPlatformMeta(platform: PlatformId, content: UnifiedArticleContent
   }
 
   if (platform === "xiaohongshu") {
-    const output = toXiaohongshuImageText(content);
+    const output = toXiaohongshuImageText(content, { topicTags });
     return {
       body: output.body,
       caption: output.caption ?? output.body,
@@ -658,7 +714,7 @@ function createPlatformMeta(platform: PlatformId, content: UnifiedArticleContent
   }
 
   if (platform === "douyinImage") {
-    const output = toDouyinImageText(content, { ratio });
+    const output = toDouyinImageText(content, { ratio, topicTags });
     return {
       body: output.pages.flatMap((page) => page.blocks.map((block) => block.text)).join("\n"),
       caption: output.caption,
@@ -666,7 +722,7 @@ function createPlatformMeta(platform: PlatformId, content: UnifiedArticleContent
     };
   }
 
-  const output = toDouyinLongform(content);
+  const output = toDouyinLongform(content, { topicTags });
   return {
     body: output.body,
     caption: output.caption,
@@ -811,6 +867,7 @@ function readPlatformDraft(value: unknown, platform: PlatformId, fallback: Platf
     schemeId: typeof value.schemeId === "string" ? normalizeDesignSchemeId(value.schemeId) : fallback.schemeId,
     themeId: readVisualThemeId(value.themeId, DESIGN_SCHEMES[typeof value.schemeId === "string" ? normalizeDesignSchemeId(value.schemeId) : fallback.schemeId].themeId),
     layoutId: readContentLayoutId(value.layoutId, DESIGN_SCHEMES[typeof value.schemeId === "string" ? normalizeDesignSchemeId(value.schemeId) : fallback.schemeId].contentLayoutId),
+    manualStyleSelection: value.manualStyleSelection === true,
     title: typeof value.title === "string" ? value.title : fallback.title,
     content,
     templateKey: typeof value.templateKey === "string" && value.templateKey in styleTemplates ? (value.templateKey as TemplateKey) : fallback.templateKey,

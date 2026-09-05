@@ -8,11 +8,15 @@ import {
   applyDesignSchemeToDraft,
   applyManualPageOrder,
   clearManualCardPages,
+  createPlatformDraft,
+  createPlatformDraftSignature,
   createPlatformDraftSignatureMap,
   createWorkspaceState,
   describeProjectBackupExportStatus,
   describeProjectBackupImportStatus,
   getMissingAiProviderFields,
+  getPlatformGenerationInput,
+  selectGenerationVisuals,
   isAiProviderConfigured,
   markAiConfigurationIncomplete,
   markAiGenerationFailure,
@@ -99,6 +103,137 @@ function projectBackupWithMutatedManualPage(mutate: (page: CardLayoutPage) => vo
 }
 
 describe("workspace state", () => {
+  it("builds a coherent AI working source from edited pending content without mutating the original", () => {
+    const state = createWorkspaceState("# Original\n\nOriginal body.");
+    const originalRevision = state.sourceRevision;
+    const body = state.platforms.wechat.content.blocks.find((block) => block.type === "paragraph")!;
+    const pending = updatePlatformTitle(updatePlatformBlock(state.platforms.wechat, body.id, "Authorized working body."), "Working title");
+    state.parsedDrafts = { wechat: pending };
+    const input = getPlatformGenerationInput(state, "wechat");
+    expect(input.usesWorkingDraft).toBe(true);
+    expect(input.source.title).toBe("Working title");
+    expect(input.source.sourceText).toContain("Authorized working body.");
+    expect(input.source.sourceText).not.toContain("Original body.");
+    expect(input.source.segments?.some((segment) => segment.text === "Authorized working body.")).toBe(true);
+    expect(input.designPlan.sourceRevision).not.toBe(originalRevision);
+    expect(state.sourceMarkdown).toBe("# Original\n\nOriginal body.");
+    expect(state.sourceRevision).toBe(originalRevision);
+    expect(state.platforms.wechat.title).toBe("Original");
+  });
+
+  it("ignores stale pending edits for a different source revision", () => {
+    const state = createWorkspaceState("# Source\n\nCurrent body.");
+    state.parsedDrafts = { wechat: { ...updatePlatformTitle(state.platforms.wechat, "Stale edit"), sourceRevision: "old" } };
+    const input = getPlatformGenerationInput(state, "wechat");
+    expect(input.pending).toBeUndefined();
+    expect(input.usesWorkingDraft).toBe(false);
+    expect(input.source.sourceText).toBe(state.sourceMarkdown);
+  });
+
+  it("preserves a title edited in an optimized pending draft when rebuilding AI input", () => {
+    const state = createWorkspaceState("# Original\n\nSource body.");
+    state.designPlan = analyzeArticleDesign(state.platforms.wechat.content, { generationMode: "reachOptimized" });
+    const pending = createPlatformDraft("wechat", state.platforms.wechat.content, { designPlan: state.designPlan });
+    state.parsedDrafts = { wechat: updatePlatformTitle(pending, "Edited optimized title") };
+    const input = getPlatformGenerationInput(state, "wechat");
+    expect(input.source.title).toBe("Edited optimized title");
+    expect(input.source.blocks[0].type).toBe("title");
+    expect(input.source.sourceText).toContain("# Edited optimized title");
+  });
+
+  it("does not interpret body editing as a manual theme selection", () => {
+    const state = createWorkspaceState("# Source\n\nBody.");
+    const current = updatePlatformTitle({ ...state.platforms.wechat, schemeId: "checklistGuide", themeId: "informationCard", templateKey: "zhenyiChecklist" }, "Manual text only");
+    const plan = { ...state.designPlan, recommendedScheme: "knowledgeMinimal" as const, recommendedThemeId: "editorial" as const };
+    expect(selectGenerationVisuals(current, undefined, plan)).toMatchObject({ themeId: "editorial", schemeId: "knowledgeMinimal", manualStyleSelection: false });
+    const pending = { ...current, schemeId: "storyNarrative" as const, themeId: "storyMagazine" as const, templateKey: "zhenyiStoryMagazine" as const };
+    expect(selectGenerationVisuals(current, pending, plan).themeId).toBe("storyMagazine");
+    const selected = applyDesignSchemeToDraft(current, "checklistGuide");
+    expect(selectGenerationVisuals(selected, pending, plan)).toMatchObject({ themeId: "informationCard", manualStyleSelection: true });
+    const restored = readPersistedWorkspace(serializeWorkspace({ ...state, platforms: { ...state.platforms, wechat: selected } }));
+    expect(restored?.platforms.wechat.manualStyleSelection).toBe(true);
+  });
+
+  it("keeps semantic topic tags in platform drafts and captions after body edits", () => {
+    const source = parseArticleContent("# 做企业 AI 最尴尬的事，是你想补地基，老板想先看楼\n\n团队先整理知识库，再验证业务规则。", { mode: "knowledge" });
+    const designPlan = analyzeArticleDesign(source);
+    const topicTags = ["企业AI", "知识库"];
+    designPlan.blueprint.topicTags = topicTags;
+    for (const platform of ["xiaohongshu", "douyinImage", "douyinLongform"] as const) {
+      const draft = createPlatformDraft(platform, source, { designPlan });
+      expect(draft.meta.tags).toEqual(topicTags);
+      const paragraph = draft.content.blocks.find((block) => block.type === "paragraph")!;
+      const edited = updatePlatformBlock(draft, paragraph.id, "人工补充了验收边界。");
+      expect(edited.meta.tags).toEqual(topicTags);
+      if (platform !== "douyinLongform") {
+        expect(edited.meta.caption).toContain("#企业AI #知识库");
+        expect(edited.meta.caption).not.toMatch(/#做企业|#最尴尬的事/);
+      }
+    }
+  });
+
+  it("does not refill explicitly cleared tags after editing the body", () => {
+    const state = createWorkspaceState("# 知识库\n\n正文含 #明确话题。");
+    const draft = updatePlatformTags(state.platforms.xiaohongshu, "");
+    const paragraph = draft.content.blocks.find((block) => block.type === "paragraph")!;
+    expect(updatePlatformBlock(draft, paragraph.id, "更新的正文。").meta.tags).toEqual([]);
+  });
+
+  it("round-trips edited parsed drafts without replacing the published draft", () => {
+    const state = createWorkspaceState("# Original title\n\nOriginal body.");
+    const pending = updatePlatformTitle(state.platforms.wechat, "Pending manual title");
+    const restored = readPersistedWorkspace(JSON.parse(JSON.stringify(serializeWorkspace({
+      ...state,
+      parsedDrafts: { wechat: pending },
+    }))));
+
+    expect(restored?.parsedDrafts?.wechat).toEqual(pending);
+    expect(restored?.platforms.wechat.title).toBe(state.platforms.wechat.title);
+    expect(readPersistedWorkspace(serializeWorkspace(restored!))?.parsedDrafts?.wechat).toEqual(pending);
+  });
+
+  it("rejects stale parsed drafts while retaining matching source revisions", () => {
+    const state = createWorkspaceState("# Title\n\nBody.");
+    const restored = readPersistedWorkspace(serializeWorkspace({
+      ...state,
+      parsedDrafts: {
+        wechat: { ...state.platforms.wechat, sourceRevision: "stale-source" },
+        xiaohongshu: state.platforms.xiaohongshu,
+      },
+    }));
+    expect(restored?.parsedDrafts?.wechat).toBeUndefined();
+    expect(restored?.parsedDrafts?.xiaohongshu).toEqual(state.platforms.xiaohongshu);
+  });
+
+  it("detects pending edits independently of unchanged published draft signatures", () => {
+    const state = createWorkspaceState("# Title\n\nBody.");
+    const publishedSignatures = createPlatformDraftSignatureMap(state.platforms);
+    const pending = state.platforms.wechat;
+    const pendingSignature = createPlatformDraftSignature(pending);
+    const edited = updatePlatformTitle(pending, "Edited while AI is running");
+    expect(createPlatformDraftSignatureMap(state.platforms)).toEqual(publishedSignatures);
+    expect(createPlatformDraftSignature(edited)).not.toBe(pendingSignature);
+    const body = pending.content.blocks.find((block) => block.type === "paragraph")!;
+    expect(createPlatformDraftSignature(updatePlatformBlock(pending, body.id, "Pending body edit"))).not.toBe(pendingSignature);
+  });
+
+  it("persists input-synced Wechat HTML and protects it from an in-flight replacement", () => {
+    const state = createWorkspaceState("# Title\n\nBody.");
+    const signatures = createPlatformDraftSignatureMap(state.platforms);
+    const edited = withWechatHtmlOverride(state.platforms.wechat, "<p>Manual preview input</p>");
+    const merged = applyPlatformDraftReplacements({
+      drafts: { ...state.platforms, wechat: edited },
+      histories: emptyHistories(),
+      replacements: { wechat: state.platforms.wechat },
+      changedSince: signatures,
+    });
+    expect(merged.appliedPlatforms).toEqual([]);
+    expect(merged.skippedChangedPlatforms).toEqual(["wechat"]);
+    const restored = readPersistedWorkspace(serializeWorkspace({ ...state, platforms: merged.drafts }));
+    expect(restored?.platforms.wechat.editedWechatHtml).toBe("<p>Manual preview input</p>");
+    expect(merged.histories.wechat.past).toHaveLength(0);
+  });
+
   it("uses the required workspace timing and history limits", () => {
     expect(AUTO_SAVE_DEBOUNCE_MS).toBe(800);
     expect(WORKSPACE_HISTORY_LIMIT).toBe(50);

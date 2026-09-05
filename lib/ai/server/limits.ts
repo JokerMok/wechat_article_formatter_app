@@ -17,6 +17,7 @@ export type ServerAILimitDependencies = {
 
 export function acquireServerAILimit(request: Request, dependencies: ServerAILimitDependencies = {}) {
   const now = dependencies.now ?? Date.now;
+  const timestamp = now();
   const key = dependencies.clientKey ?? clientKeyFromRequest(request);
   const entry = rateEntries.get(key);
 
@@ -24,9 +25,17 @@ export function acquireServerAILimit(request: Request, dependencies: ServerAILim
     throw new ServerAIError("AI_RATE_LIMITED", "服务端 AI 当前请求较多，请稍后重试。", true, 429);
   }
 
-  if (!entry || now() - entry.startedAt >= WINDOW_MS) {
-    if (rateEntries.size >= MAX_TRACKED_CLIENTS) rateEntries.clear();
-    rateEntries.set(key, { startedAt: now(), count: 1 });
+  if (!entry || timestamp - entry.startedAt >= WINDOW_MS) {
+    if (!entry && rateEntries.size >= MAX_TRACKED_CLIENTS) {
+      // Never reset active login or model quotas to make room for a new key.
+      for (const [clientKey, value] of rateEntries) {
+        if (timestamp - value.startedAt >= WINDOW_MS) rateEntries.delete(clientKey);
+      }
+      if (rateEntries.size >= MAX_TRACKED_CLIENTS) {
+        throw new ServerAIError("AI_RATE_LIMITED", "服务端 AI 请求过于频繁，请稍后重试。", true, 429);
+      }
+    }
+    rateEntries.set(key, { startedAt: timestamp, count: 1 });
   } else if (entry.count >= MAX_REQUESTS_PER_WINDOW) {
     throw new ServerAIError("AI_RATE_LIMITED", "服务端 AI 请求过于频繁，请稍后重试。", true, 429);
   } else {
@@ -85,8 +94,10 @@ export function resetServerAILimitsForTests() {
 }
 
 function clientKeyFromRequest(request: Request) {
-  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwarded || request.headers.get("x-real-ip")?.trim() || request.headers.get("cf-connecting-ip")?.trim() || "anonymous";
+  // Vercel overwrites this header at ingress. A standalone Node server cannot
+  // authenticate caller-supplied forwarding headers, so it shares one bucket.
+  if (process.env.VERCEL === "1") return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "anonymous";
+  return "anonymous";
 }
 
 function originFromReferer(referer: string | null) {

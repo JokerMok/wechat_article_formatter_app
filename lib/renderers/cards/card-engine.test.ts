@@ -477,6 +477,7 @@ describe("card image layout engine", () => {
       textBlock("title", "title", "画布绘制回归"),
       textBlock("focus", "quote", "绘制层只能消费布局树。"),
       textBlock("body", "paragraph", "正文必须进入 fillText，不能在 Canvas 阶段 break 截断。"),
+      textBlock("picture", "image", "横向图片"),
     ];
     const result = layoutCardPages(article(blocks), createApproximateTextMeasurer(), { aspectRatio: "3:4" });
     const calls: string[] = [];
@@ -498,13 +499,13 @@ describe("card image layout engine", () => {
       restore: () => calls.push("restore"),
       translate: () => calls.push("translate"),
       rotate: () => calls.push("rotate"),
-      drawImage: () => calls.push("drawImage"),
+      drawImage: (_image, _x, _y, width, height) => calls.push(`drawImage:${width / height}`),
       setLineDash: () => calls.push("setLineDash"),
       strokeRect: () => calls.push("strokeRect"),
       measureText: (text) => ({ width: text.length * 18 }) as TextMetrics,
     };
 
-    drawCardImagePage(ctx, result.pages[0]);
+    for (const page of result.pages) drawCardImagePage(ctx, page, { images: { picture: { naturalWidth: 800, naturalHeight: 400 } as HTMLImageElement } });
 
     const drawnText = calls
       .filter((call) => call.startsWith("fillText:"))
@@ -514,5 +515,6 @@ describe("card image layout engine", () => {
     expect(drawnText).toContain("绘制层只能消费布局树。");
     expect(drawnText).toContain("正文必须进入 fillText，不能在 Canvas 阶段 break 截断。");
     expect(calls).not.toContain("clip");
+    expect(calls).toContain("drawImage:2");
   });
 });

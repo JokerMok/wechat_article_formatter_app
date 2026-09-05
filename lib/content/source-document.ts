@@ -12,6 +12,8 @@ export function parseSyntaxDocument(raw: string, options: ArticleContentParseOpt
     const position = node.position!;
     const sourceText = raw.slice(position.start.offset ?? 0, position.end.offset ?? raw.length);
     const plainText = markdownPlainText(node);
+    if (["paragraph", "blockquote"].includes(node.type) && /^[>＞\s]*$/.test(plainText) && !/!\[/.test(sourceText)) return;
+    if (node.type === "blockquote" && !plainText.trim() && !/!\[/.test(sourceText)) return;
     if (node.type === "paragraph" && !sourceText.trim()) return;
     let type: UnifiedArticleBlock["type"] = "paragraph";
     if (node.type === "heading") type = node.depth === 1 ? "title" : node.depth === 2 ? "section" : "subsection";
@@ -56,6 +58,11 @@ export function parseSyntaxDocument(raw: string, options: ArticleContentParseOpt
     title: blocks.find((block) => block.type === "title")?.text,
     blocks, warnings,
     // Exact block anchors. Never claim normalized sentence offsets map onto raw Markdown.
-    segments: blocks.filter((block) => block.plainText.trim()).map((block) => ({ id: `${block.id}:segment:1`, blockId: block.id, text: block.plainText, sourceRange: { ...block.source } })),
+    segments: blocks.filter((block) => block.plainText.trim()).map((block, order) => ({
+      id: `${block.id}:segment:1`, blockId: block.id, text: block.plainText,
+      order, type: block.type === "title" ? "title" : block.headingDepth ? "heading" : block.type === "quote" ? "quote" : block.type === "image" ? "image" : block.type === "list" ? "list-item" : "paragraph",
+      rawText: block.source.sourceText, normalizedText: block.plainText,
+      sourceRange: { ...block.source, start: block.source.startOffset, end: block.source.endOffset },
+    })),
   };
 }

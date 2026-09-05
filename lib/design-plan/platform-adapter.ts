@@ -15,11 +15,11 @@ export function buildPlatformArticle(source: UnifiedArticleContent, platform: Pl
     })[platform];
     const cards = platform === "xiaohongshu" || platform === "douyinImage";
     const blocks = preserved.pages.flatMap((page, index) => {
-      const originals = page.blocks.flatMap((block) => block.sourceBlockIds.flatMap((id) => {
+      const originals = page.blocks.flatMap((block, blockIndex) => block.sourceBlockIds.flatMap((id) => {
         const original = sourceBlocks.get(id);
-        return original ? [{ ...original, source: { ...original.source }, ...(original.type === "list" ? { items: [...original.items] } : {}) }] : [];
+        return original ? [{ ...original, source: { ...original.source }, presentation: { pageRole: page.kind, sectionId: page.id, sectionStart: blockIndex === 0 }, ...(original.type === "list" ? { items: [...original.items] } : {}) }] : [];
       }));
-      return cards && index < preserved.pages.length - 1 ? [...originals, createPageBreak(source, `${page.id}:break`)] : originals;
+      return cards && index < preserved.pages.length - 1 ? [...originals, createPageBreak(source, `${page.id}:semantic-boundary`)] : originals;
     });
     const output = { ...source, blocks };
     if (!checkSourceIntegrity(source, output).ok) throw new Error("排版完整性校验失败，已阻止生成不完整的成稿。");

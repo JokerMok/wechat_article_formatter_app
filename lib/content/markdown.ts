@@ -41,6 +41,16 @@ export function safeLink(value: string) {
   return /^(https?:\/\/|mailto:|#)/i.test(value.trim()) && !/[\u0000-\u0020]/.test(value) ? value : undefined;
 }
 
+export function markdownImageUrl(value: string): string | undefined {
+  const root = markdownTree(value);
+  const nodes: MarkdownNode[] = [];
+  const walk = (node: MarkdownNode) => { nodes.push(node); node.children?.forEach(walk); };
+  walk(root);
+  const image = nodes.find((node) => node.type === "image" || node.type === "imageReference");
+  const url = image?.url ?? nodes.find((node) => node.type === "definition" && node.identifier === image?.identifier)?.url;
+  return url && /^(?:https?:\/\/|blob:|asset:|data:image\/(?:png|jpeg|webp);base64,)/i.test(url) ? url : undefined;
+}
+
 /** Safe inline-styled HTML: no model-produced markup, scripts or arbitrary attributes. */
 export function renderMarkdown(value: string, accent = "#963d3a", inline = false): string {
   const tree = markdownTree(value);
@@ -64,7 +74,7 @@ export function renderMarkdown(value: string, accent = "#963d3a", inline = false
       }
       case "image": case "imageReference": {
         const src = node.url ?? definitions.get(node.identifier ?? "")?.url ?? "";
-        return /^https?:\/\//i.test(src) ? `<img src="${escapeMarkup(src)}" alt="${escapeMarkup(node.alt ?? "")}" style="max-width:100%;height:auto">` : escapeMarkup(node.alt ?? "");
+        return /^(?:https?:\/\/|blob:|data:image\/(?:png|jpeg|webp);base64,)/i.test(src) ? `<img src="${escapeMarkup(src)}" alt="${escapeMarkup(node.alt ?? "")}" style="max-width:100%;height:auto">` : escapeMarkup(node.alt ?? "");
       }
       case "heading": return children();
       case "paragraph": return inline ? children() : `<p style="margin:0 0 8px;line-height:inherit">${children()}</p>`;
@@ -86,7 +96,7 @@ export function renderMarkdown(value: string, accent = "#963d3a", inline = false
 }
 
 /** Readable text for image/text publishing, retaining link destinations and list hierarchy. */
-export function markdownPublicationText(value: string): string {
+export function markdownPublicationText(value: string, renderImage?: (alt: string, url: string) => string): string {
   const tree = markdownTree(value);
   const definitions = new Map((tree.children ?? []).filter((node) => node.type === "definition").map((node) => [node.identifier, node.url]));
   const render = (node: MarkdownNode, indent = ""): string => {
@@ -103,8 +113,25 @@ export function markdownPublicationText(value: string): string {
       return href && href !== label ? `${label}（${href}）` : label;
     }
     if (node.type === "break") return "\n";
-    if (node.type === "image" || node.type === "imageReference") return node.alt ?? "";
+    if (node.type === "image" || node.type === "imageReference") return renderImage?.(node.alt ?? "", node.url ?? definitions.get(node.identifier) ?? "") ?? node.alt ?? "";
     return node.value ?? children();
   };
   return render(tree);
+}
+
+type PublicationPart = { kind: "text"; text: string } | { kind: "image"; text: string; url: string; index: number };
+export function markdownPublicationParts(value: string): PublicationPart[] {
+  const images: Array<{ kind: "image"; text: string; url: string; index: number }> = [];
+  let marker = "\u0000media";
+  while (value.includes(marker)) marker += "_";
+  const text = markdownPublicationText(value, (alt, url) => {
+    const index = images.length;
+    images.push({ kind: "image", text: alt, url, index });
+    return `${marker}${index}\u0000`;
+  });
+  if (!images.length) return [{ kind: "text", text }];
+  return text.split(new RegExp(`(${marker}\\d+\u0000)`, "g")).flatMap<PublicationPart>((part) => {
+    if (part.startsWith(marker)) return [images[Number(part.slice(marker.length, -1))]];
+    return part.trim() && !/^[•\s]*$/.test(part) ? [{ kind: "text" as const, text: part.trim() }] : [];
+  });
 }

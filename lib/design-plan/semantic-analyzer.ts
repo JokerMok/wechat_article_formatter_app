@@ -1,5 +1,5 @@
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../content";
-import { renderBlockText } from "../platforms/platform-profiles";
+import { collectTags } from "../platforms/platform-profiles";
 import { cleanPublishingText, isGenericStructureHeading, publicationBlocks } from "./content-filter";
 import { validateAnalysisCompleteness } from "./analysis-validator";
 import type {
@@ -42,8 +42,6 @@ export type LocalSemanticAnalysisOptions = {
   tone: ContentTone;
 };
 
-const STOP_WORDS = new Set(["这是", "一个", "我们", "他们", "很多", "可以", "如果", "因为", "所以", "这个", "那个", "以及", "然后", "最后", "真正", "自己", "时候"]);
-
 export function analyzeSemanticBlueprint(
   content: UnifiedArticleContent,
   options: LocalSemanticAnalysisOptions,
@@ -59,7 +57,7 @@ export function analyzeSemanticBlueprint(
     ...sections.map((section) => section.keyMessage),
     ...units.goldenSentences.map((unit) => unit.text),
   ]).slice(0, 5);
-  const topicTags = deriveTopicTags(content, sections, units);
+  const topicTags = deriveTopicTags(content);
   const sourceFacts = units.facts.map(toSourceFact);
   const warnings = [
     ...(units.facts.length === 0 ? ["未识别到明确客观事实，事实列表保持为空。"] : []),
@@ -147,8 +145,8 @@ export function validateSemanticBlueprint(value: ContentBlueprint, source: Unifi
   ];
   const missingBlockIds = uniqueText(units.flatMap((unit) => unit.sourceBlockIds.filter((id) => !validBlockIds.has(id))));
   const unsupportedSections = value.sections.filter((section) => section.sourceBlockIds.some((id) => !validBlockIds.has(id))).map((section) => section.id);
-  const sourceText = source.sourceText.replace(/\s+/gu, "");
-  const inventedUnits = units.filter((unit) => !sourceText.includes(unit.text.replace(/\s+/gu, ""))).map((unit) => unit.id);
+  const blockText = new Map(source.blocks.map((block) => [block.id, block.plainText]));
+  const inventedUnits = units.filter((unit) => !unit.sourceBlockIds.map((id) => blockText.get(id) ?? "").join(" ").replace(/\s+/gu, "").includes(unit.text.replace(/\s+/gu, ""))).map((unit) => unit.id);
   const invalidDisplayHeadings = value.sections
     .filter((section) => {
       const heading = section.displayHeading;
@@ -215,7 +213,7 @@ function toSemanticBlocks(content: UnifiedArticleContent): SemanticBlock[] {
   return publicationBlocks(content)
     .filter((block) => block.type !== "title" && block.type !== "pageBreak" && block.type !== "divider" && block.type !== "code")
     .flatMap((block) => {
-      const text = cleanText(renderBlockText(block) ?? undefined);
+      const text = cleanText(block.plainText);
       if (!text || block.type === "image") return [];
       const kind = block.type === "section" || block.type === "subsection"
         ? "heading"
@@ -671,27 +669,10 @@ function secondaryTypes(contentType: ContentType, units: ReturnType<typeof class
   return result.slice(0, 3);
 }
 
-function deriveTopicTags(content: UnifiedArticleContent, sections: ContentSection[], units: ReturnType<typeof classifyUnits>) {
-  const source = [content.title || "", ...sections.map((section) => section.displayHeading?.text || ""), ...units.opinions.map((unit) => unit.text), ...units.methods.map((unit) => unit.text)].join(" ");
+function deriveTopicTags(content: UnifiedArticleContent) {
+  const source = content.blocks.filter((block) => block.type !== "code" && block.type !== "image").map((block) => block.plainText).join(" ");
   const explicit = source.match(/(?:企业\s*AI|AI\s*落地|AI产品经理|最小可行验证|企业数字化|知识库|产品选型|内容排版|客服流程|数据治理|业务规则)/gu) ?? [];
-  const sourceHeadings = content.blocks
-    .filter((block) => block.type === "section" || block.type === "subsection")
-    .map((block) => cleanText(block.text));
-  const titleClauses = cleanText(content.title)
-    .split(/[：:｜|，,。！？]/u)
-    .map((value) => value.trim())
-    .filter((value) => value.length >= 2 && value.length <= 16);
-  const latinConcepts = source.match(/\b(?:[A-Za-z][A-Za-z0-9+#-]{1,19})\b/gu) ?? [];
-  const candidates = [...explicit, ...sourceHeadings, ...titleClauses, ...latinConcepts];
-  return uniqueText(candidates)
-    .filter((value) => value.length >= 2 && value.length <= 20)
-    .filter((value) => !isGenericTag(value))
-    .filter((value) => !/^(?:做|很多|最后|先|一个|这|问题|如果|所以|然后|能够|没有|我们|我|他|更|真正|最尴尬)/u.test(value))
-    .slice(0, 8);
-}
-
-function isGenericTag(value: string) {
-  return STOP_WORDS.has(value) || /^(?:核心判断|内容结构|主要内容|文章结构|正文|背景|目标|总结|结语|开场|先看这个问题|可以怎么做|最后的结论)$/u.test(value);
+  return collectTags(content, 8, [...explicit, ...collectTags(content, 8)]);
 }
 
 function buildLegacyTitleCandidates(title: string, contentType: ContentType, sectionCount: number) {

@@ -49,7 +49,8 @@ async function assertNoHorizontalOverflow(page: Page) {
 
 async function assertPlatformSurfaceClean(page: Page, label: string) {
   const visibleText = `${await page.locator("section").filter({ hasText: "平台版本编辑" }).innerText()}\n${await page.locator("main aside").last().innerText()}`;
-  expect(visibleText, label).not.toMatch(/<script|<\/script|onclick|onerror|font-weight/i);
+  // Literal HTML/code belongs to the source. It must be escaped, never executed.
+  await expect(page.locator("[data-wechat-preview], [data-longform-preview], [data-card-preview]").locator("script, [onclick], [onerror]"), label).toHaveCount(0);
   expect(visibleText, label).not.toMatch(/^\s*>\s*$/m);
 }
 
@@ -59,10 +60,15 @@ async function assertCardRatio(page: Page, expectedWidth: number, expectedHeight
   const box = await card.boundingBox();
   expect(box).not.toBeNull();
   expect(box!.width / box!.height).toBeCloseTo(expectedWidth / expectedHeight, 2);
-  const firstTextNode = card.locator(":scope > div > div").nth(1);
-  await expect(firstTextNode).toBeVisible();
-  const lineHeight = await firstTextNode.evaluate((element) => Number.parseFloat(getComputedStyle(element).lineHeight));
-  expect(lineHeight).toBeLessThan(120);
+  await expect(card).toHaveAttribute("data-render-ready", "true");
+  const canvas = card.locator("canvas");
+  await expect(canvas).toBeVisible();
+  expect(await canvas.evaluate((node) => {
+    const pixels = (node as HTMLCanvasElement).getContext("2d")!.getImageData(0, 0, 1080, 1440).data;
+    let differences = 0;
+    for (let i = 0; i < pixels.length; i += 4) if (pixels[i] !== pixels[0] || pixels[i + 1] !== pixels[1] || pixels[i + 2] !== pixels[2]) differences++;
+    return differences;
+  })).toBeGreaterThan(100);
   await expect(page.locator("text=当前页有溢出")).toHaveCount(0);
   return card;
 }
@@ -228,9 +234,16 @@ test("分析源文只更新设计计划，生成操作才更新当前平台", as
   await expect(page.locator("[data-source-analysis-status]")).toContainText(/分析完成/);
   await expect(page.getByLabel("平台标题")).toHaveValue(/解析后的平台标题/);
   await expect(page.locator("[data-card-preview]").first()).not.toContainText("解析后的平台标题");
+  await page.getByLabel("正文内容").first().fill("已人工确认的解析稿，刷新后仍需保留。");
+  await page.getByRole("button", { name: "保存项目" }).click();
+  await expect(page.getByText("已保存到浏览器本地")).toBeVisible();
+  await page.reload();
+  await selectPlatform(page, "小红书");
+  await expect(page.getByLabel("正文内容").first()).toHaveValue("已人工确认的解析稿，刷新后仍需保留。");
+  await expect(page.locator("[data-card-preview]").first()).not.toContainText("解析后的平台标题");
   await page.getByRole("button", { name: "生成", exact: true }).click();
   await expect(page.getByLabel("平台标题")).toHaveValue(/解析后的平台标题/);
-  await expect(page.getByLabel("正文内容").first()).toHaveValue("这段内容应该进入当前选中的小红书稿件。");
+  await expect(page.getByLabel("正文内容").first()).toHaveValue("已人工确认的解析稿，刷新后仍需保留。");
 
   await selectPlatform(page, "公众号");
   await expect(page.getByLabel("平台标题")).toHaveValue(originalWechatTitle);

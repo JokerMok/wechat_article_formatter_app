@@ -160,10 +160,12 @@ function renderLongformBodyText(blocks: RenderableBlock[]) {
 
 export type DouyinImageOptions = {
   ratio?: DouyinImageRatio;
+  topicTags?: readonly string[];
 };
 
 export type DouyinLongformOptions = {
   profile?: DouyinLongformProfile;
+  topicTags?: readonly string[];
 };
 
 export function toDouyinImageText(content: UnifiedArticleContent, options: DouyinImageOptions = {}): DouyinImageOutput {
@@ -171,8 +173,8 @@ export function toDouyinImageText(content: UnifiedArticleContent, options: Douyi
   const blocks = collectRenderableBlocks(content);
   const title = selectFallbackTitle(content);
   const coverTitle = content.blocks.find((block) => block.type === "title" && block.text.trim())?.text.trim() || title;
-  const caption = buildImageCaption(coverTitle, buildIntroText(blocks, 16), collectTags(content, douyinImageProfile.maxTags));
-  const tags = collectTags(content, douyinImageProfile.maxTags);
+  const tags = collectTags(content, douyinImageProfile.maxTags, options.topicTags);
+  const caption = buildImageCaption(coverTitle, buildIntroText(blocks, 16), tags);
 
   return {
     platform: "douyinImage",
@@ -192,7 +194,7 @@ export function toDouyinLongform(content: UnifiedArticleContent, options: Douyin
   const blocks = collectRenderableBlocks(content);
   const title = selectFallbackTitle(content);
   const { intro, ending, body, highlights } = buildLongformBody(blocks, profile);
-  const tags = collectTags(content, profile.maxTags);
+  const tags = collectTags(content, profile.maxTags, options.topicTags);
   const caption = `${title}${intro ? ` - ${intro}` : ""}`;
 
   return {

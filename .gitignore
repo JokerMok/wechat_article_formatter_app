@@ -15,6 +15,7 @@ dist-ssr
 *.local
 playwright-report/
 test-results/
+artifacts/product-readiness/
 
 # Editor directories and files
 .vscode/*

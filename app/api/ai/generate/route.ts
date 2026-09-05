@@ -1,9 +1,11 @@
 import { z } from "zod";
-import { aiPlatformIds, type ProviderGenerateOptions } from "../../../../lib/ai/provider";
+import { aiPlatformIds, generationAnalysisSchema, type ProviderGenerateOptions } from "../../../../lib/ai/provider";
 import { unifiedArticleContentSchema } from "../../../../lib/content";
 import { assertServerAIRequest, generateWithServerAI } from "../../../../lib/ai/server/gateway";
 import { normalizeServerAIError, publicAIError, ServerAIError } from "../../../../lib/ai/server/errors";
 import { acquireServerAILimit, assertAllowedRequestOrigin } from "../../../../lib/ai/server/limits";
+import { readBoundedBody } from "../../../../lib/ai/server/bounded-body";
+import { assertServerAIAccess } from "../../../../lib/ai/server/access";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -14,6 +16,7 @@ const requestSchema = z.strictObject({
   task: z.enum(["generate-platform-variant", "optimize-platform-variant"]),
   sourceRevision: z.union([z.string(), z.number()]).optional(),
   source: unifiedArticleContentSchema,
+  analysis: generationAnalysisSchema.optional(),
   platforms: z.array(z.enum(aiPlatformIds)).min(1).max(aiPlatformIds.length).refine((platforms) => new Set(platforms).size === platforms.length),
 });
 
@@ -23,13 +26,8 @@ export async function POST(request: Request) {
   let releaseLimit: (() => void) | undefined;
   try {
     assertAllowedRequestOrigin(request);
-    releaseLimit = acquireServerAILimit(request);
-    const contentLength = Number(request.headers.get("content-length"));
-    if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
-      throw new ServerAIError("AI_INVALID_REQUEST", "请求内容过大，请拆分后再生成。", false, 413);
-    }
-
-    const rawBody = await readBodyWithLimit(request, MAX_BODY_BYTES);
+    assertServerAIAccess(request);
+    const rawBody = await readBoundedBody(request, MAX_BODY_BYTES);
 
     let parsedBody: unknown;
     try {
@@ -48,9 +46,15 @@ export async function POST(request: Request) {
       sourceVersionId: parsed.data.sourceRevision === undefined ? undefined : String(parsed.data.sourceRevision),
       generationMode: "reachOptimized",
       platforms: parsed.data.platforms,
+      analysis: parsed.data.analysis,
       signal: request.signal,
     };
+    const sourceIds = new Set(input.source.blocks.map((block) => block.id));
+    if (input.analysis?.sections.some((section) => section.sourceBlockIds.some((id) => !sourceIds.has(id)))) {
+      throw new ServerAIError("AI_INVALID_REQUEST", "分析结果与源文版本不一致，请重新分析。", false);
+    }
     assertServerAIRequest(input);
+    releaseLimit = acquireServerAILimit(request);
     const data = await generateWithServerAI(input);
     return Response.json({ ok: true, data });
   } catch (error) {
@@ -70,27 +74,4 @@ function statusForError(error: ReturnType<typeof normalizeServerAIError>) {
   if (error.code === "AI_TIMEOUT") return 504;
   if (error.code === "AI_INTERNAL_ERROR") return 500;
   return 502;
-}
-
-async function readBodyWithLimit(request: Request, maxBytes: number) {
-  if (!request.body) return "";
-
-  const reader = request.body.getReader();
-  const decoder = new TextDecoder();
-  const chunks: string[] = [];
-  let byteLength = 0;
-
-  while (true) {
-    const next = await reader.read();
-    if (next.done) break;
-    byteLength += next.value.byteLength;
-    if (byteLength > maxBytes) {
-      await reader.cancel();
-      throw new ServerAIError("AI_INVALID_REQUEST", "请求内容过大，请拆分后再生成。", false, 413);
-    }
-    chunks.push(decoder.decode(next.value, { stream: true }));
-  }
-
-  chunks.push(decoder.decode());
-  return chunks.join("");
 }

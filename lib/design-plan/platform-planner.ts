@@ -226,11 +226,11 @@ export function buildDouyinLongformPlan(input: PlatformPlannerInput): PlatformDe
 
 function buildPreservedPlan(input: PlatformPlannerInput, platform: PlatformId): PlatformDesignPlan {
   const { source, blueprint, scheme, theme, layout } = input;
-  const pages = planPreservedPages(source, platform, blueprint);
+  const pages = planPreservedPages(source, platform, blueprint, layout.id);
   const cards = platform === "xiaohongshu" || platform === "douyinImage";
   const plan = createPlatformPlan(source, blueprint, scheme, theme, layout.id, platform, pages,
     source.blocks.map((block) => block.type === "image" ? block.markdown : block.text).join("\n\n"),
-    cards ? { format: "png", width: 1080, height: 1440, aspectRatio: "3:4" } : { format: platform === "wechat" ? "html" : "text" });
+    cards ? { format: "png", width: 1080, height: platform === "douyinImage" ? 1920 : 1440, aspectRatio: platform === "douyinImage" ? "9:16" : "3:4" } : { format: platform === "wechat" ? "html" : "text" });
   return { ...plan, title: source.title ?? "未命名文章" };
 }
 

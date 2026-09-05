@@ -1,4 +1,9 @@
 "use client";
+import { AIAccess } from "./ai-access";
+import { CardSurface } from "./card-surface";
+import { markdownImageUrl, markdownPublicationParts } from "../../lib/content/markdown";
+import NextImage from "next/image";
+import { renderLongformHtml } from "@/lib/renderers/longform";
 
 import * as React from "react";
 import JSZip from "jszip";
@@ -31,6 +36,7 @@ import { createCardPreset, DESIGN_SCHEMES, getContentLayout, getVisualTheme, typ
 import type { PlatformId } from "@/lib/platforms/types";
 import {
   createApproximateTextMeasurer,
+  createCanvasTextMeasurer,
   layoutDouyinImagePagesToTarget,
   layoutXiaohongshuPagesToTarget,
   lockCardImagePage,
@@ -68,11 +74,14 @@ import {
   applyManualPageOrder,
   clearManualCardPages,
   createPlatformDraft,
+  createPlatformDraftSignature,
   createPlatformDraftSignatureMap,
   createWorkspaceState,
   describeProjectBackupExportStatus,
   describeProjectBackupImportStatus,
   getMissingAiProviderFields,
+  getCurrentParsedDraft,
+  getPlatformGenerationInput,
   isAiProviderConfigured,
   markAiConfigurationIncomplete,
   markAiGenerationFailure,
@@ -87,6 +96,7 @@ import {
   sanitizeWechatHtml,
   serializeWorkspace,
   selectRestorableBackupProject,
+  selectGenerationVisuals,
   updatePlatformBlock,
   updatePlatformCaption,
   updatePlatformRatio,
@@ -111,7 +121,6 @@ type ProjectListItem = {
   updatedAt?: string;
 };
 
-const measurer = createApproximateTextMeasurer();
 const SEMANTIC_ANALYZER_VERSION = "semantic-v1";
 const SEMANTIC_MODEL_VERSION = "model-v1";
 const SEMANTIC_PROMPT_VERSION = "prompt-v1";
@@ -270,10 +279,14 @@ function createWechatImageNodes(article: UnifiedArticleContent, assets: AssetPla
 function createImageUrlByBlock(article: UnifiedArticleContent, assets: AssetPlaceholder[]) {
   return Object.fromEntries(
     article.blocks.flatMap((block) => {
-      if (block.type !== "image") return [];
+      if (block.type !== "image") return block.syntax ? markdownPublicationParts(block.markdown).flatMap((part) => {
+        if (part.kind !== "image") return [];
+        const asset = part.url.startsWith("asset:") ? assets.find((candidate) => candidate.id === part.url.slice(6)) : undefined;
+        return [[`${block.id}:inline-image:${part.index}`, asset?.objectUrl ?? part.url]];
+      }) : [];
       const assetId = articleAssetId(block);
       const asset = assetId ? assets.find((candidate) => candidate.id === assetId) : undefined;
-      const remote = block.markdown.match(/!\[[^\]]*\]\((https?:\/\/[^\s)]+)(?:\s+[^)]*)?\)/)?.[1];
+      const remote = markdownImageUrl(block.markdown);
       const url = asset?.objectUrl ?? remote;
       return url ? [[block.id, url]] : [];
     }),
@@ -282,6 +295,17 @@ function createImageUrlByBlock(article: UnifiedArticleContent, assets: AssetPlac
 
 export default function UnifiedWorkspace() {
   const [workspace, setWorkspace] = React.useState<WorkspacePersistedState>(() => createWorkspaceState());
+  const [measurer, setMeasurer] = React.useState(createApproximateTextMeasurer);
+  React.useEffect(() => {
+    let disposed = false;
+    const update = () => {
+      const context = document.createElement("canvas").getContext("2d");
+      if (!disposed && context) setMeasurer(createCanvasTextMeasurer(context));
+    };
+    update();
+    void document.fonts.ready.then(update);
+    return () => { disposed = true; };
+  }, []);
   const workspaceRef = React.useRef<WorkspacePersistedState>(workspace);
   const [projectId, setProjectId] = React.useState(() => createInitialProjectId());
   const projectIdRef = React.useRef(projectId);
@@ -307,7 +331,7 @@ export default function UnifiedWorkspace() {
   const [sessionApiKey, setSessionApiKey] = React.useState("");
   const [sourceAnalysisNotice, setSourceAnalysisNotice] = React.useState<string>();
   const [analysisEngine, setAnalysisEngine] = React.useState<"本地基础分析" | "AI 智能分析">("本地基础分析");
-  const [parsedDrafts, setParsedDrafts] = React.useState<Partial<Record<PlatformId, PlatformDraft>>>({});
+  const parsedDrafts = workspace.parsedDrafts ?? {};
   const [analysisRunning, setAnalysisRunning] = React.useState(false);
   const [aiRunState, setAiRunState] = React.useState<"idle" | "generating" | "error">("idle");
   const [aiStatusMessage, setAiStatusMessage] = React.useState<string | undefined>();
@@ -339,6 +363,7 @@ export default function UnifiedWorkspace() {
     const contentLayout = getContentLayout(layoutVariant);
     const densityScale = contentLayout.density === "low" ? 1.12 : contentLayout.density === "high" ? 0.88 : 1;
     const lineHeightScale = theme.typography.lineHeight / 1.78;
+    const platformTypeScale = activePlatform === "douyinImage" ? 1.18 : 1;
     const topOffset = layoutVariant === "story" ? 90 : layoutVariant === "checklist" ? 74 : 64;
     const targetPages = activePlatform === "xiaohongshu"
       ? workspace.designPlan.pagination.xiaohongshuTargetPages
@@ -355,10 +380,11 @@ export default function UnifiedWorkspace() {
       typography: {
         fontFamily: theme.typography.bodyFamily,
         focusFontFamily: theme.typography.focusFamily,
+        titleFontFamily: theme.typography.titleFamily,
         titleFontSize: Math.round(workspace.layout.titleFontSize * theme.typography.titleScale),
-        headingFontSize: Math.round(workspace.layout.headingFontSize * theme.typography.headingScale),
-        bodyFontSize: Math.round(workspace.layout.bodyFontSize * theme.typography.bodyScale),
-        focusFontSize: Math.round(workspace.layout.focusFontSize * ((theme.typography.headingScale + theme.typography.bodyScale) / 2)),
+        headingFontSize: Math.round(workspace.layout.headingFontSize * theme.typography.headingScale * platformTypeScale),
+        bodyFontSize: Math.round(workspace.layout.bodyFontSize * theme.typography.bodyScale * platformTypeScale),
+        focusFontSize: Math.round(workspace.layout.focusFontSize * ((theme.typography.headingScale + theme.typography.bodyScale) / 2) * platformTypeScale),
         lineSpacing: Math.min(1.8, Math.max(1.1, workspace.layout.lineSpacing * lineHeightScale)),
         paragraphSpacing: Math.round(workspace.layout.paragraphSpacing * densityScale),
         titleSpacing: Math.round(workspace.layout.titleSpacing * densityScale),
@@ -370,7 +396,7 @@ export default function UnifiedWorkspace() {
       })),
     }, targetPages);
     return applyManualPageOrder(result, activeDraft.manualPages);
-  }, [activeDraft, activePlatform, workspace.designPlan.pagination.douyinImageTargetPages, workspace.designPlan.pagination.xiaohongshuTargetPages, workspace.layout]);
+  }, [activeDraft, activePlatform, measurer, workspace.designPlan.pagination.douyinImageTargetPages, workspace.designPlan.pagination.xiaohongshuTargetPages, workspace.layout]);
 
   const wechatHtml = React.useMemo(() => {
     const template = styleTemplates[activeDraft.templateKey] ?? styleTemplates.zhenyiKnowledgeMinimal;
@@ -592,7 +618,6 @@ export default function UnifiedWorkspace() {
       setProjectId(importedProject.id);
       replaceProjectTitle(project.title);
       replaceWorkspace(importedWorkspace);
-      clearParsedDrafts();
       replaceAssets(importedAssets.assets);
       resetPlatformHistories();
       revisionRef.current += 1;
@@ -619,7 +644,6 @@ export default function UnifiedWorkspace() {
     setProjectId(result.project.id);
     replaceProjectTitle(result.project.title);
     replaceWorkspace(workspaceFromDocument(result.project));
-    clearParsedDrafts();
     await hydrateAssets(result.project.assets);
     resetPlatformHistories();
     revisionRef.current = 0;
@@ -698,6 +722,10 @@ export default function UnifiedWorkspace() {
     });
   }
 
+  function setParsedDrafts(update: (current: Partial<Record<PlatformId, PlatformDraft>>) => Partial<Record<PlatformId, PlatformDraft>>) {
+    replaceWorkspace({ ...workspaceRef.current, parsedDrafts: update(workspaceRef.current.parsedDrafts ?? {}) });
+  }
+
   function updateWorkspace(patch: Partial<WorkspacePersistedState>) {
     setWorkspace((current) => {
       const next = { ...current, ...patch };
@@ -735,32 +763,8 @@ export default function UnifiedWorkspace() {
     applyPlatformReplacements({ [nextDraft.platform]: nextDraft });
   }
 
-  async function regenerateCurrentPlatform() {
-    await regeneratePlatforms([activePlatform]);
-  }
-
   async function generateCurrentPlatformFromEditor() {
-    const pending = parsedDrafts[activePlatform];
-    if (pending && pending.sourceRevision === workspaceRef.current.sourceRevision && (workspaceRef.current.ai.mode === "deterministic" || workspaceRef.current.designPlan.generationMode === "layoutOnly")) {
-      const regeneration = await confirmEditedRegeneration([activePlatform]);
-      if (!regeneration.platforms.length) {
-        setAiRunState("idle");
-        setStatusMessage("已取消生成，当前成品和解析稿均已保留");
-        return;
-      }
-      const nextDraft = {
-        ...pending,
-        sourceRevision: workspaceRef.current.sourceRevision,
-        updatedAt: nowIso(),
-      } satisfies PlatformDraft;
-      applyPlatformReplacements({ [activePlatform]: nextDraft });
-      clearParsedDrafts([activePlatform]);
-      setAiRunState("idle");
-      setAiStatusMessage(undefined);
-      setStatusMessage(`已生成${WORKSPACE_PLATFORM_LABELS[activePlatform]}成稿`);
-      return;
-    }
-    await regenerateCurrentPlatform();
+    await regeneratePlatforms([activePlatform]);
   }
 
   async function regeneratePlatforms(platforms: PlatformId[]) {
@@ -774,7 +778,11 @@ export default function UnifiedWorkspace() {
     const currentSourceArticle = parseSourceMarkdown(sourceAtStart);
     ensureCurrentDesignPlan(currentSourceArticle);
     const settings = workspaceRef.current;
-    if (settings.designPlan.generationMode === "layoutOnly" && settings.ai.mode !== "deterministic") {
+    const needsSourceAnalysis = platforms.some((platform) => {
+      const pending = getCurrentParsedDraft(settings, platform);
+      return !pending || (pending.status !== "edited" && pending.status !== "locked");
+    });
+    if (settings.ai.mode !== "deterministic" && needsSourceAnalysis) {
       const key = semanticAnalysisCacheKey(settings.sourceRevision, settings.designPlan.generationMode, settings.ai.mode, settings.ai.baseUrl, settings.ai.model);
       if (!semanticAnalysisCacheRef.current.has(key)) {
         const analyzed = await reparseCurrentPlatform();
@@ -789,9 +797,11 @@ export default function UnifiedWorkspace() {
         setStatusMessage("已取消覆盖人工编辑稿，内容已保留");
         return;
       }
+      if (workspaceRef.current.sourceMarkdown !== sourceAtStart || projectIdRef.current !== projectAtStart) return;
       applyDeterministicRegeneration(regeneration.platforms, currentSourceArticle);
       clearParsedDrafts(regeneration.platforms);
       setAiRunState("idle");
+      setAiStatusMessage(undefined);
       setStatusMessage(regeneration.skippedEditedPlatforms.length ? "已使用本地排版生成，人工编辑稿已保留" : "已使用本地排版生成");
       return;
     }
@@ -812,6 +822,7 @@ export default function UnifiedWorkspace() {
       setStatusMessage("已取消覆盖人工编辑稿，内容已保留");
       return;
     }
+    if (workspaceRef.current.sourceMarkdown !== sourceAtStart || projectIdRef.current !== projectAtStart) return;
 
     aiAbortRef.current?.abort();
     const controller = new AbortController();
@@ -819,7 +830,13 @@ export default function UnifiedWorkspace() {
     const requestSource = workspaceRef.current.sourceMarkdown;
     const requestProject = projectIdRef.current;
     const requestMode = workspaceRef.current.designPlan.generationMode;
+    const requestSettings = workspaceRef.current.ai;
+    const requestInputs = new Map(regeneration.platforms.map((platform) => [platform, getPlatformGenerationInput(workspaceRef.current, platform)]));
     const requestDraftSignatures = createPlatformDraftSignatureMap(workspaceRef.current.platforms, regeneration.platforms);
+    const requestParsedDraftSignatures = new Map(regeneration.platforms.map((platform) => {
+      const draft = workspaceRef.current.parsedDrafts?.[platform];
+      return [platform, draft ? createPlatformDraftSignature(draft) : undefined];
+    }));
     setAiRunState("generating");
     setAiStatusMessage("正在生成平台版本");
     setStatusMessage("正在生成平台版本");
@@ -843,11 +860,34 @@ export default function UnifiedWorkspace() {
       const progressMessage = `正在生成${WORKSPACE_PLATFORM_LABELS[platform]}（${index + 1}/${regeneration.platforms.length}）`;
       setAiStatusMessage(progressMessage);
       setStatusMessage(progressMessage);
+      const input = requestInputs.get(platform)!;
+      if (input.usesWorkingDraft) {
+        try {
+          input.designPlan = (await resolveSemanticAnalysis(input.source, input.designPlan, requestSettings, controller.signal)).designPlan;
+        } catch (error) {
+          if (controller.signal.aborted || aiAbortRef.current !== controller) {
+            cancelled = true;
+            break;
+          }
+          failedPlatforms.push({ platform, message: error instanceof Error ? error.message : "工作稿分析失败" });
+          continue;
+        }
+      }
+      if (controller.signal.aborted || aiAbortRef.current !== controller || projectIdRef.current !== requestProject || workspaceRef.current.sourceMarkdown !== requestSource || workspaceRef.current.designPlan.generationMode !== requestMode) {
+        cancelled = true;
+        break;
+      }
+      const pendingBeforeGenerate = workspaceRef.current.parsedDrafts?.[platform];
+      if ((pendingBeforeGenerate ? createPlatformDraftSignature(pendingBeforeGenerate) : undefined) !== requestParsedDraftSignatures.get(platform)) {
+        skippedChangedPlatforms.push(platform);
+        continue;
+      }
       const result = await generatePlatformVersions({
         provider,
-        source: currentSourceArticle,
-        sourceVersionId: workspaceRef.current.sourceRevision,
-        generationMode: workspaceRef.current.designPlan.generationMode,
+        source: input.source,
+        sourceVersionId: input.designPlan.sourceRevision,
+        generationMode: requestMode,
+        analyzedDesignPlan: input.designPlan,
         platforms: [platform],
         existingVersions: platformVersionsFromDrafts(workspaceRef.current.platforms),
         signal: controller.signal,
@@ -858,20 +898,27 @@ export default function UnifiedWorkspace() {
         break;
       }
       if (result.ok) {
-        completedPlatforms.push(platform);
-        factCheckWarningCount += result.diagnostics.details?.filter((detail) => detail.includes(":fact_check_warning:")).length ?? 0;
         const current = workspaceRef.current;
-        const replacements = createGeneratedDraftReplacements(current.platforms, result.versions, [platform]);
+        const parsedDraft = current.parsedDrafts?.[platform];
+        const parsedSignature = parsedDraft ? createPlatformDraftSignature(parsedDraft) : undefined;
+        if (parsedSignature !== requestParsedDraftSignatures.get(platform)) {
+          skippedChangedPlatforms.push(platform);
+          continue;
+        }
+        const replacements = createGeneratedDraftReplacements(current, result.versions, [platform], input.designPlan);
         const merged = applyPlatformDraftReplacements({
           drafts: current.platforms,
           histories: historyRef.current,
           replacements,
           changedSince: requestDraftSignatures,
         });
+        skippedChangedPlatforms.push(...merged.skippedChangedPlatforms);
+        if (!merged.appliedPlatforms.includes(platform)) continue;
+        completedPlatforms.push(platform);
+        factCheckWarningCount += result.diagnostics.details?.filter((detail) => detail.includes(":fact_check_warning:")).length ?? 0;
         const next = {
           ...current,
-          designPlan: result.designPlan,
-          sourceRevision: result.designPlan.sourceRevision,
+          designPlan: input.usesWorkingDraft ? current.designPlan : result.designPlan,
           ai: { ...current.ai, lastFallbackReason: undefined },
           platforms: merged.drafts,
         };
@@ -880,7 +927,6 @@ export default function UnifiedWorkspace() {
         setHistory(merged.histories);
         setWorkspace(next);
         clearParsedDrafts([platform]);
-        skippedChangedPlatforms.push(...merged.skippedChangedPlatforms);
         continue;
       }
 
@@ -918,12 +964,37 @@ export default function UnifiedWorkspace() {
       return;
     }
 
+    if (skippedChangedPlatforms.length > 0 && failedPlatforms.length === 0) {
+      setAiRunState("idle");
+      const message = "生成期间稿件已修改，AI 结果未覆盖，当前编辑稿和解析稿已保留";
+      setAiStatusMessage(message);
+      setStatusMessage(message);
+      return;
+    }
+
     const failureMessage = failedPlatforms[0]?.message ?? "AI 生成失败";
     replaceWorkspace(markAiGenerationFailure(workspaceRef.current, failureMessage));
     setAiRunState("error");
     const message = `${failureMessage} 已保留当前编辑稿`;
     setAiStatusMessage(message);
     setStatusMessage(message);
+  }
+
+  async function resolveSemanticAnalysis(article: UnifiedArticleContent, localPlan: DesignPlan, settings: AiWorkspaceSettings, signal: AbortSignal) {
+    const key = semanticAnalysisCacheKey(localPlan.sourceRevision, localPlan.generationMode, settings.mode, settings.baseUrl, settings.model);
+    const cached = semanticAnalysisCacheRef.current.get(key);
+    if (cached) return { ...cached, cached: true };
+    const analyzer = settings.mode === "hosted"
+      ? new HostedSemanticAnalyzer()
+      : new OpenAICompatibleSemanticAnalyzer({ baseUrl: settings.baseUrl.trim(), model: settings.model.trim(), apiKey: sessionApiKey.trim(), timeoutMs: 30000 });
+    const result = await analyzer.analyze({ source: article, sourceVersionId: localPlan.sourceRevision, generationMode: localPlan.generationMode, signal });
+    const designPlan = applySemanticBlueprint(article, result.blueprint, { generationMode: localPlan.generationMode });
+    const analysis = { designPlan, engine: "AI 智能分析" as const };
+    if (!signal.aborted) {
+      semanticAnalysisCacheRef.current.set(key, analysis);
+      if (semanticAnalysisCacheRef.current.size > 16) semanticAnalysisCacheRef.current.delete(semanticAnalysisCacheRef.current.keys().next().value!);
+    }
+    return { ...analysis, cached: false };
   }
 
   async function reparseCurrentPlatform() {
@@ -936,14 +1007,20 @@ export default function UnifiedWorkspace() {
     const analysisPlatform = activePlatform;
     const analysisProject = projectIdRef.current;
     const current = workspaceRef.current;
+    const pendingAtStart = current.parsedDrafts?.[analysisPlatform];
+    const pendingSignatureAtStart = pendingAtStart ? createPlatformDraftSignature(pendingAtStart) : undefined;
+    if (current.ai.mode === "custom" && !isAiProviderConfigured(current.ai, sessionApiKey)) {
+      const missing = getMissingAiProviderFields(current.ai, sessionApiKey);
+      const message = `AI 配置不完整：请填写 ${missing.join("、")}，或切换本地模式。当前编辑稿未改变。`;
+      setAiRunState("error");
+      setAiStatusMessage(message);
+      setStatusMessage(message);
+      return false;
+    }
     const article = parseSourceMarkdown(current.sourceMarkdown);
     const localState = updateWorkspaceSource(current, current.sourceMarkdown);
     const localPlan = localState.designPlan;
     const remoteAnalysis = current.ai.mode !== "deterministic";
-    const cacheKey = remoteAnalysis
-      ? semanticAnalysisCacheKey(localState.sourceRevision, current.designPlan.generationMode, current.ai.mode, current.ai.baseUrl, current.ai.model)
-      : undefined;
-    const cachedAnalysis = cacheKey ? semanticAnalysisCacheRef.current.get(cacheKey) : undefined;
     const controller = new AbortController();
     analysisAbortRef.current?.abort();
     analysisAbortRef.current = controller;
@@ -955,31 +1032,11 @@ export default function UnifiedWorkspace() {
     let engineLabel: "本地基础分析" | "AI 智能分析" = "本地基础分析";
     let fallbackNotice = "";
     try {
-      if (cachedAnalysis) {
-        designPlan = cachedAnalysis.designPlan;
-        engineLabel = cachedAnalysis.engine;
-        fallbackNotice = "；已复用相同源文版本的语义分析结果";
-      } else if (remoteAnalysis) {
-        const analyzer = current.ai.mode === "hosted"
-          ? new HostedSemanticAnalyzer()
-          : new OpenAICompatibleSemanticAnalyzer({
-              baseUrl: current.ai.baseUrl.trim(),
-              model: current.ai.model.trim(),
-              apiKey: sessionApiKey.trim(),
-              timeoutMs: 30000,
-            });
-        const result = await analyzer.analyze({
-          source: article,
-          sourceVersionId: localState.sourceRevision,
-          generationMode: current.designPlan.generationMode,
-          signal: controller.signal,
-        });
-        designPlan = applySemanticBlueprint(article, result.blueprint, { generationMode: current.designPlan.generationMode });
-        engineLabel = "AI 智能分析";
-        if (cacheKey) {
-          semanticAnalysisCacheRef.current.set(cacheKey, { designPlan, engine: engineLabel });
-          if (semanticAnalysisCacheRef.current.size > 16) semanticAnalysisCacheRef.current.delete(semanticAnalysisCacheRef.current.keys().next().value!);
-        }
+      if (remoteAnalysis) {
+        const analysis = await resolveSemanticAnalysis(article, localPlan, current.ai, controller.signal);
+        designPlan = analysis.designPlan;
+        engineLabel = analysis.engine;
+        if (analysis.cached) fallbackNotice = "；已复用相同源文版本的语义分析结果";
       }
     } catch (error) {
       if (error instanceof AIProviderError && error.code === "cancelled") {
@@ -1002,28 +1059,26 @@ export default function UnifiedWorkspace() {
     const next = { ...workspaceRef.current, designPlan, sourceRevision: designPlan.sourceRevision };
     setAnalysisEngine(engineLabel as "本地基础分析" | "AI 智能分析");
     const currentDraft = next.platforms[analysisPlatform];
-    const preserveManualStyle = currentDraft.status === "edited" || currentDraft.status === "locked";
+    const currentPending = next.parsedDrafts?.[analysisPlatform];
+    const pendingChanged = (currentPending ? createPlatformDraftSignature(currentPending) : undefined) !== pendingSignatureAtStart;
+    const preservePending = pendingChanged || currentPending?.status === "edited" || currentPending?.status === "locked";
     const nextParsedDraft = createPlatformDraft(analysisPlatform, article, {
       designPlan,
       sourceRevision: next.sourceRevision,
       ratio: currentDraft.ratio,
       lockedPageIds: currentDraft.lockedPageIds,
       manualPages: currentDraft.manualPages,
-      ...(preserveManualStyle ? {
-        schemeId: currentDraft.schemeId,
-        themeId: currentDraft.themeId,
-        layoutId: currentDraft.layoutId,
-        templateKey: currentDraft.templateKey,
-      } : {}),
+      ...selectGenerationVisuals(currentDraft, undefined, designPlan),
     });
     replaceWorkspace(next);
-    setParsedDrafts((currentDrafts) => ({ ...currentDrafts, [analysisPlatform]: nextParsedDraft }));
+    if (!preservePending) setParsedDrafts((currentDrafts) => ({ ...currentDrafts, [analysisPlatform]: nextParsedDraft }));
+    else fallbackNotice += "；人工编辑的解析稿已保留";
     setSourceAnalysisNotice(`${engineLabel}完成 · ${designPlan.blueprint.sections.length} 个章节 · ${designPlan.blueprint.facts.length} 条事实${fallbackNotice}`);
     const failedRemote = remoteAnalysis && engineLabel !== "AI 智能分析";
     setAiRunState(failedRemote ? "error" : "idle");
     setAiStatusMessage(failedRemote ? `${fallbackNotice.replace(/^；/, "")}。当前成稿未改变，可重试或切换本地。` : undefined);
     setStatusMessage(`源文分析完成，已生成“${getVisualTheme(designPlan.recommendedThemeId ?? DESIGN_SCHEMES[designPlan.recommendedScheme].themeId).name}”结构建议；平台稿尚未覆盖${fallbackNotice}`);
-    return !remoteAnalysis || engineLabel === "AI 智能分析";
+    return !pendingChanged && (!remoteAnalysis || engineLabel === "AI 智能分析");
   }
 
   function updateParsedSemanticBlueprint(patch: Partial<Pick<ContentBlueprint, "centralThesis" | "primaryContentType" | "targetAudience" | "tone" | "sections">>) {
@@ -1080,16 +1135,21 @@ export default function UnifiedWorkspace() {
   function applyDeterministicRegeneration(platforms: PlatformId[], article: UnifiedArticleContent = sourceArticle) {
     const current = workspaceRef.current;
     const replacements = Object.fromEntries(
-      platforms.map((platform) => [platform, regeneratePlatformDraft(current.platforms[platform], article, current.ai, current.designPlan)]),
+      platforms.map((platform) => {
+        const pending = getCurrentParsedDraft(current, platform);
+        return [platform, pending ? { ...pending, updatedAt: nowIso() } : regeneratePlatformDraft(current.platforms[platform], article, current.ai, current.designPlan)];
+      }),
     ) as Partial<Record<PlatformId, PlatformDraft>>;
     applyPlatformReplacements(replacements);
   }
 
-  function createGeneratedDraftReplacements(currentDrafts: Record<PlatformId, PlatformDraft>, versions: ReturnType<typeof platformVersionsFromDrafts>, platforms: PlatformId[]) {
+  function createGeneratedDraftReplacements(current: WorkspacePersistedState, versions: ReturnType<typeof platformVersionsFromDrafts>, platforms: PlatformId[], analysisPlan: DesignPlan) {
     return Object.fromEntries(
       platforms.flatMap((platform) => {
         const version = versions[platform];
-        return version ? [[platform, platformDraftFromVersion(currentDrafts[platform], version, workspaceRef.current.sourceRevision)]] : [];
+        const pending = getCurrentParsedDraft(current, platform);
+        const base = { ...current.platforms[platform], ...selectGenerationVisuals(current.platforms[platform], pending, analysisPlan) };
+        return version ? [[platform, platformDraftFromVersion(base, version, current.sourceRevision)]] : [];
       }),
     ) as Partial<Record<PlatformId, PlatformDraft>>;
   }
@@ -1313,7 +1373,7 @@ export default function UnifiedWorkspace() {
     const merged = applyPlatformDraftReplacements({
       drafts: current.platforms,
       histories: historyRef.current,
-      replacements: { [activePlatform]: replacement },
+      replacements: { [activePlatform]: { ...replacement, manualStyleSelection: true } },
     });
     const recentSchemeIds = [schemeId, ...current.recentSchemeIds.filter((id) => id !== schemeId)].slice(0, 3);
     const next = { ...current, platforms: merged.drafts, recentSchemeIds };
@@ -1452,6 +1512,7 @@ export default function UnifiedWorkspace() {
         <section className={cn("min-w-0 overflow-hidden border border-[#d8e1dc] bg-white lg:min-h-0", panelVisible(mode, "editor"), focusMode === "preview" && "lg:hidden")}>
           <PlatformEditor
             draft={parsedDraft ?? activeDraft}
+            imageUrls={createImageUrlByBlock((parsedDraft ?? activeDraft).content, assets)}
             plan={workspace.designPlan}
             ready={saveState !== "loading"}
             analysisEngine={analysisEngine}
@@ -1484,7 +1545,7 @@ export default function UnifiedWorkspace() {
             wechatHtml={wechatHtml}
             cardLayout={cardLayout}
             imageUrlByBlock={createImageUrlByBlock(activeDraft.content, assets)}
-            onWechatPreviewBlur={(html) => commitPlatform(withWechatHtmlOverride(activeDraft, html))}
+            onWechatPreviewChange={(html) => commitPlatform(withWechatHtmlOverride(workspaceRef.current.platforms.wechat, html))}
             onCopyWechat={copyWechat}
             onExportWechat={downloadWechatHtml}
             onTogglePageLock={lockPage}
@@ -1529,7 +1590,7 @@ export default function UnifiedWorkspace() {
             onAiModelChange={(model) => updateWorkspace({ ai: { ...workspace.ai, model } })}
             onSessionApiKeyChange={setSessionApiKey}
             onCancelAi={cancelAiGeneration}
-            onRetryAi={() => void regenerateCurrentPlatform()}
+            onRetryAi={() => void generateCurrentPlatformFromEditor()}
             onOpenStyles={() => setStylePanelOpen(true)}
           />
         </aside>
@@ -1645,6 +1706,7 @@ function SourcePanel(props: {
 
 function PlatformEditor(props: {
   draft: PlatformDraft;
+  imageUrls: Record<string, string>;
   plan: DesignPlan;
   ready: boolean;
   analysisEngine: "本地基础分析" | "AI 智能分析";
@@ -1716,28 +1778,42 @@ function PlatformEditor(props: {
           <SemanticAnalysisSummary blueprint={props.plan.blueprint} analysisEngine={props.analysisEngine} onChange={props.onSemanticChange} />
         )}
         <div className="mx-auto max-w-[860px] overflow-hidden rounded-lg border border-[#d8e1dc] bg-white shadow-[0_2px_8px_rgba(31,52,42,0.04)]">
-          {props.draft.content.blocks.map((block) => {
+          {props.draft.content.blocks.map((block, blockIndex) => {
             const editable = block.type !== "divider" && block.type !== "pageBreak";
+            if (!editable) return <div key={block.id} role="separator" aria-label={blockLabel(block)} className="flex items-center gap-3 px-4 py-2 text-xs text-muted-foreground"><span className="h-px flex-1 bg-[#d8e1dc]" />{blockLabel(block)}<span className="h-px flex-1 bg-[#d8e1dc]" /></div>;
             return (
               <div key={block.id} className="border-b border-[#edf1ee] p-4 last:border-b-0">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <span className="rounded-full bg-[#edf2ef] px-2 py-0.5 text-xs text-[#4c6659]">{blockLabel(block)}</span>
-                  <span className="truncate text-xs text-muted-foreground">Line {block.source.startLine}</span>
+                  <span className="truncate text-xs text-muted-foreground">源文第 {block.source.startLine} 行</span>
                 </div>
-                <Textarea
+                {block.type === "image" ? <div className="space-y-2">
+                  {props.imageUrls[block.id] && !props.imageUrls[block.id].startsWith("asset:") && <NextImage src={props.imageUrls[block.id]} alt={block.plainText || "文章配图"} unoptimized width={640} height={360} className="max-h-44 w-full object-contain object-left" />}
+                  <Input aria-label="图片说明" value={block.plainText} disabled={!props.ready || Boolean(props.draft.editedWechatHtml)} onChange={(event) => {
+                    const url = markdownImageUrl(block.markdown);
+                    if (url) props.onDraftChange(updatePlatformBlock(props.draft, block.id, `![${event.target.value.replace(/[\\[\]]/g, "\\$&")}](${url})`));
+                  }} />
+                  <div className="flex gap-2">
+                    {([-1, 1] as const).map((direction) => <Button key={direction} variant="outline" size="sm" aria-label={direction < 0 ? "图片上移" : "图片下移"} title={direction < 0 ? "图片上移" : "图片下移"} disabled={!props.ready || Boolean(props.draft.editedWechatHtml) || blockIndex + direction < 0 || blockIndex + direction >= props.draft.content.blocks.length} onClick={() => {
+                      const blocks = [...props.draft.content.blocks];
+                      [blocks[blockIndex], blocks[blockIndex + direction]] = [blocks[blockIndex + direction], blocks[blockIndex]];
+                      props.onDraftChange({ ...props.draft, content: { ...props.draft.content, blocks }, manualPages: [], status: "edited", updatedAt: nowIso() });
+                    }}>{direction < 0 ? <MoveUp className="h-4 w-4" /> : <MoveDown className="h-4 w-4" />}</Button>)}
+                  </div>
+                </div> : <Textarea
                   value={blockText(block)}
                   disabled={!props.ready || !editable || Boolean(props.draft.editedWechatHtml)}
                   onChange={(event) => props.onDraftChange(updatePlatformBlock(props.draft, block.id, event.target.value))}
                   rows={Math.min(12, Math.max(2, Math.ceil(blockText(block).length / 56), blockText(block).split("\n").length))}
                   className="min-h-12 resize-y rounded-md border-[#e3e9e5] bg-[#fbfcfb] shadow-none focus-visible:ring-[#8fc8a8]"
                   aria-label={`${blockLabel(block)}内容`}
-                />
+                />}
               </div>
             );
           })}
         </div>
       </div>
-      {props.draft.editedWechatHtml && <p role="status" className="px-4 text-sm text-amber-800">已保留旧版预览编辑稿，可复制或导出。重新生成会要求确认覆盖。</p>}
+      {props.draft.editedWechatHtml && <p role="status" className="px-4 text-sm text-amber-800">预览编辑稿已保存，重新生成前需要确认覆盖。</p>}
       <div className="border-t border-[#e3e9e5] bg-white p-3">
         <Button type="button" size="sm" onClick={props.onGenerate} disabled={!props.ready || props.generating}>
           <RefreshCw className={cn("h-4 w-4", props.generating && "animate-spin")} />
@@ -1892,7 +1968,7 @@ function PreviewPanel(props: {
   wechatHtml: string;
   cardLayout?: CardLayoutResult;
   imageUrlByBlock: Record<string, string>;
-  onWechatPreviewBlur: (html: string) => void;
+  onWechatPreviewChange: (html: string) => void;
   onCopyWechat: () => Promise<void>;
   onExportWechat: () => void;
   onTogglePageLock: (page: CardLayoutPage) => void;
@@ -1958,6 +2034,7 @@ function PreviewPanel(props: {
           <Toggle className="h-7 w-full px-1 text-[11px]" pressed={props.aiMode === "custom"} onPressedChange={() => props.onAiModeChange("custom")}>自定义接口</Toggle>
         </div>
 
+        {props.aiMode === "hosted" && <AIAccess />}
         {(props.aiRunState === "generating" || props.aiRunState === "error") && (
           <div className={cn("mt-2 rounded-md border px-3 py-2 text-xs", props.aiRunState === "error" ? "border-red-200 bg-red-50 text-red-800" : "border-[#c8d8cf] bg-[#f1f7f3] text-[#28553d]")} role={props.aiRunState === "error" ? "alert" : "status"} aria-live="polite">
             <div className="flex items-start gap-2">
@@ -1990,7 +2067,7 @@ function PreviewPanel(props: {
       </div>
       <div data-preview-scroll className="min-h-0 flex-1 overflow-y-auto bg-[#efeee8] p-4">
         {props.activePlatform === "wechat" ? (
-          <WechatPreview html={props.wechatHtml} onBlur={props.onWechatPreviewBlur} onCopy={props.onCopyWechat} onExport={props.onExportWechat} />
+          <WechatPreview html={props.wechatHtml} onChange={props.onWechatPreviewChange} onCopy={props.onCopyWechat} onExport={props.onExportWechat} />
         ) : props.activePlatform === "douyinLongform" ? (
           <LongformPreview draft={props.draft} imageUrlByBlock={props.imageUrlByBlock} />
         ) : (
@@ -2015,7 +2092,21 @@ function PreviewPanel(props: {
   );
 }
 
-function WechatPreview(props: { html: string; onBlur: (html: string) => void; onCopy: () => Promise<void>; onExport: () => void }) {
+function WechatPreview(props: { html: string; onChange: (html: string) => void; onCopy: () => Promise<void>; onExport: () => void }) {
+  const editorRef = React.useRef<HTMLDivElement>(null);
+  const syncedHtmlRef = React.useRef(props.html);
+  React.useEffect(() => {
+    const editor = editorRef.current;
+    // Input echoes must not reset the caret; external replacements still update a focused editor.
+    if (editor && editor.innerHTML !== props.html && (props.html !== syncedHtmlRef.current || !editor.contains(document.activeElement))) editor.innerHTML = props.html;
+    syncedHtmlRef.current = props.html;
+  }, [props.html]);
+  function syncHtml(event: React.FormEvent<HTMLDivElement>) {
+    const html = sanitizeWechatHtml(event.currentTarget.innerHTML);
+    if (html === syncedHtmlRef.current) return;
+    syncedHtmlRef.current = html;
+    props.onChange(html);
+  }
   return (
     <div className="mx-auto max-w-[390px]">
       <div className="mb-3 flex gap-2">
@@ -2028,10 +2119,16 @@ function WechatPreview(props: { html: string; onBlur: (html: string) => void; on
         </Button>
       </div>
       <div
+        ref={editorRef}
         data-wechat-preview
+        contentEditable
+        suppressContentEditableWarning
+        role="textbox"
+        aria-multiline="true"
         className="preview-editor min-h-[720px] rounded-md border bg-white p-5 shadow-sm"
-        aria-label="公众号成稿预览"
-        dangerouslySetInnerHTML={{ __html: props.html }}
+        aria-label="公众号成稿预览，可编辑"
+        onInput={syncHtml}
+        onBlur={syncHtml}
       />
     </div>
   );
@@ -2039,8 +2136,7 @@ function WechatPreview(props: { html: string; onBlur: (html: string) => void; on
 
 function LongformPreview({ draft, imageUrlByBlock }: { draft: PlatformDraft; imageUrlByBlock: Record<string, string> }) {
   const [notice, setNotice] = React.useState("");
-  const template = styleTemplates[draft.templateKey] ?? styleTemplates.zhenyiKnowledgeMinimal;
-  const html = renderWechatContentHtml(draft.content, { template, imageNodes: Object.entries(imageUrlByBlock).map(([blockId, src]) => ({ blockId, src })) });
+  const html = renderLongformHtml(draft.content, imageUrlByBlock);
   const text = draft.content.blocks.filter((block) => block.type !== "pageBreak").map((block) => {
     if (block.type === "image") return block.markdown;
     if (block.type === "code") return block.text;
@@ -2079,7 +2175,6 @@ function CardPreview(props: {
   if (!page) return null;
 
   const hasManualPages = pages.some((candidate) => candidate.manual || candidate.locked);
-  const previewWidth = 340;
   return (
     <div className="space-y-4">
       <div className="mx-auto flex w-full max-w-[340px] items-center justify-between rounded-md border bg-white p-2 text-xs text-muted-foreground">
@@ -2160,134 +2255,9 @@ function CardPreview(props: {
           </Button>
         </div>
       </div>
-      <div data-card-preview className="mx-auto overflow-hidden rounded-md border shadow-sm" style={{ width: previewWidth, height: Math.round((previewWidth * page.canvas.height) / page.canvas.width), background: props.preset.background }}>
-        <div style={{ width: page.canvas.width, height: page.canvas.height, transform: `scale(${previewWidth / page.canvas.width})`, transformOrigin: "top left", position: "relative" }}>
-          <CardPreviewFrame page={page} preset={props.preset} platform={props.activePlatform === "douyinImage" ? "douyinImage" : "xiaohongshu"} />
-          {page.nodes.map((node) => {
-            const imageUrl = props.imageUrlByBlock[node.blockId];
-            if (node.kind === "image") {
-              return imageUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  key={node.id}
-                  src={imageUrl}
-                  alt=""
-                  className="absolute object-cover"
-                  style={{
-                    left: node.image?.x ?? node.x,
-                    top: node.image?.y ?? node.y,
-                    width: node.image?.width ?? node.width,
-                    height: node.image?.height ?? node.height,
-                  }}
-                />
-              ) : (
-                <div key={node.id} className="absolute" style={{ left: node.x, top: node.y, width: node.width, height: node.height, background: props.preset.highlight }} />
-              );
-            }
-            return (
-              <div
-                key={node.id}
-                className={cn("absolute whitespace-pre-wrap break-words", node.kind === "focus" && props.preset.variant !== "story" && "px-4 py-3")}
-                  style={{
-                    left: node.x,
-                    top: node.y,
-                    width: node.width,
-                    fontFamily: node.style?.fontFamily,
-                    fontSize: node.style?.fontSize,
-                    lineHeight: node.style?.lineHeight ? `${node.style.lineHeight}px` : undefined,
-                    fontWeight: node.style?.fontWeight,
-                    color: node.kind === "body" ? props.preset.body : props.preset.title,
-                    background: node.kind === "focus"
-                      ? props.preset.variant === "story" ? "transparent" : props.preset.variant === "data" ? props.preset.surface : props.preset.highlight
-                      : undefined,
-                    ...cardNodeBorderStyle(node.kind, props.preset),
-                    borderRadius: node.kind === "focus" && props.preset.variant !== "story" ? (props.preset.radius ?? (props.preset.variant === "editorial" ? 4 : 12)) : undefined,
-                    padding: node.kind === "heading" && (props.preset.variant === "editorial" || props.preset.variant === "data") ? "0 0 0 18px" : undefined,
-                  }}
-              >
-                {node.lines.map((line) => line.text).join("\n")}
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      <CardSurface page={page} preset={props.preset} platform={props.activePlatform === "douyinImage" ? "douyinImage" : "xiaohongshu"} imageUrls={props.imageUrlByBlock} />
       {!!page.overflow.length && <div className="mx-auto mt-2 w-full max-w-[340px] rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">当前页有溢出，调整字号或边距后会重新计算。</div>}
     </div>
-  );
-}
-
-function cardNodeBorderStyle(
-  kind: CardLayoutPage["nodes"][number]["kind"],
-  preset: ReturnType<typeof createCardPreset>,
-): React.CSSProperties {
-  const allSides = kind === "focus" && preset.variant === "data";
-  const storyFocus = kind === "focus" && preset.variant === "story";
-  const leftWidth = kind === "heading" && preset.variant === "editorial"
-    ? 7
-    : kind === "focus" && preset.variant === "checklist"
-      ? 8
-      : kind === "heading" && preset.variant === "data"
-        ? 6
-        : allSides
-          ? 2
-          : 0;
-  const bottomWidth = kind === "heading" && preset.variant === "checklist" ? 8 : storyFocus || allSides ? 2 : 0;
-
-  return {
-    borderTopWidth: storyFocus || allSides ? 2 : 0,
-    borderRightWidth: allSides ? 2 : 0,
-    borderBottomWidth: bottomWidth,
-    borderLeftWidth: leftWidth,
-    borderStyle: "solid",
-    borderColor: preset.rule,
-    borderLeftColor: leftWidth > 0 && !allSides ? preset.title : preset.rule,
-  };
-}
-
-function CardPreviewFrame(props: { page: CardLayoutPage; preset: ReturnType<typeof createCardPreset>; platform: "xiaohongshu" | "douyinImage" }) {
-  const { page, preset } = props;
-  if (props.platform === "douyinImage") {
-    return (
-      <div className="absolute left-0 top-0 w-full" style={{ height: 72, background: preset.title, color: preset.background, fontFamily: preset.fontFamily }}>
-        <div className="absolute text-[24px] font-bold" style={{ left: page.safeArea.x, top: 23 }}>抖音图文&nbsp; / &nbsp;{String(page.pageNumber).padStart(2, "0")}</div>
-      </div>
-    );
-  }
-  const labelY = Math.max(44, page.safeArea.y - 78);
-  if (preset.variant === "checklist") {
-    return (
-      <>
-        <div className="absolute" style={{ left: page.safeArea.x, top: labelY, width: 76, height: 8, background: preset.title }} />
-        <div className="absolute text-[20px] font-bold" style={{ left: page.safeArea.x, top: labelY + 20, color: preset.muted }}>行动清单</div>
-        <div className="absolute text-[86px] font-extrabold leading-none" style={{ right: page.safeArea.right, top: labelY - 36, color: preset.rule }}>{String(page.pageNumber).padStart(2, "0")}</div>
-      </>
-    );
-  }
-  if (preset.variant === "data") {
-    return (
-      <>
-        {[0, 1, 2, 3, 4].map((column) => (
-          <div key={column} className="absolute" style={{ left: page.safeArea.x + (page.safeArea.width / 4) * column, top: page.safeArea.y - 28, width: 1, height: page.safeArea.height + 56, background: `${preset.rule}3D` }} />
-        ))}
-        <div className="absolute" style={{ left: page.safeArea.x, top: page.safeArea.y - 36, width: page.safeArea.width, height: 4, background: preset.title }} />
-        <div className="absolute text-[21px] font-bold" style={{ left: page.safeArea.x, top: labelY, color: preset.title }}>数据编辑部 {String(page.pageNumber).padStart(2, "0")}</div>
-      </>
-    );
-  }
-  if (preset.variant === "story") {
-    return (
-      <>
-        <div className="absolute" style={{ left: page.safeArea.x, top: page.safeArea.y - 34, width: 72, height: 3, background: preset.rule }} />
-        <div className="absolute" style={{ left: page.safeArea.x, top: page.safeArea.y - 34, width: 2, height: page.safeArea.height + 52, background: preset.rule }} />
-        <div className="absolute text-[22px] font-semibold" style={{ left: page.safeArea.x + 20, top: labelY, color: preset.title }}>章节 {String(page.pageNumber).padStart(2, "0")}</div>
-      </>
-    );
-  }
-  return (
-    <>
-      <div className="absolute" style={{ left: page.safeArea.x, top: page.safeArea.y - 36, width: page.safeArea.width, height: 3, background: preset.rule }} />
-      <div className="absolute text-[22px] font-semibold" style={{ left: page.safeArea.x, top: labelY, color: preset.muted }}>编辑部 / {String(page.pageNumber).padStart(2, "0")}</div>
-    </>
   );
 }
 

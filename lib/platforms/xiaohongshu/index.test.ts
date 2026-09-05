@@ -35,12 +35,12 @@ describe("toXiaohongshuImageText", () => {
     expect(renderable.length).toBeGreaterThan(0);
     expect(first.source.blockCount).toBe(content.blocks.length);
     expect(first.source.blockIds).toEqual(sourceBlockCount === content.blocks.length ? first.source.blockIds : []);
-    expect(first.tags.length).toBeGreaterThan(0);
+    expect(first.tags).toEqual([]);
     expect(first.title).toBe("标题：短文章");
     expect(first.body.length).toBeGreaterThan(0);
   });
 
-  it("builds cover, pages, and tags from no-title source", () => {
+  it("builds cover and pages without inventing tags from no-title prose", () => {
     const content = parseArticleContent(`第一段没有标题
 
 这是正文正文正文。
@@ -51,7 +51,7 @@ describe("toXiaohongshuImageText", () => {
     expect(output.cover.title).toBe("第一段没有标题");
     expect(output.cover.subtitle).toBe("这是正文正文正文。");
     expect(output.pages.length).toBeGreaterThan(0);
-    expect(output.tags[0]).toBeDefined();
+    expect(output.tags).toEqual([]);
   });
 
   it("derives page title and focus prompt for paragraph-only pages", () => {

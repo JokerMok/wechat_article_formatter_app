@@ -7,10 +7,8 @@ async function assertCardRatio(page: import("@playwright/test").Page, expectedWi
   const box = await card.boundingBox();
   expect(box).not.toBeNull();
   expect(box!.width / box!.height).toBeCloseTo(expectedWidth / expectedHeight, 2);
-  const firstTextNode = card.locator(":scope > div > div").nth(1);
-  await expect(firstTextNode).toBeVisible();
-  const lineHeight = await firstTextNode.evaluate((element) => Number.parseFloat(getComputedStyle(element).lineHeight));
-  expect(lineHeight).toBeLessThan(120);
+  await expect(card.locator("canvas")).toBeVisible();
+  await expect(card).toHaveAttribute("data-render-ready", "true");
   await expect(page.locator("text=当前页有溢出")).toHaveCount(0);
   return card;
 }
@@ -48,9 +46,9 @@ test("TEST-020 narrow workspace exposes source, editor and preview views without
   await expect(page.getByLabel("平台标题")).toBeVisible();
   await page.getByRole("button", { name: "抖音图文" }).click();
   await page.getByRole("button", { name: "预览", exact: true }).click();
-  await expect(page.getByText(/1080x1440/).first()).toBeVisible();
-  const narrowCard = await assertCardRatio(page, 1080, 1440);
-  await expectCardScreenshot(narrowCard, "narrow-douyin-3x4-card.png");
+  await expect(page.getByText(/1080x1920/).first()).toBeVisible();
+  const narrowCard = await assertCardRatio(page, 1080, 1920);
+  await expectCardScreenshot(narrowCard, "narrow-douyin-9x16-card.png");
 
   const overflow = await page.evaluate(() => ({
     body: document.body.scrollWidth,

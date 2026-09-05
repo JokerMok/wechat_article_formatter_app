@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PAGE_PLAN_KINDS } from "../design-plan/types";
 
 export const sourcePositionSchema = z.object({
   startLine: z.number().int().positive(),
@@ -32,6 +33,11 @@ const baseBlockSchema = z.object({
   headingDepth: z.number().int().min(1).max(6).optional(),
   ordered: z.boolean().optional(),
   listStart: z.number().int().nonnegative().optional(),
+  presentation: z.object({
+    pageRole: z.enum(PAGE_PLAN_KINDS),
+    sectionId: z.string().optional(),
+    sectionStart: z.boolean().optional(),
+  }).optional(),
 });
 
 export const unifiedArticleBlockSchema = z.discriminatedUnion("type", [

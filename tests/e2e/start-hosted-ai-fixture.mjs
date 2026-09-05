@@ -22,6 +22,20 @@ const upstream = createServer((request, response) => {
       response.writeHead(400).end();
       return;
     }
+    const input = JSON.parse(body);
+    const payload = JSON.parse(input.messages.at(-1).content);
+    if (!payload.platforms) {
+      const segments = payload.source.segments;
+      const semantic = {
+        schemaVersion: 1, documentType: "opinionAnalysis", tone: "理性",
+        thesis: segments.find((segment) => segment.type === "paragraph")?.text ?? payload.source.title,
+        sections: [{ id: "analysis-main", role: "argument", sourceSegmentIds: segments.map((segment) => segment.id), confidence: 0.85 }],
+        facts: [], quoteCandidates: [],
+      };
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(semantic) } }] }));
+      return;
+    }
     response.writeHead(200, { "content-type": "application/json" });
     response.end(fixture);
   });

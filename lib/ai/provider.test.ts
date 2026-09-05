@@ -101,7 +101,9 @@ describe("OpenAICompatibleProvider", () => {
     expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/v1/chat/completions", expect.any(Object));
     expect(JSON.stringify(init)).toContain("Bearer test-api-token");
     const requestBody = JSON.parse(String((init as RequestInit | undefined)?.body)) as { messages: Array<{ content: string }> };
-    expect(requestBody.messages[1]?.content).toContain('"sourceText"');
+    expect(requestBody.messages[1]?.content).toContain('"analysis"');
+    expect(requestBody.messages[1]?.content).toContain('"blocks"');
+    expect(requestBody.messages[1]?.content).not.toContain('"sourceText"');
     expect(requestBody.messages[1]?.content).not.toContain('"startLine"');
   });
 
@@ -613,7 +615,7 @@ describe("OpenAICompatibleProvider", () => {
     expect(JSON.stringify(changes)).not.toContain("资料散落在不同地方");
   });
 
-  it("TEST-009 keeps generated content available and records unsupported numbers as a warning", async () => {
+  it("TEST-009 rejects generated content containing unsupported numbers", async () => {
     vi.stubGlobal("fetch", vi.fn(async () =>
       jsonResponse({
         ...validFixture,
@@ -639,8 +641,8 @@ describe("OpenAICompatibleProvider", () => {
       platforms: ["wechat"],
     });
 
-    expect(validateGeneratedFacts("效率提升 300%。", source).unsupportedNumbers).toEqual(["300"]);
-    expect(result).toMatchObject({ ok: true, diagnostics: { details: ["wechat:fact_check_warning:unsupported_number_count:1"] } });
+    expect(validateGeneratedFacts("效率提升 300%。", source).unsupportedNumbers).toEqual(["300%"]);
+    expect(result).toMatchObject({ ok: false, error: { code: "schema", diagnostics: { details: expect.arrayContaining(["wechat:fact_check_rejected:unsupported_number_count:1"]) } } });
   });
 
   it("TEST-021 keeps unsupported quoted claims out of diagnostics", async () => {
@@ -672,9 +674,10 @@ describe("OpenAICompatibleProvider", () => {
       platforms: ["wechat"],
     });
 
-    expectOk(result);
-    const diagnostics = JSON.stringify(result.diagnostics);
-    expect(diagnostics).toContain("wechat:fact_check_warning:unsupported_quote_count:1");
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Unsupported quote was accepted");
+    const diagnostics = JSON.stringify(result.error.diagnostics);
+    expect(diagnostics).toContain("wechat:fact_check_rejected:unsupported_quote_count:1");
     expect(diagnostics).not.toContain(unsupportedQuote);
     expect(diagnostics).not.toContain(unsupportedQuote.slice(0, 20));
     expect(diagnostics).not.toContain("资料散落在不同地方");

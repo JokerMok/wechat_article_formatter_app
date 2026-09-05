@@ -283,54 +283,25 @@ export function summarizeTextBlocks(content: UnifiedArticleContent) {
   };
 }
 
-function splitTokens(value: string) {
-  return value
-    .replace(/[\r\n]+/g, " ")
-    .replace(/[，。！？；;:：!?.、|]/g, " ")
-    .trim()
-    .split(/\s+/)
-    .filter((token) => token.length > 1);
-}
-
-const PUBLISHING_TAG_PATTERNS = [
-  "AI产品经理", "产品经理", "企业AI", "人工智能", "项目复盘", "案例复盘", "技术协作", "算法包",
-  "训练数据", "模型部署", "数据分析", "数据治理", "知识库", "客户服务", "内容创作", "效率工具",
-  "产品设计", "项目管理", "职场成长", "个人成长", "小红书", "公众号", "抖音",
-];
-
-export function collectTags(content: UnifiedArticleContent, maxCount: number) {
-  const searchableText = content.blocks.filter((block) => block.type !== "code" && block.type !== "image").map((block) => block.plainText).join(" ");
-  const domainCandidates = PUBLISHING_TAG_PATTERNS.filter((tag) => searchableText.includes(tag));
-  const latinCandidates = [...searchableText.matchAll(/\b(?:AI|[A-Z][A-Za-z0-9.+-]{2,18}|[A-Z]{2,12})\b/g)]
-    .map((match) => match[0]);
-  const structuralCandidates = content.blocks.flatMap((block): string[] => {
-    if (block.type === "title" || block.type === "section" || block.type === "subsection" || block.type === "lead") {
-      return splitTokens(block.text);
-    }
-    if (block.type === "card") {
-      if (block.title?.trim()) {
-        return [block.title.trim()];
-      }
-      return splitTokens(block.body);
-    }
-    return [];
-  });
-  const tagCandidates = [...domainCandidates, ...latinCandidates, ...structuralCandidates];
-
-  const unique = new Map<string, boolean>();
+export function collectTags(content: UnifiedArticleContent, maxCount: number, topicTags?: readonly string[]) {
+  const limit = Number.isFinite(maxCount) ? Math.max(0, Math.floor(maxCount)) : 0;
+  if (limit === 0) return [];
+  // Without semantic metadata, only author-marked hashtags are evidence of a tag.
+  // An explicit empty semantic list is authoritative, not a request to fill it.
+  const searchableText = content.blocks.filter((block) => block.type !== "code" && block.type !== "image").map((block) => block.plainText).join("\n");
+  const tagCandidates = topicTags ?? [...searchableText.matchAll(/(?:^|[\s（(，,。；;！!？?])#([\p{L}\p{N}][\p{L}\p{N}_+.-]*)(?=$|[\s#）)，,。；;！!？?])/gu)].map((match) => match[1]);
+  const unique = new Set<string>();
   const tags: string[] = [];
 
   for (const candidate of tagCandidates) {
-    const clean = candidate
-      .trim()
-      .replace(/[^\p{L}\p{N}]+/gu, "")
-      .slice(0, 12);
-    if (!clean || unique.has(clean)) {
+    const clean = candidate.trim().replace(/^#|#$/gu, "").replace(/\s+/gu, "");
+    const key = clean.toLowerCase();
+    if (!/^[\p{L}\p{N}][\p{L}\p{N}_+.-]*$/u.test(clean) || Array.from(clean).length > 32 || unique.has(key)) {
       continue;
     }
-    unique.set(clean, true);
+    unique.add(key);
     tags.push(clean);
-    if (tags.length >= maxCount) {
+    if (tags.length >= limit) {
       break;
     }
   }

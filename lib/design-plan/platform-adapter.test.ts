@@ -77,18 +77,18 @@ describe("buildPlatformArticle", () => {
     const result = buildPlatformArticle(source, "xiaohongshu", plan);
     const pages = splitPages(result);
     const output = toXiaohongshuImageText(result);
-    expect(pages.length).toBeGreaterThanOrEqual(3);
+    expect(pages.length).toBe(2);
     expect(pages.length).toBeLessThanOrEqual(10);
     expect(output.pages).toHaveLength(pages.length);
     expect(pages[0]?.map((block) => block.type)).toEqual(["title"]);
-    expect(result.blocks.filter((block) => block.type !== "pageBreak")).toEqual(source.blocks);
+    expect(result.blocks.filter((block) => block.type !== "pageBreak").map(({ presentation, ...block }) => { expect(presentation).toBeDefined(); return block; })).toEqual(source.blocks);
   });
 
-  it("builds a lower-density 4-8 page Douyin image sequence", () => {
+  it("keeps a short Douyin outline on a cover and one readable content page", () => {
     const result = buildPlatformArticle(source, "douyinImage", plan);
     const pages = splitPages(result);
     const output = toDouyinImageText(result, { ratio: "9:16" });
-    expect(pages.length).toBeGreaterThanOrEqual(3);
+    expect(pages.length).toBe(2);
     expect(pages.length).toBeLessThanOrEqual(8);
     expect(output.pages).toHaveLength(pages.length);
     expect(Math.max(...pages.map((page) => page.length))).toBeLessThanOrEqual(6);
@@ -148,7 +148,7 @@ describe("buildPlatformArticle", () => {
     const result = buildPlatformArticle(article, "wechat", analyzeArticleDesign(article));
     const text = result.blocks.map(blockText).join("\n");
     expect(text).toContain("先整理事实，再形成判断");
-    expect(result.blocks).toEqual(article.blocks);
+    expect(result.blocks.map(({ presentation, ...block }) => { expect(presentation).toBeDefined(); return block; })).toEqual(article.blocks);
   });
 });
 

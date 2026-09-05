@@ -101,11 +101,11 @@ function buildCaption(content: UnifiedArticleContent, title: string, tags: strin
   return [title, lead, endingText && endingText !== lead ? endingText : "", tagLine].filter(Boolean).join("\n\n");
 }
 
-export function toXiaohongshuImageText(content: UnifiedArticleContent): XiaohongshuImageTextOutput {
+export function toXiaohongshuImageText(content: UnifiedArticleContent, options: { topicTags?: readonly string[] } = {}): XiaohongshuImageTextOutput {
   const pageCapacity = profile.maxBlocksPerPage;
   const pages = buildPages(pageCapacity, content);
   const title = selectFallbackTitle(content);
-  const tags = collectTags(content, profile.maxTags);
+  const tags = collectTags(content, profile.maxTags, options.topicTags);
   const body = buildBodyText(content);
 
   return {

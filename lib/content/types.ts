@@ -41,6 +41,12 @@ type UnifiedBlockBase<TType extends UnifiedContentBlockType> = {
   headingDepth?: number;
   ordered?: boolean;
   listStart?: number;
+  /** Presentation is separate from immutable source syntax and wording. */
+  presentation?: {
+    pageRole: import("../design-plan/types").PagePlanKind;
+    sectionId?: string;
+    sectionStart?: boolean;
+  };
 };
 
 type UnifiedTextBlockBase<TType extends Exclude<BlockType, "list" | "card">> = UnifiedBlockBase<TType> & {

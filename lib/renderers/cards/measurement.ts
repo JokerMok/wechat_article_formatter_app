@@ -17,10 +17,18 @@ export function createApproximateTextMeasurer(): TextMeasurer {
 }
 
 export function createCanvasTextMeasurer(ctx: Pick<CanvasRenderingContext2D, "font" | "measureText">): TextMeasurer {
+  const cache = new Map<string, number>();
   return {
     measureText(text: string, style: TextStyle) {
-      ctx.font = `${style.fontWeight} ${style.fontSize}px ${style.fontFamily}`;
-      return { width: ctx.measureText(text).width };
+      const font = `${style.fontWeight} ${style.fontSize}px ${style.fontFamily}`;
+      const key = `${font}\n${text}`;
+      const cached = cache.get(key);
+      if (cached !== undefined) return { width: cached };
+      ctx.font = font;
+      const width = ctx.measureText(text).width;
+      if (cache.size >= 20000) cache.clear();
+      cache.set(key, width);
+      return { width };
     },
   };
 }
