@@ -399,7 +399,7 @@ export function updatePlatformRatio(draft: PlatformDraft, ratio: RatioMode): Pla
   return {
     ...draft,
     ratio,
-    meta: { ...meta, tags: draft.meta.tags.length ? draft.meta.tags : meta.tags },
+    meta: { ...meta, caption: draft.meta.caption, tags: draft.meta.tags },
     status: "edited",
     updatedAt: new Date().toISOString(),
   };

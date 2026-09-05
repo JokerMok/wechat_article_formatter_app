@@ -9,6 +9,9 @@ export function planPreservedPages(source: UnifiedArticleContent, platform: Plat
   let current: UnifiedArticleBlock[] = [];
   let size = 0;
   const budget = platform === "douyinImage" ? 260 : 440;
+  const compact = cards && source.blocks.length <= 4
+    && source.blocks.every((block) => ["title", "paragraph", "quote"].includes(block.type))
+    && source.blocks.reduce((length, block) => length + block.plainText.length, 0) <= 180;
   const kind = (blocks: UnifiedArticleBlock[]): PagePlanKind => {
     if (blocks[0]?.type === "title") return "cover";
     if (blocks.some((block) => block.type === "list")) return "checklist";
@@ -32,7 +35,7 @@ export function planPreservedPages(source: UnifiedArticleContent, platform: Plat
   };
   for (const block of source.blocks) {
     if (cards && block.type === "pageBreak") { flush(); continue; }
-    if (cards && current.length && (current[0].type === "title" || block.type === "section" || (size >= budget && !["section", "subsection"].includes(current.at(-1)!.type)))) flush();
+    if (cards && !compact && current.length && (current[0].type === "title" || block.type === "section" || (size >= budget && !["section", "subsection"].includes(current.at(-1)!.type)))) flush();
     current.push(block);
     size += block.type === "image" ? 200 : block.plainText.length;
   }

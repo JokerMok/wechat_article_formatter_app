@@ -18,7 +18,7 @@ The block editor is the single editing surface for new drafts. Preview is read-o
 
 ## Automated evidence
 
-- `npm test`: 31 files, 283 tests passed.
+- `npm test`: 31 files, 285 tests passed.
 - `npm run lint`: passed.
 - `npm run build`: passed (Next.js production build and TypeScript).
 - Added whole-pipeline tests using the existing fixed article corpus and a mixed-structure fixture on all four platforms.
@@ -60,3 +60,11 @@ Deployment `dpl_4yDXoNa9WbDkUqjp9rcDREkPsSd8` used commit `a4a8c8b`. Actual Xiao
 Actual Douyin longform text download retained full source text, link destinations, nested list markers, code, both image references and special symbols. Applying editorial theme A retained the mixed content. A browser reload recovered the saved project and source; the selected platform reset to WeChat, so platform-selection persistence is not claimed.
 
 Remaining release gates: successful real hosted AI (Preview returns AI_NOT_CONFIGURED), all fixture/platform browser combinations, actual mobile viewport and external-editor paste fidelity. GitHub write access remains blocked. Do not promote these previews to production.
+
+## Third Preview findings and release status
+
+Deployment `dpl_F6CyfLnfZFAzhbFprATMqNjJkDwY` used `edc0856`. Mixed source generated on all four platforms. Actual Xiaohongshu ZIP contained three PNGs; the inspected middle and final images retained both source images, nested list numbering, code, numeric data and 来源. The code-only orphan page is gone. This is a structural QA fixture using placeholder image endpoints, not evidence of final visual design quality.
+
+A 150-paragraph, over-10,000-character pressure fixture generated on all four platforms. Both longform previews included the final paragraph and ending marker. Cards generated 32 Xiaohongshu pages and 27 Douyin pages; full long-card image inspection and publishing page-limit handling remain outstanding. Short-text generation worked on all four platforms but forced two sparse cards; the final patch combines simple short content on one card. Changing image ratio now preserves edited captions and intentionally empty tags.
+
+Final automated checks: 285 tests / 31 files, lint and production build passed. Browser coverage is partial, not a release pass. No production promotion or merge is authorized by the acceptance evidence yet. GitHub connector contents write returned 403 and local git has no credential, so all branch commits remain local. Preview AI has no complete configuration. Mobile, external editor paste, successful hosted AI, the full five-fixture end-to-end matrix and remaining visual/platform constraints must pass before release.

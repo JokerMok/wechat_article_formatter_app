@@ -52,6 +52,16 @@ A < B，x >= 2，①、②、® 和 😀。
 `;
 
 describe("publishing integrity gate", () => {
+  it("keeps a short title and paragraph together on one card", () => {
+    const source = parseSourceDocument("# 本周复盘\n\n先把一个真实问题解决，再决定是否扩大范围。");
+    const plan = analyzeArticleDesign(source, { generationMode: "layoutOnly" });
+    for (const platform of ["xiaohongshu", "douyinImage"] as const) {
+      const output = buildPlatformArticle(source, platform, plan);
+      expect(output.blocks.some((block) => block.type === "pageBreak")).toBe(false);
+      expect(checkSourceIntegrity(source, output).ok).toBe(true);
+    }
+  });
+
   for (const fixture of [...fixedArticles, { id: "mixed-rich-structure", source: MIXED }]) {
     it(`preserves actual output across all four platforms: ${fixture.id}`, () => {
       const source = parseSourceDocument(fixture.source);

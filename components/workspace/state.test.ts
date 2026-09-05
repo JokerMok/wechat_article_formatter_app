@@ -31,6 +31,7 @@ import {
   updatePlatformBlock,
   updatePlatformCaption,
   updatePlatformRatio,
+  updatePlatformTags,
   updatePlatformTitle,
   updateWorkspaceSource,
   updateWorkspaceSourceDraft,
@@ -270,6 +271,16 @@ describe("workspace state", () => {
     expect(edited.title).toBe("人工标题");
     expect(edited.meta.caption).toBe("人工发布文案");
     expect(edited.content.blocks.find((block) => block.id === paragraph!.id && "text" in block)?.text).toBe("正文改动。");
+  });
+
+  it("preserves an edited caption and deliberately cleared tags when changing aspect ratio", () => {
+    const state = createWorkspaceState("# 标题\n\n正文。");
+    const draft = updatePlatformTags(updatePlatformCaption(state.platforms.douyinImage, "人工发布文案"), "");
+    const resized = updatePlatformRatio(draft, "9:16");
+    expect(resized.meta.caption).toBe("人工发布文案");
+    expect(resized.meta.tags).toEqual([]);
+    expect(resized.content).toBe(draft.content);
+    expect(resized.ratio).toBe("9:16");
   });
 
   it("restores persisted workspace state with social reflow settings", () => {
