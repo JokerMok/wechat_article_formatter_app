@@ -6,6 +6,7 @@ export type {
   ContentWarningCode,
   SourcePosition,
   SourceSegment,
+  SourceSegmentType,
   SourceDocument,
   StructuralContentBlockType,
   UnifiedArticleBlock,

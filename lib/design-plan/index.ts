@@ -2,6 +2,8 @@ export { analyzeArticleDesign, applySemanticBlueprint, CONTENT_TYPE_LABELS, dete
 export type { AnalyzeArticleDesignOptions } from "./local-analyzer";
 export { analyzeSemanticBlueprint, analyzeSourceDocument, migrateSemanticBlueprintSections, summarizeSemanticSignals, validateSemanticBlueprint } from "./semantic-analyzer";
 export type { SemanticSignalSummary } from "./semantic-analyzer";
+export { validateAnalysisCompleteness } from "./analysis-validator";
+export type { AnalysisValidation } from "./analysis-validator";
 export { buildPlatformArticle } from "./platform-adapter";
 export { buildPlatformDesignPlans, buildWechatPlan, buildXiaohongshuPlan, buildDouyinImagePlan, buildDouyinLongformPlan, calculateContentIntegrity } from "./platform-planner";
 export { contentBlueprintSchema, designPlanSchema, editorialPlanSchema, semanticBlueprintSchema } from "./schemas";

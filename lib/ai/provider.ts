@@ -30,6 +30,7 @@ import {
   type VisualThemeId,
 } from "../design-schemes";
 import { validateSemanticBlueprint } from "../design-plan/semantic-analyzer";
+import { validateAnalysisCompleteness } from "../design-plan/analysis-validator";
 import { buildLocalEditorialPlan } from "../design-plan/editorial-plan";
 import { isGenericStructureHeading } from "../design-plan/content-filter";
 import type { PlatformId, PlatformVersion, PlatformVersionMap } from "../platforms/types";
@@ -461,6 +462,17 @@ export class OpenAICompatibleProvider {
           ...(trace.unsupportedSections.length ? [`unsupported sections: ${trace.unsupportedSections.join(",")}`] : []),
           ...(trace.inventedUnits.length ? [`invented semantic units: ${trace.inventedUnits.join(",")}`] : []),
           ...(trace.invalidDisplayHeadings.length ? [`invalid display headings: ${trace.invalidDisplayHeadings.join(",")}`] : []),
+        ], responseDiagnostics);
+      }
+      const analysis = validateAnalysisCompleteness(options.source, blueprint);
+      if (!analysis.valid) {
+        throw this.schemaError([
+          ...(analysis.missingSourceSegmentIds.length ? [`missing source segments: ${analysis.missingSourceSegmentIds.join(",")}`] : []),
+          ...(analysis.invalidSourceSegmentIds.length ? [`invalid source segments: ${analysis.invalidSourceSegmentIds.join(",")}`] : []),
+          ...(analysis.duplicatedBodySegmentIds.length ? [`duplicated body segments: ${analysis.duplicatedBodySegmentIds.join(",")}`] : []),
+          ...analysis.contradictoryCounts,
+          ...analysis.unreasonableEmphasis,
+          ...(analysis.unsupportedItems.length ? [`unsupported semantic units: ${analysis.unsupportedItems.join(",")}`] : []),
         ], responseDiagnostics);
       }
       return { blueprint, diagnostics: responseDiagnostics };
@@ -1024,6 +1036,29 @@ export async function generatePlatformVersions(options: GeneratePlatformVersions
   const fallbackDesignPlan = analyzeArticleDesign(options.source, { generationMode });
   const currentVersions = options.existingVersions ?? {};
 
+  // Layout-only is deterministic by contract. The semantic analysis may have
+  // used /api/ai/analyze earlier, but rendering a platform must never make a
+  // second model request or replace source text with an AI draft.
+  if (generationMode === "layoutOnly") {
+    const generatedContent = buildLayoutOnlyPlatformVersions(options.source, platforms, fallbackDesignPlan, now);
+    const baselineVersions = platforms.reduce<PlatformVersionMap>((baseline, platform) => {
+      baseline[platform] = currentVersions[platform] ?? fallbackVersions[platform];
+      return baseline;
+    }, {});
+    return {
+      ok: true,
+      versions: generatedContent.versions,
+      designPlan: fallbackDesignPlan,
+      diagnostics: {
+        provider: "openai-compatible",
+        model: "local",
+        sourceVersionId: options.sourceVersionId,
+        details: ["layout_only_no_ai_request"],
+      },
+      changes: buildPlatformChangeRecords(platforms, baselineVersions, generatedContent.versions),
+    };
+  }
+
   if (!options.provider) {
     return {
       ok: false,
@@ -1055,16 +1090,12 @@ export async function generatePlatformVersions(options: GeneratePlatformVersions
     let designPlan: DesignPlan;
     let generatedContent: { versions: PlatformVersionMap; factCheckWarnings: string[] };
     if ("editorialPlans" in generated.response) {
-      const effectivePlans = generated.response.editorialPlans.map((plan) => generationMode === "layoutOnly"
-        ? buildLocalEditorialPlan(options.source, fallbackDesignPlan.blueprint, plan.platform)
-        : plan);
+      const effectivePlans = generated.response.editorialPlans;
       designPlan = designPlanWithEditorialPlans(options.source, fallbackDesignPlan, effectivePlans);
       generatedContent = buildEditorialPlatformVersions(effectivePlans, platforms, options.source, designPlan, generationMode, now);
     } else {
       designPlan = generated.response.designPlan ?? fallbackDesignPlan;
-      generatedContent = generationMode === "layoutOnly"
-        ? buildLayoutOnlyPlatformVersions(options.source, platforms, designPlan, now)
-        : buildGeneratedPlatformVersions(generated.response.drafts, platforms, options.source, now);
+      generatedContent = buildGeneratedPlatformVersions(generated.response.drafts, platforms, options.source, now);
     }
     const baselineVersions = platforms.reduce<PlatformVersionMap>((baseline, platform) => {
       baseline[platform] = currentVersions[platform] ?? fallbackVersions[platform];
@@ -1826,13 +1857,11 @@ function firstNonEmpty(...values: Array<string | undefined>) {
 }
 
 function platformTitle(platform: PlatformId, title: string) {
-  if (platform === "douyinImage") {
-    return truncateText(title, 18);
-  }
-  if (platform === "xiaohongshu") {
-    return truncateText(title, 28);
-  }
-  return truncateText(title, 42);
+  // Keep the complete title in the content model. Card renderers wrap or
+  // paginate it inside the platform safe area; truncating here loses the
+  // conflict or conclusion that gives a title its meaning.
+  void platform;
+  return title.trim();
 }
 
 function platformSummaryLength(platform?: PlatformId) {

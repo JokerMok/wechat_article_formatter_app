@@ -636,7 +636,7 @@ export function describeProjectBackupImportStatus(missingAssetCount: number) {
 }
 
 function defaultRatioForPlatform(platform: PlatformId): CardAspectRatio {
-  return platform === "douyinImage" ? "3:4" : "3:4";
+  return platform === "douyinImage" ? "9:16" : "3:4";
 }
 
 function createPlatformMeta(platform: PlatformId, content: UnifiedArticleContent, ratio: RatioMode): PlatformMeta {

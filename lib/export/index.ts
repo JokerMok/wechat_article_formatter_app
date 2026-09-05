@@ -17,6 +17,7 @@ import {
   type TextMeasurer,
 } from "../renderers/cards";
 import type { WechatImageNode } from "../renderers/wechat";
+import type { GenerationMode } from "../design-plan";
 import { createProjectBackupPayload, type AssetBlobRepository, type ProjectDocument, type StoredAssetMetadata, type StoredAssetRecord } from "../storage";
 
 export type ExportedFile = {
@@ -54,6 +55,23 @@ export type PlatformImageExportManifest = {
   copyFile: string;
   tagsFile: string;
   source: unknown;
+  generationMode: GenerationMode;
+  sourceRevision: string;
+  analysisRevision: string;
+  themeId: string;
+  layoutId: string;
+  template: string;
+  pageTypes: string[];
+};
+
+export type PlatformExportMetadata = {
+  generationMode?: GenerationMode;
+  sourceRevision?: string;
+  analysisRevision?: string;
+  themeId?: string;
+  layoutId?: string;
+  template?: string;
+  pageTypes?: string[];
 };
 
 export type PlatformImageExportResult<TOutput> = {
@@ -302,6 +320,10 @@ async function renderCanvasPageToPng(input: CardPageRenderInput, drawPage: typeo
     throw new Error("card_canvas_context_unavailable");
   }
 
+  // Canvas text is otherwise captured before the browser has loaded the
+  // selected theme fonts, causing preview/export differences on first use.
+  await (document as Document & { fonts?: FontFaceSet }).fonts?.ready;
+
   drawPage(context as unknown as CardImageCanvasContext, input.page, { images: input.images, preset: input.preset });
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
@@ -473,6 +495,7 @@ async function packagePlatformImageExport<TOutput extends { title: string; tags:
   exportedAt: string;
   images: ExportedFile[];
   copyText: string;
+  metadata?: PlatformExportMetadata;
 }) {
   const copyFile = exportedFile("copy.txt", textBlob(input.copyText));
   const tagsFile = exportedFile("tags.txt", textBlob(buildTagsText(input.output.tags)));
@@ -487,6 +510,13 @@ async function packagePlatformImageExport<TOutput extends { title: string; tags:
     copyFile: copyFile.path,
     tagsFile: tagsFile.path,
     source: input.output.source,
+    generationMode: input.metadata?.generationMode ?? "layoutOnly",
+    sourceRevision: input.metadata?.sourceRevision ?? "unknown",
+    analysisRevision: input.metadata?.analysisRevision ?? input.metadata?.sourceRevision ?? "unknown",
+    themeId: input.metadata?.themeId ?? "unknown",
+    layoutId: input.metadata?.layoutId ?? "unknown",
+    template: input.metadata?.template ?? "unknown",
+    pageTypes: input.metadata?.pageTypes ?? input.images.map(() => "card"),
   };
   const manifestFile = exportedFile("manifest.json", jsonBlob(manifest), "application/json;charset=utf-8");
   const zipBlob = await createZipBlob([...input.images, copyFile, tagsFile, manifestFile]);
@@ -531,6 +561,7 @@ export async function exportXiaohongshuPackage(input: {
   measurer?: TextMeasurer;
   exportedAt?: ExportTimestamp;
   preset?: CardRenderPreset;
+  metadata?: PlatformExportMetadata;
 }): Promise<PlatformImageExportResult<XiaohongshuImageTextOutput>> {
   const output = input.output ?? toXiaohongshuImageText(input.content);
   const exportedAt = toExportedAt(input.exportedAt);
@@ -540,7 +571,15 @@ export async function exportXiaohongshuPackage(input: {
   const renderImages = await resolveCardRenderImages({ content: input.content, pages, images: input.images });
   const images = await renderImageFiles({ pages, platform: "xiaohongshu", ratio: "3:4", baseName, renderer: input.renderer, images: renderImages, preset: input.preset });
   const copyText = buildXiaohongshuCopy(output);
-  const packaged = await packagePlatformImageExport({ output, platform: "xiaohongshu", ratio: "3:4", exportedAt, images, copyText });
+  const packaged = await packagePlatformImageExport({
+    output,
+    platform: "xiaohongshu",
+    ratio: "3:4",
+    exportedAt,
+    images,
+    copyText,
+    metadata: { sourceRevision: input.content.sourceRevision, ...input.metadata, pageTypes: pages.map((page) => page.pageKind ?? "card") },
+  });
   return {
     output,
     manifest: packaged.manifest,
@@ -563,6 +602,7 @@ export async function exportDouyinImagePackage(input: {
   measurer?: TextMeasurer;
   exportedAt?: ExportTimestamp;
   preset?: CardRenderPreset;
+  metadata?: PlatformExportMetadata;
 }): Promise<PlatformImageExportResult<DouyinImageOutput>> {
   const output = input.output ?? toDouyinImageText(input.content, { ratio: input.ratio });
   const exportedAt = toExportedAt(input.exportedAt);
@@ -572,7 +612,15 @@ export async function exportDouyinImagePackage(input: {
   const renderImages = await resolveCardRenderImages({ content: input.content, pages, images: input.images });
   const images = await renderImageFiles({ pages, platform: "douyinImage", ratio: output.ratio, baseName, renderer: input.renderer, images: renderImages, preset: input.preset });
   const copyText = buildDouyinImageCopy(output);
-  const packaged = await packagePlatformImageExport({ output, platform: "douyinImage", ratio: output.ratio, exportedAt, images, copyText });
+  const packaged = await packagePlatformImageExport({
+    output,
+    platform: "douyinImage",
+    ratio: output.ratio,
+    exportedAt,
+    images,
+    copyText,
+    metadata: { sourceRevision: input.content.sourceRevision, ...input.metadata, pageTypes: pages.map((page) => page.pageKind ?? "card") },
+  });
   return {
     output,
     manifest: packaged.manifest,

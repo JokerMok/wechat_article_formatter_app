@@ -1,6 +1,7 @@
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../content";
 import { renderBlockText } from "../platforms/platform-profiles";
-import { cleanPublishingText, publicationBlocks } from "./content-filter";
+import { cleanPublishingText, isGenericStructureHeading, publicationBlocks } from "./content-filter";
+import { validateAnalysisCompleteness } from "./analysis-validator";
 import type {
   ContentBlueprint,
   ContentSection,
@@ -65,7 +66,7 @@ export function analyzeSemanticBlueprint(
     ...(sections.some((section) => section.sourceBlockIds.length === 0) ? ["存在无法追溯到源文块的章节，已保留为不确定结构。"] : []),
   ];
 
-  return {
+  const blueprint: ContentBlueprint = {
     schemaVersion: 1,
     generationMode: options.generationMode,
     primaryContentType: options.contentType,
@@ -82,6 +83,7 @@ export function analyzeSemanticBlueprint(
     sections,
     keyPoints,
     facts: units.facts,
+    quantifiedDetails: units.quantifiedDetails,
     opinions: units.opinions,
     examples: units.examples,
     methods: units.methods,
@@ -103,6 +105,18 @@ export function analyzeSemanticBlueprint(
       ? ["识别文章中心观点和章节关系", "提炼平台可用的重点信息", "保留事实、案例、方法和边界的源文追溯"]
       : [],
   };
+  const validation = validateAnalysisCompleteness(content, blueprint);
+  if (!validation.valid) {
+    blueprint.warnings = uniqueText([
+      ...blueprint.warnings,
+      ...(validation.coverageRate < 1 ? [`语义章节覆盖率为 ${Math.round(validation.coverageRate * 100)}%，已保留缺口提示。`] : []),
+      ...validation.contradictoryCounts,
+      ...validation.unreasonableEmphasis,
+      ...(validation.unsupportedItems.length ? ["部分语义单元无法回溯到源文，已降低分析置信度。"] : []),
+    ]);
+    blueprint.confidence = Math.min(blueprint.confidence, 0.58);
+  }
+  return blueprint;
 }
 
 /**
@@ -122,6 +136,7 @@ export function validateSemanticBlueprint(value: ContentBlueprint, source: Unifi
   const sourceBlocks = new Map(source.blocks.map((block) => [block.id, block]));
   const units = [
     ...value.facts,
+    ...(value.quantifiedDetails ?? []),
     ...value.opinions,
     ...value.examples,
     ...value.methods,
@@ -139,6 +154,9 @@ export function validateSemanticBlueprint(value: ContentBlueprint, source: Unifi
       const heading = section.displayHeading;
       if (!heading) return false;
       if (heading.provenance === "expressionOptimization") return value.generationMode === "layoutOnly";
+      if (heading.provenance === "structuralSummary") {
+        return !isGroundedStructuralHeading(heading.text, section.sourceBlockIds, sourceBlocks);
+      }
       return !section.sourceBlockIds.some((id) => {
         const block = sourceBlocks.get(id);
         return (block?.type === "section" || block?.type === "subsection")
@@ -169,6 +187,15 @@ export function migrateSemanticBlueprintSections(value: ContentBlueprint, source
         // semantic-role label. Keep it only when it is a deliberate display
         // heading; old generic labels are discarded during migration.
         return { ...section, title: "", titleProvenance: undefined };
+      }
+      if (section.displayHeading?.provenance === "structuralSummary") {
+        const structuralHeading = cleanText(section.displayHeading.text);
+        const validStructuralHeading = Boolean(structuralHeading)
+          && !isGenericStructureHeading(structuralHeading)
+          && isGroundedStructuralHeading(structuralHeading, section.sourceBlockIds, sourceBlocks);
+        return validStructuralHeading
+          ? { ...section, title: "", titleProvenance: undefined, displayHeading: { ...section.displayHeading, text: structuralHeading, provenance: "structuralSummary" as const } }
+          : { ...section, title: "", titleProvenance: undefined, displayHeading: undefined };
       }
       const sourceHeading = section.displayHeading?.provenance === "source"
         ? section.displayHeading.text
@@ -224,7 +251,7 @@ function isObjectiveFact(text: string) {
 }
 
 function isExperience(text: string) {
-  return hasPersonalVoice(text) && /我(?:们)?(?:先|后来|曾经|开始|发现|意识到|接手|遇到|做过|经历|看到|接受|调整)|我们(?:在|把|没有|先)/u.test(text);
+  return hasPersonalVoice(text) && /我(?:们)?(?:先|后来|曾经|开始|发现|意识到|接手|遇到|做过|经历|看到|见过|接受|调整)|我们(?:在|把|没有|先)/u.test(text);
 }
 
 function isNarrative(text: string) {
@@ -234,10 +261,15 @@ function isNarrative(text: string) {
 function isMethod(text: string, blockType: UnifiedArticleBlock["type"]) {
   if (blockType === "list") return true;
   const normalized = text.trim();
+  if (/岗位(?:说明|名称)|需要的是.{0,100}的人|处于哪个阶段/u.test(normalized)) return false;
   const startsWithAction = /^(?:先|再|然后|可以|建议|需要(?:把|将)|按照|按步骤|如何)/u.test(normalized);
   const orderedAction = /(?:先|再|然后)(?:把|做|选|从|补|搭|接|完成|解决|确定|逐步)/u.test(normalized);
-  const containsAction = /(?:步骤|方法|流程|可以通过|建议|整理成|拆成|建立|配置|执行|补齐|交付|操作|检查(?:标题|来源|权限|内容|是否|清单|流程|项)|核对(?:标题|来源|权限|内容|是否|清单|流程|项))/u.test(normalized);
-  return startsWithAction || orderedAction || containsAction;
+  const action = /(?:整理|拆解|选择|选一个|接入|记录|补齐|建立|配置|执行|验证|检查|核对|明确|交付)/u.test(normalized);
+  const methodFrame = /(?:步骤|方法|流程|做法|顺序|可以通过|建议|应该|按照|按步骤)/u.test(normalized);
+  // Describing a job or a capability is not itself a method. Require an
+  // action plus an instructional frame so ordinary analysis is not turned
+  // into a step section merely because it mentions "交付" or "拆解".
+  return startsWithAction || orderedAction || methodFrame && action && !/要求(?:却|是).{0,30}(?:覆盖|包括)/u.test(normalized);
 }
 
 function isResult(text: string) {
@@ -248,15 +280,15 @@ function isBoundary(text: string) {
   // Process safeguards such as "不能因为篇幅增加就丢失内容" describe the
   // work being tested, not a limitation of the article's subject.
   if (/(?:不能|不要)因为.{0,24}(?:就|而)/u.test(text)) return false;
-  return /不等于|不代表|(?:无法|不能)(?:完全)?(?:处理|支持|覆盖|替代)|仅限|只(?:能|是)(?:在|用于|说明)|前提|边界|全量|生产级|复杂业务判断|不可外推|(?:明确|收缩|限定|适用|超出).*范围|范围(?:内|外|限制)/u.test(text);
+  return /不等于|不代表|(?:无法|不能)(?:完全)?(?:处理|支持|覆盖|替代)|仅限|只(?:能|是)(?:在|用于|说明)|前提|边界|全量|生产级|复杂业务判断|不可外推|(?:明确|收缩|限定|适用|超出).*范围|范围(?:内|外|限制)|只有当.{0,140}才|并不赞成|并非所有|不是一概/u.test(text);
 }
 
 function isCounterArgument(text: string) {
-  return /(?:但|但是|然而|不过|反而|却)|不是.{1,28}而是|并不是.{1,28}而是/u.test(text);
+  return /(?:但|但是|然而|不过|反而|却|实际上|暴露的是|提高标准.{0,24}暴露|老板说.{0,48}(?:业务部门|技术团队)|业务部门.{0,24}技术团队|只能把所有关键词)|不是.{1,28}而是|并不是.{1,28}而是/u.test(text);
 }
 
 function isConclusion(text: string, blockType: UnifiedArticleBlock["type"]) {
-  return blockType === "summary" || /因此|所以|最后|总结|归根到底|这意味着|核心判断|最大的体会|最终来看/u.test(text);
+  return blockType === "summary" || /因此|所以|最后|总结|归根到底|这意味着|核心判断|最大的体会|最终来看|第一阶段|真正重要的是|最后能不能做成|先把.{0,30}再决定/u.test(text);
 }
 
 function hasJudgmentCue(text: string) {
@@ -287,6 +319,7 @@ export function summarizeSemanticSignals(content: UnifiedArticleContent): Semant
 function classifyUnits(blocks: SemanticBlock[]) {
   const result = {
     facts: [] as SemanticUnit[],
+    quantifiedDetails: [] as SemanticUnit[],
     opinions: [] as SemanticUnit[],
     examples: [] as SemanticUnit[],
     methods: [] as SemanticUnit[],
@@ -306,6 +339,7 @@ function classifyUnits(blocks: SemanticBlock[]) {
     // both an example and the author's opinion. Keep those links instead of
     // forcing one paragraph into a single bucket.
     if (item.signals.has("boundary")) result.boundaries.push(unit);
+    if (hasQuantifiedDetail(item.text)) result.quantifiedDetails.push(unit);
     if (item.signals.has("method")) result.methods.push(unit);
     if (item.signals.has("fact")) result.facts.push(unit);
     if (item.signals.has("result")) result.results.push(unit);
@@ -339,7 +373,8 @@ function goldenScore(text: string) {
 function buildSemanticSections(blocks: SemanticBlock[], contentType: ContentType): ContentSection[] {
   if (!blocks.length) return [emptySection("section-1", "开场", "hook")];
   const hasExplicitHeading = blocks.some((item) => item.kind === "heading");
-  const groups = hasExplicitHeading ? groupByExplicitHeadings(blocks) : groupHeadingFreeProse(blocks);
+  const rawGroups = hasExplicitHeading ? groupByExplicitHeadings(blocks) : groupHeadingFreeProse(blocks);
+  const groups = rawGroups.flatMap(splitExplicitGroupByMeaning);
   const normalizedGroups = coalesceHeadingFreeGroups(groups, 8);
 
   return normalizedGroups.map((group, index) => {
@@ -349,11 +384,13 @@ function buildSemanticSections(blocks: SemanticBlock[], contentType: ContentType
     const role = inferSectionRole(group, index, normalizedGroups.length, contentType);
     const sourceHeading = cleanText(heading?.text);
     const keyMessage = cleanLine(selectKeyMessage(body, text), 220);
+    const structuralHeading = sourceHeading || (index > 0 ? deriveStructuralHeading(group) : "");
     const sourceBlockIds = group.map((item) => item.block.id);
     return {
       id: `section-${index + 1}`,
-      // Keep the legacy title field for persisted data, but do not use it as
-      // public copy. Only an explicit source heading gets a display heading.
+      // Keep the legacy title field for persisted data. A heading-free section
+      // may receive a short source-derived navigation label, but never an
+      // internal role label such as "背景" or "冲突".
       title: sourceHeading,
       role,
       summary: cleanLine(firstSentence(text) || sourceHeading || keyMessage, 300),
@@ -362,13 +399,76 @@ function buildSemanticSections(blocks: SemanticBlock[], contentType: ContentType
       importance: index === 0 || index === normalizedGroups.length - 1 ? 0.92 : role === "conflict" || role === "method" ? 0.88 : 0.72,
       canSplit: body.length > 1 || text.length > 240,
       recommendedPageRole: pageRoleFor(role),
-      ...(sourceHeading ? {
-        titleProvenance: "source" as const,
-        displayHeading: { text: sourceHeading, provenance: "source" as const, confidence: 1 },
+      ...(structuralHeading ? {
+        ...(sourceHeading ? { titleProvenance: "source" as const } : {}),
+        displayHeading: {
+          text: structuralHeading,
+          provenance: sourceHeading ? "source" as const : "structuralSummary" as const,
+          confidence: sourceHeading ? 1 : 0.78,
+        },
       } : {}),
       purpose: legacyPurposeFor(role),
     };
   });
+}
+
+function splitExplicitGroupByMeaning(group: SemanticBlock[]) {
+  const heading = group.find((item) => item.kind === "heading");
+  const body = group.filter((item) => item.kind !== "heading");
+  if (body.length < 3) return [group];
+  const headingFreeGroups = groupHeadingFreeProse(body);
+  const bodyGroups = headingFreeGroups.length > 1
+    ? headingFreeGroups
+    : body.length >= 4 ? splitHeadingFreeGroup(body, body.length >= 8 ? 3 : 2) : [body];
+  if (bodyGroups.length <= 1) return [group];
+  return bodyGroups.map((part, index) => heading && index === 0 ? [heading, ...part] : part);
+}
+
+function deriveStructuralHeading(group: SemanticBlock[]) {
+  const sourceText = cleanText(group.filter((item) => item.kind !== "heading").map((item) => item.text).join(" "));
+  if (!sourceText) return "";
+
+  // A heading-free section still needs a navigation cue, but using the first
+  // sentence verbatim makes the heading repeat the paragraph below it. Pair
+  // two short source phrases instead; the slash is a visual separator, not
+  // article copy, and both sides remain directly traceable to this section.
+  const phrases = sourceText
+    .split(/[。！？；：:，,、]/u)
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 4);
+  const compactPhrases = phrases.map(compactHeadingPhrase).filter((phrase) => Array.from(phrase).length >= 6);
+  if (compactPhrases.length < 2) return "";
+  const first = compactPhrases[0] ?? "";
+  const preferredPositive = compactPhrases.find((phrase) => /^(?:先选|用两到四周|记录|再决定|补集成|补检索|明确产品负责人)/u.test(phrase));
+  const last = preferredPositive && preferredPositive !== first ? preferredPositive : compactPhrases.at(-1) ?? "";
+  if (!first || !last || first === last) return "";
+  const candidate = `${first} / ${last}`;
+  return candidate.length >= 8 && !isGenericStructureHeading(candidate) ? candidate : "";
+}
+
+function compactHeadingPhrase(value: string) {
+  const compact = value
+    .replace(/^(?:而且|但是|不过|所以|因此|同时|然后|最后|其实|只是|还是)\s*/u, "")
+    .replace(/^我见过(?:一个)?/u, "")
+    .replace(/^我(?:发现|认为|觉得|后来发现)/u, "")
+    .replace(/^我并不赞成(?:一句话说)?/u, "")
+    .replace(/^而是/u, "")
+    .replace(/^更合理的顺序(?:是)?/u, "更合理的顺序")
+    .replace(/^真正需要先回答的不是/u, "不是")
+    .replace(/^而在(?:公司)?/u, "")
+    .replace(/^所以我并不赞成(?:一句话说)?/u, "")
+    .replace(/^更准确的说法是/u, "")
+    .replace(/[，、：:；;]+$/u, "")
+    .trim();
+  if (Array.from(compact).length <= 24) return compact;
+
+  const focused = compact.match(/(?:不是|而是|把|需要|只有|先|再|才能|却|误当成|决定).{3,24}$/u)?.[0]?.trim();
+  if (focused && Array.from(focused).length >= 6 && Array.from(focused).length <= 24) return focused;
+
+  // A synthetic heading must be a complete source phrase. If no natural
+  // boundary exists, omit it instead of cutting through a Chinese word or
+  // exposing a sentence fragment as if it were authored copy.
+  return "";
 }
 
 function groupByExplicitHeadings(blocks: SemanticBlock[]) {
@@ -397,7 +497,10 @@ function groupHeadingFreeProse(blocks: SemanticBlock[]) {
       current = [];
     }
     current.push(item);
-    currentPhase = currentPhase === "context" && phase !== "context" ? phase : currentPhase ?? phase;
+    // The phase belongs to the newest block. Retaining the first phase makes
+    // later transitions invisible and can merge a method or boundary into
+    // the opening section.
+    currentPhase = phase;
   }
   if (current.length) groups.push(current);
 
@@ -414,10 +517,17 @@ type SemanticPhase = "context" | "conflict" | "argument" | "evidence" | "example
 
 function phaseForBlock(item: SemanticBlock, index: number, total: number): SemanticPhase {
   const signals = item.signals;
-  if (signals.has("boundary")) return "boundary";
+  // Personal delivery context should stay with the example/result it
+  // describes. Boundary language inside a stakeholder conflict is a caveat,
+  // not a new chapter, and method language inside an experience is not
+  // automatically a tutorial section.
+  if (signals.has("conclusion") && index === total - 1) return "conclusion";
   if (signals.has("method")) return "method";
-  if (signals.has("result")) return "result";
+  if (signals.has("example") && (signals.has("result") || signals.has("counter") || signals.has("narrative"))) return "example";
+  if (signals.has("boundary") && !/老板|业务部门|技术团队|研发团队|人力部门|客户|管理层|落地的人|团队担心|团队需要|团队开始|优先级/u.test(item.text)) return "boundary";
   if (signals.has("counter")) return "conflict";
+  if (signals.has("result")) return "result";
+  if (signals.has("boundary")) return "boundary";
   if (signals.has("example")) return "example";
   if (signals.has("fact")) return "evidence";
   if (signals.has("conclusion")) return index === total - 1 ? "conclusion" : "argument";
@@ -429,6 +539,7 @@ function shouldStartHeadingFreeGroup(current: SemanticBlock[], currentPhase: Sem
   if (!current.length || !currentPhase || currentPhase === itemPhase) return false;
   const strongPhase = new Set<SemanticPhase>(["conflict", "method", "result", "boundary", "conclusion"]);
   if (strongPhase.has(itemPhase)) return current.length >= 1;
+  if (currentPhase === "boundary") return true;
   return current.length >= 2 && strongPhase.has(currentPhase);
 }
 
@@ -474,7 +585,8 @@ function dominantSignal(signals: Set<SemanticSignal>) {
 function inferSectionRole(group: SemanticBlock[], index: number, total: number, contentType: ContentType): SemanticSectionRole {
   const signals = new Set(group.flatMap((item) => [...item.signals]));
   const heading = group.find((item) => item.kind === "heading")?.text || "";
-  if (index === total - 1 && !heading && signals.has("conclusion") && !signals.has("boundary")) return "conclusion";
+  const combinedText = group.map((item) => item.text).join(" ");
+  if (index === total - 1 && !heading && signals.has("conclusion")) return "conclusion";
   // Introductory prose before the first explicit heading establishes context.
   // Method cues such as "先整理" should not turn that lead-in into a step page.
   if (index === 0 && !heading) {
@@ -491,7 +603,11 @@ function inferSectionRole(group: SemanticBlock[], index: number, total: number, 
     if (/一开始|起初|经历|故事|场景|后来|第一次|当时|回头看/u.test(heading)) return "example";
   }
   if (index === 0 && (signals.has("opinion") || signals.has("counter"))) return "hook";
-  if (signals.has("counter")) return contentType === "storyNarrative" || contentType === "caseReview" ? "conflict" : "counterArgument";
+  if (signals.has("method") && !signals.has("result")) return "method";
+  if (signals.has("example") && (signals.has("result") || signals.has("narrative"))) return "example";
+  if (signals.has("boundary") && /老板|业务部门|技术团队|研发团队|人力部门|客户|管理层|落地的人|团队担心|团队需要|团队开始|优先级/u.test(combinedText)) return "conflict";
+  if (signals.has("boundary")) return "boundary";
+  if (signals.has("counter")) return contentType === "storyNarrative" || contentType === "caseReview" || contentType === "opinionAnalysis" ? "conflict" : "counterArgument";
   if (/边界|限制|范围|不能|不要/u.test(heading) || signals.has("boundary")) return "boundary";
   if (/步骤|方法|流程|怎么|推进|检查|行动|做法/u.test(heading) || signals.has("method")) return "method";
   if (signals.has("result")) return "result";
@@ -625,6 +741,12 @@ function hasNumberOrDate(value: string) {
   return /\d+(?:\.\d+)?\s*(?:%|％|倍|万|亿|元|人|次|个|项|条|类|月|年|天)?|20\d{2}年|第[一二三四五六七八九十]+/u.test(withoutStructuralOrdinals);
 }
 
+function hasQuantifiedDetail(value: string) {
+  const withoutStructuralOrdinals = value.replace(/第\s*(?:\d+|[一二三四五六七八九十百]+)\s*(?:段|页|部分|章节|章)/gu, "");
+  return /(?:\d+(?:\.\d+)?|[一二三四五六七八九十百千万两]+)(?:\s*(?:到|至|-)\s*(?:\d+(?:\.\d+)?|[一二三四五六七八九十百千万两]+))?\s*(?:%|％|倍|万|亿|元|人|名|次|项|月|年|天|周)/u.test(withoutStructuralOrdinals)
+    || /准确率|召回率|转化率|节省时间|人工接管率|失败类型|可量化|评估指标|量化结果/u.test(value);
+}
+
 function hasPersonalVoice(value: string) {
   return /我|我们|我的|自己|团队|老板|客户/u.test(value);
 }
@@ -643,4 +765,21 @@ function calculateConfidence(blocks: SemanticBlock[], sections: ContentSection[]
 
 function uniqueText(values: string[]) {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function normalizeMeaning(value: string) {
+  return cleanPublishingText(value).replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();
+}
+
+function isGroundedStructuralHeading(text: string, sourceBlockIds: string[], sourceBlocks: Map<string, UnifiedArticleBlock>) {
+  const normalizedHeading = normalizeMeaning(text);
+  if (!normalizedHeading || isGenericStructureHeading(text)) return false;
+  const sectionText = normalizeMeaning(sourceBlockIds.map((id) => sourceBlocks.get(id)?.text ?? "").join(" "));
+  if (sectionText.includes(normalizedHeading)) return true;
+
+  // Heading-free navigation cues may combine two source phrases with a slash.
+  // Validate each phrase independently so punctuation does not make a
+  // grounded summary look invented after normalization.
+  const parts = text.split(/\s*\/\s*/u).map((part) => normalizeMeaning(part)).filter((part) => part.length >= 4);
+  return parts.length >= 2 && parts.every((part) => sectionText.includes(part));
 }

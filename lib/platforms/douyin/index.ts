@@ -62,7 +62,9 @@ function clampText(text: string, maxChars: number) {
   if (text.length <= maxChars) {
     return text;
   }
-  return `${text.slice(0, Math.max(1, maxChars - 1)).replace(/[，、；：\s]+$/u, "").trim()}…`;
+  const candidate = text.slice(0, maxChars).replace(/[，、；：\s]+$/u, "").trim();
+  const sentenceEnd = [...candidate.matchAll(/[。！？；]/gu)].at(-1)?.index;
+  return sentenceEnd === undefined ? candidate : candidate.slice(0, sentenceEnd + 1);
 }
 
 function buildImageCaption(title: string, intro: string, tags: string[]) {

@@ -105,6 +105,28 @@ describe("OpenAICompatibleProvider", () => {
     expect(requestBody.messages[1]?.content).not.toContain('"startLine"');
   });
 
+  it("keeps a complete platform title instead of inserting an ellipsis", async () => {
+    const longTitle = "做企业 AI 最尴尬的事：你想补地基，老板想先看楼";
+    const fixture = structuredClone(validFixture);
+    const content = JSON.parse(fixture.choices[0]!.message.content!) as { drafts: Array<{ platform: string; title: string; content?: { title?: string } }> };
+    const xiaohongshuDraft = content.drafts.find((draft) => draft.platform === "xiaohongshu");
+    expect(xiaohongshuDraft).toBeDefined();
+    xiaohongshuDraft!.title = longTitle;
+    xiaohongshuDraft!.content!.title = longTitle;
+    fixture.choices[0]!.message.content = JSON.stringify(content);
+
+    const result = await generatePlatformVersions({
+      provider: new OpenAICompatibleProvider({ ...baseProviderConfig, fetchImpl: async () => jsonResponse(fixture) }),
+      source,
+      sourceVersionId: "source-long-title",
+      platforms: ["xiaohongshu"],
+    });
+
+    expectOk(result);
+    expect(result.versions.xiaohongshu?.title).toBe(longTitle);
+    expect(result.versions.xiaohongshu?.title).not.toContain("…");
+  });
+
   it("keeps source wording when layout-only mode is selected even if the model rewrites it", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       void input;

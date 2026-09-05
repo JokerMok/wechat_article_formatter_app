@@ -41,6 +41,7 @@ export function WorkspaceHeader(props: {
   platformStatus: Record<PlatformId, string>;
   mode: WorkspaceMode;
   focusMode: WorkspaceFocusMode;
+  ready: boolean;
   generating: boolean;
   onProjectTitleChange: (value: string) => void;
   onOpenProject: (id: string) => void;
@@ -106,9 +107,9 @@ export function WorkspaceHeader(props: {
             <span className="max-w-[220px] truncate text-[11px] text-[#9fb1a8]" title={props.statusMessage}>{props.statusMessage}</span>
           </div>
 
-          <Button type="button" size="sm" className="h-8 bg-[#d9f4e4] text-[#173b29] hover:bg-[#c9ead7]" onClick={props.onGenerate} disabled={props.generating} aria-label="生成当前平台">
+          <Button type="button" size="sm" className="h-8 bg-[#d9f4e4] text-[#173b29] hover:bg-[#c9ead7]" onClick={props.onGenerate} disabled={!props.ready || props.generating} aria-label="生成当前平台">
             <RefreshCw className={cn("h-4 w-4", props.generating && "animate-spin")} />
-            <span className="hidden sm:inline">生成当前平台</span>
+            <span className="hidden sm:inline">{props.ready ? "生成当前平台" : "恢复中"}</span>
           </Button>
           <Button type="button" size="icon" variant="ghost" className="h-8 w-8 shrink-0 text-white hover:bg-white/10 hover:text-white lg:w-auto lg:px-3" onClick={props.onOpenStyles} aria-label="排版方案">
             <Palette className="h-4 w-4" />

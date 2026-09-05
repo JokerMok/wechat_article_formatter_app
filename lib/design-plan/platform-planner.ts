@@ -143,7 +143,11 @@ export function buildDouyinImagePlan(input: PlatformPlannerInput): PlatformDesig
   const sections = compactDouyinSections(sectionsForPlanner(source, blueprint, units, editorialPlan));
   const pages: PagePlan[] = [createPage("douyinImage", 0, "cover", createCoverBlocks(source, blueprint, "douyinImage", true, layout.id, editorialPlan))];
   const claimedUnitIds = new Set<string>();
-  const budget = Math.min(170, Math.max(100, layout.paginationRules.cardCharacterBudget.douyinImage));
+  // Douyin keeps fewer words per page than Xiaohongshu, but a very small budget
+  // makes a normal article create one extra page for nearly every section.
+  // Use the platform layout budget (capped for scanability) so the planner
+  // can express the full argument in the intended 4–8 page range.
+  const budget = Math.min(430, Math.max(360, layout.paginationRules.cardCharacterBudget.douyinImage));
 
   for (const [sectionIndex, section] of sections.entries()) {
     const editorialSection = editorialPlan?.sections.find((candidate) => candidate.id === section.id);
@@ -171,8 +175,8 @@ export function buildDouyinImagePlan(input: PlatformPlannerInput): PlatformDesig
   return createPlatformPlan(source, blueprint, scheme, theme, layout.id, "douyinImage", pages, publishCopyFor(units, editorialPlan), {
     format: "png",
     width: 1080,
-    height: 1440,
-    aspectRatio: "3:4",
+    height: 1920,
+    aspectRatio: "9:16",
   }, editorialPlan);
 }
 
@@ -288,6 +292,7 @@ function xiaohongshuPageKind(section: ContentSection, sectionIndex: number, sect
   }
   if (layoutId === "editorial" && sectionIndex === sectionCount - 1) return "callToAction";
   if (section.role === "hook" || section.role === "background") return "intro";
+  if (section.role === "example") return "chapter";
   if (section.role === "problem" || section.role === "conflict") return "conflict";
   if (section.role === "method") return "step";
   if (section.role === "evidence") return "evidence";
@@ -318,6 +323,7 @@ function douyinImagePageKind(section: ContentSection, sectionIndex: number, sect
     return "interpretation";
   }
   if (sectionIndex === 0 || section.role === "hook" || section.role === "background") return "intro";
+  if (section.role === "example") return "chapter";
   if (section.role === "evidence") return "keyMetric";
   if (section.role === "method") return "action";
   if (section.role === "boundary") return "warning";
@@ -355,8 +361,9 @@ function compactDouyinSections(sections: ContentSection[]) {
 
 function canMergeDouyinSections(left: ContentSection, right: ContentSection) {
   if (left.role === right.role) return true;
-  return (left.role === "background" && right.role === "example")
-    || (left.role === "evidence" && right.role === "argument")
+  // Keep a concrete case separate from its background so the carousel can
+  // render a recognisable case/chapter page rather than hiding it in context.
+  return (left.role === "evidence" && right.role === "argument")
     || (left.role === "result" && right.role === "conclusion")
     || (left.role === "method" && right.role === "result");
 }
@@ -627,7 +634,7 @@ export function compactCoverTitle(title: string, maxLength: number) {
   if (highValueClause && highValueClause.length <= maxLength) return highValueClause;
   const firstSentence = normalized.split(/[。！？]/u)[0]?.trim();
   if (firstSentence && firstSentence.length <= maxLength) return firstSentence;
-  return `${normalized.slice(0, Math.max(1, maxLength - 1)).replace(/[，、：:；;]+$/u, "").trim()}…`;
+  return normalized;
 }
 
 function compactCoverSubtitle(text: string, maxLength: number) {
@@ -635,7 +642,7 @@ function compactCoverSubtitle(text: string, maxLength: number) {
   if (normalized.length <= maxLength) return normalized;
   const firstSentence = normalized.split(/(?<=[。！？；])/u)[0]?.trim();
   if (firstSentence && firstSentence.length <= maxLength) return firstSentence;
-  return `${normalized.slice(0, Math.max(1, maxLength - 1)).replace(/[，、：:；;]+$/u, "").trim()}…`;
+  return normalized;
 }
 
 function createPage(platform: PlatformId, index: number, kind: PagePlanKind, units: Array<SourceUnit | PlannedContentBlock>): PagePlan {

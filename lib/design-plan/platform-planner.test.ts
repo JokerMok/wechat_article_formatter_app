@@ -140,6 +140,8 @@ describe("platform design planner", () => {
     expect(visibleHeadings.length).toBeGreaterThan(0);
     expect(visibleHeadings.every((block) => FULL_SEMANTIC_ARTICLE.includes(block.text))).toBe(true);
     expect(new Set(xhsPages.slice(1).map((page) => page.kind)).size).toBeGreaterThan(2);
+    expect(xhsPages.map((page) => page.kind)).toContain("chapter");
+    expect(douyinPages.map((page) => page.kind)).toContain("chapter");
   });
 
   it("adds pages for long content instead of changing the source blueprint", () => {

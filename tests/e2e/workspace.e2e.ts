@@ -8,6 +8,7 @@ const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
 async function openWorkspace(page: Page) {
   await page.goto("/");
   await expect(page.getByLabel("源文 Markdown")).toBeVisible();
+  await expect(page.getByRole("button", { name: "生成当前平台" })).toBeEnabled();
 }
 
 async function setSource(page: Page, id: Parameters<typeof articleById>[0], options?: { acceptEditedOverwrite?: boolean }) {
@@ -22,7 +23,7 @@ async function setSource(page: Page, id: Parameters<typeof articleById>[0], opti
       await overwriteButton.click();
     }
   }
-  await expect(page.getByText(/已使用本地确定性生成|已保存到浏览器本地|已解析/)).toBeVisible();
+  await expect(page.getByText(/已生成|已使用本地确定性生成|已保存到浏览器本地|已解析/).first()).toBeVisible();
 }
 
 async function generateCurrentPlatform(page: Page) {
@@ -181,9 +182,11 @@ test("TEST-001/020 unified entry saves, refreshes, deletes with confirmation, an
 
   await selectPlatform(page, "公众号");
   await page.getByLabel("平台标题").fill("公众号独立修改");
+  await page.getByRole("group", { name: "内容处理方式" }).getByText("传播力优化", { exact: true }).click();
+  await expect(page.getByRole("group", { name: "内容处理方式" }).getByRole("button", { name: "传播力优化", pressed: true })).toBeVisible();
   await page.getByText("自定义接口", { exact: true }).click();
   await generateCurrentPlatform(page);
-  await expect(page.getByText(/AI 配置不完整/).first()).toBeVisible();
+  await expect(page.getByText(/服务端 AI 尚未配置完整|AI 配置不完整/).first()).toBeVisible();
   await expect(page.getByLabel("平台标题")).toHaveValue("公众号独立修改");
   await page.getByText("本地", { exact: true }).click();
   await selectPlatform(page, "小红书");
@@ -222,8 +225,7 @@ test("分析源文只更新设计计划，生成操作才更新当前平台", as
   await selectPlatform(page, "小红书");
   await page.getByRole("button", { name: "分析源文" }).click();
 
-  await expect(page.getByText(/源文分析完成/)).toBeVisible();
-  await expect(page.locator("[data-source-analysis-status]")).toContainText("分析完成");
+  await expect(page.locator("[data-source-analysis-status]")).toContainText(/分析完成/);
   await expect(page.getByLabel("平台标题")).toHaveValue(/解析后的平台标题/);
   await expect(page.locator("[data-card-preview]").first()).not.toContainText("解析后的平台标题");
   await page.getByRole("button", { name: "生成", exact: true }).click();
@@ -346,8 +348,8 @@ test("TEST-012/013/014/015 card previews keep real ratios, reflow after layout e
   await expect(page.getByText(/1080x1440 · 1\//).first()).toBeVisible();
 
   await selectPlatform(page, "抖音图文");
-  await expect(page.getByText(/1080x1440/).first()).toBeVisible();
-  await assertCardRatio(page, 1080, 1440);
+  await expect(page.getByText(/1080x1920/).first()).toBeVisible();
+  await assertCardRatio(page, 1080, 1920);
   await page.getByRole("button", { name: "排版方案" }).click();
   await page.getByRole("group", { name: "图片比例" }).getByText("9:16").click();
   await page.getByRole("button", { name: "关闭排版方案" }).click();

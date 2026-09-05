@@ -44,6 +44,7 @@ export type DrawCardImagePageOptions = {
   preset?: Partial<CardCanvasPreset>;
   images?: Record<string, CanvasImageSource>;
   selectedImageId?: string;
+  platform?: "xiaohongshu" | "douyinImage";
 };
 
 const DEFAULT_PRESET: CardCanvasPreset = {
@@ -67,7 +68,7 @@ export function drawCardImagePage(ctx: CardImageCanvasContext, page: CardLayoutP
   ctx.fillRect(0, 0, page.canvas.width, page.canvas.height);
   ctx.textBaseline = "top";
   ctx.textAlign = "left";
-  drawPageFrame(ctx, page, preset);
+  drawPageFrame(ctx, page, preset, options.platform);
   drawPageKindAccent(ctx, page, preset);
 
   for (const node of page.nodes) {
@@ -79,12 +80,12 @@ export function drawCardImagePage(ctx: CardImageCanvasContext, page: CardLayoutP
 
 /** Final renderer entry point for Xiaohongshu exports and previews. */
 export function drawXiaohongshuImagePage(ctx: CardImageCanvasContext, page: CardLayoutPage, options: DrawCardImagePageOptions = {}) {
-  drawCardImagePage(ctx, page, options);
+  drawCardImagePage(ctx, page, { ...options, platform: "xiaohongshu" });
 }
 
 /** Final renderer entry point for Douyin image exports and previews. */
 export function drawDouyinImagePage(ctx: CardImageCanvasContext, page: CardLayoutPage, options: DrawCardImagePageOptions = {}) {
-  drawCardImagePage(ctx, page, options);
+  drawCardImagePage(ctx, page, { ...options, platform: "douyinImage" });
 }
 
 function drawNode(ctx: CardImageCanvasContext, node: CardLayoutNode, preset: CardCanvasPreset, options: DrawCardImagePageOptions) {
@@ -160,7 +161,15 @@ function drawNode(ctx: CardImageCanvasContext, node: CardLayoutNode, preset: Car
   }
 }
 
-function drawPageFrame(ctx: CardImageCanvasContext, page: CardLayoutPage, preset: CardCanvasPreset) {
+function drawPageFrame(ctx: CardImageCanvasContext, page: CardLayoutPage, preset: CardCanvasPreset, platform?: DrawCardImagePageOptions["platform"]) {
+  if (platform === "douyinImage") {
+    ctx.fillStyle = preset.title;
+    ctx.fillRect(0, 0, page.canvas.width, 72);
+    ctx.fillStyle = preset.background;
+    ctx.font = `700 24px ${preset.fontFamily ?? "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"}`;
+    ctx.fillText(`抖音图文  /  ${String(page.pageNumber).padStart(2, "0")}`, page.safeArea.x, 23);
+    return;
+  }
   const labelY = Math.max(44, page.safeArea.y - 78);
   if (preset.variant === "editorial") {
     ctx.fillStyle = preset.rule;

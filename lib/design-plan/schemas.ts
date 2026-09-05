@@ -132,7 +132,7 @@ const semanticSectionSchema = z.strictObject({
   titleProvenance: z.enum(["source", "structuralSummary"]).optional(),
   displayHeading: z.strictObject({
     text: z.string().min(1).max(160),
-    provenance: z.enum(["source", "expressionOptimization"]),
+    provenance: z.enum(["source", "structuralSummary", "expressionOptimization"]),
     confidence: z.number().min(0).max(1),
   }).optional(),
   purpose: z.enum(["opening", "context", "argument", "step", "evidence", "conflict", "turning", "conclusion"]).optional(),
@@ -150,6 +150,7 @@ export const semanticBlueprintSchema = z.strictObject({
   sections: z.array(semanticSectionSchema).min(1).max(32),
   keyPoints: z.array(z.string().min(1).max(500)).max(8),
   facts: z.array(semanticUnitSchema).max(64),
+  quantifiedDetails: z.array(semanticUnitSchema).max(64).default([]),
   opinions: z.array(semanticUnitSchema).max(64),
   examples: z.array(semanticUnitSchema).max(64),
   methods: z.array(semanticUnitSchema).max(64),
@@ -174,6 +175,7 @@ export const contentBlueprintSchema = z.strictObject({
   narrativeArc: narrativeArcSchema,
   keyPoints: z.array(z.string().min(1).max(500)).max(8),
   facts: z.array(semanticUnitSchema).max(64),
+  quantifiedDetails: z.array(semanticUnitSchema).max(64).default([]),
   opinions: z.array(semanticUnitSchema).max(64),
   examples: z.array(semanticUnitSchema).max(64),
   methods: z.array(semanticUnitSchema).max(64),
@@ -202,6 +204,7 @@ export const contentBlueprintSchema = z.strictObject({
 export const designPlanSchema = z.strictObject({
   schemaVersion: z.literal(1),
   sourceRevision: z.string().min(1),
+  analysisRevision: z.string().min(1).optional(),
   generationMode: generationModeSchema,
   contentType: contentTypeSchema,
   targetAudience: z.string().min(1).max(120),

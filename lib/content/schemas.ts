@@ -5,6 +5,8 @@ export const sourcePositionSchema = z.object({
   endLine: z.number().int().positive(),
   startOffset: z.number().int().nonnegative(),
   endOffset: z.number().int().nonnegative(),
+  start: z.number().int().nonnegative().optional(),
+  end: z.number().int().nonnegative().optional(),
   sourceText: z.string(),
 });
 
@@ -13,6 +15,11 @@ export const sourceSegmentSchema = z.object({
   blockId: z.string().min(1),
   text: z.string().min(1),
   sourceRange: sourcePositionSchema,
+  order: z.number().int().nonnegative().optional(),
+  type: z.enum(["title", "heading", "paragraph", "list-item", "quote", "image", "card", "lead", "divider"]).optional(),
+  rawText: z.string().optional(),
+  normalizedText: z.string().optional(),
+  imageId: z.string().min(1).optional(),
 });
 
 const baseBlockSchema = z.object({

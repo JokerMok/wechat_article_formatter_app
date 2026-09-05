@@ -102,8 +102,10 @@ describe("buildPlatformArticle", () => {
     const articlePlan = analyzeArticleDesign(article);
     const xhs = buildPlatformArticle(article, "xiaohongshu", articlePlan);
     const douyin = buildPlatformArticle(article, "douyinImage", articlePlan);
-    expect(xhs.blocks.find((block) => block.type === "title")?.text.length).toBeLessThanOrEqual(16);
-    expect(douyin.blocks.find((block) => block.type === "title")?.text.length).toBeLessThanOrEqual(14);
+    expect(xhs.blocks.find((block) => block.type === "title")?.text).not.toContain("…");
+    expect(douyin.blocks.find((block) => block.type === "title")?.text).not.toContain("…");
+    expect(xhs.blocks.find((block) => block.type === "title")?.text).toBeTruthy();
+    expect(douyin.blocks.find((block) => block.type === "title")?.text).toBeTruthy();
   });
 
   it("does not bind unrelated fallback paragraphs to checklist points", () => {

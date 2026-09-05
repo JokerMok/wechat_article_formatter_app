@@ -1,4 +1,4 @@
-import { drawCardImagePage, type CardLayoutPage } from "../../lib/renderers/cards";
+import { drawDouyinImagePage, drawXiaohongshuImagePage, type CardLayoutPage } from "../../lib/renderers/cards";
 import type { CardCanvasPreset } from "../../lib/renderers/cards/canvas";
 import type { PlatformId } from "../../lib/platforms/types";
 
@@ -12,6 +12,7 @@ export type CardImageRenderOptions = {
   createCanvas?: () => CardCanvas;
   loadImage?: CardImageLoader;
   preset?: Partial<CardCanvasPreset>;
+  platform?: "xiaohongshu" | "douyinImage";
 };
 
 export function createCardPngFilename(title: string, platform: PlatformId, pageNumber: number) {
@@ -26,7 +27,8 @@ export async function renderCardPagePngBlob(page: CardLayoutPage, imageUrlByBloc
   const ctx = canvas.getContext("2d");
   if (!ctx) return undefined;
   const images = await loadCardCanvasImages(page, imageUrlByBlock, options.loadImage);
-  drawCardImagePage(ctx, page, { images, preset: options.preset });
+  const drawPage = options.platform === "douyinImage" ? drawDouyinImagePage : drawXiaohongshuImagePage;
+  drawPage(ctx, page, { images, preset: options.preset, platform: options.platform });
   return canvasToBlob(canvas, "image/png");
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseArticleContent } from "../../article-parser";
-import { AIProviderError, type ProviderGenerateOptions } from "../provider";
+import { AIProviderError, type ProviderGenerateOptions, type ProviderGenerateResult } from "../provider";
 import { generateWithServerAI } from "./gateway";
 import { ServerAIError } from "./errors";
 
@@ -132,5 +132,23 @@ describe("generateWithServerAI", () => {
       ),
     ).resolves.toMatchObject({ diagnostics: { model: "fixture-model" } });
     expect(provider.generate).toHaveBeenCalledTimes(2);
+  });
+
+  it("enforces the server deadline even when an adapter ignores cancellation", async () => {
+    const provider = {
+      model: "fixture-model",
+      generate: vi.fn((_input: ProviderGenerateOptions) => new Promise<ProviderGenerateResult>(() => undefined)),
+    };
+
+    const error = await generateWithServerAI(
+      { source, sourceVersionId: "v1", platforms: ["wechat"] },
+      {
+        env: { ...env, AI_TIMEOUT_MS: "1000" },
+        createProvider: () => provider,
+      },
+    ).catch((value) => value);
+
+    expect(error).toMatchObject({ code: "AI_TIMEOUT", status: 504, retryable: true });
+    expect(provider.generate).toHaveBeenCalledOnce();
   });
 });

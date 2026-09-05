@@ -19,9 +19,20 @@ describe("readServerAIConfig", () => {
       baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
       model: "doubao-seed-1-6-251015",
       chatCompletionsPath: "/chat/completions",
-      timeoutMs: 45000,
+      timeoutMs: 30000,
       maxRetries: 2,
     });
+  });
+
+  it("enforces the 30 second upstream deadline", () => {
+    expect(
+      readServerAIConfig({
+        AI_API_KEY: "server-secret",
+        AI_BASE_URL: "https://example.test",
+        AI_MODEL: "model",
+        AI_TIMEOUT_MS: "120000",
+      }).timeoutMs,
+    ).toBe(30000);
   });
 
   it("fails closed when credentials or endpoint are missing", () => {

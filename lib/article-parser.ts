@@ -4,6 +4,7 @@ import type {
   ArticleSourceFormat,
   SourcePosition,
   SourceSegment,
+  SourceSegmentType,
   SourceDocument,
   UnifiedArticleBlock,
   UnifiedArticleContent,
@@ -559,10 +560,13 @@ export function parseSourceDocument(raw: string, options: ParseOptions = {}): So
     ...content,
     sourceRevision: sourceRevisionFor(raw),
     segments: buildSourceSegments(content.blocks),
+    rawSource: raw,
+    format: content.sourceFormat === "plainText" ? "plain-text" : "markdown",
   };
 }
 
 function buildSourceSegments(blocks: UnifiedArticleBlock[]): SourceSegment[] {
+  let order = 0;
   return blocks.flatMap((block) => {
     if (block.type === "divider" || block.type === "pageBreak" || block.type === "code") return [];
     const texts = block.type === "list"
@@ -583,20 +587,44 @@ function buildSourceSegments(blocks: UnifiedArticleBlock[]): SourceSegment[] {
         searchOffset = localEnd;
         const sourceStart = block.source.startOffset + localStart;
         const sourceEnd = Math.min(block.source.endOffset, sourceStart + part.length);
+        const segmentType: SourceSegmentType = sourceSegmentTypeFor(block.type);
+        const rawText = block.source.sourceText.slice(
+          Math.max(0, sourceStart - block.source.startOffset),
+          Math.max(0, sourceEnd - block.source.startOffset),
+        ) || part;
+        order += 1;
         return {
           id: `${block.id}:segment:${itemIndex + 1}:${sentenceIndex + 1}`,
           blockId: block.id,
           text: part,
+          order,
+          type: segmentType,
+          rawText,
+          normalizedText: part.replace(/\s+/gu, " ").trim(),
+          ...(block.type === "image" ? { imageId: part.replace(/^此处插入：/u, "").trim() || undefined } : {}),
           sourceRange: {
             ...block.source,
             startOffset: sourceStart,
             endOffset: sourceEnd,
+            start: sourceStart,
+            end: sourceEnd,
             sourceText: part,
           },
         };
       });
     });
   });
+}
+
+function sourceSegmentTypeFor(type: UnifiedArticleBlock["type"]): SourceSegmentType {
+  if (type === "title") return "title";
+  if (type === "section" || type === "subsection") return "heading";
+  if (type === "list") return "list-item";
+  if (type === "image") return "image";
+  if (type === "card") return "card";
+  if (type === "lead") return "lead";
+  if (type === "quote" || type === "golden" || type === "summary" || type === "cta") return "quote";
+  return "paragraph";
 }
 
 function isQuoteBoundary(line: SourceLine, mode: ArticleParseMode, legacyPresentationBlocks: boolean) {

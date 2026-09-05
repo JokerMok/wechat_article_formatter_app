@@ -40,7 +40,9 @@ function clampText(text: string, maxChars: number) {
   if (normalized.length <= maxChars) {
     return normalized;
   }
-  return `${normalized.slice(0, maxChars).trim()}...`;
+  const candidate = normalized.slice(0, maxChars).trim();
+  const sentenceEnd = [...candidate.matchAll(/[。！？；]/gu)].at(-1)?.index;
+  return sentenceEnd === undefined ? candidate : candidate.slice(0, sentenceEnd + 1);
 }
 
 function derivePageTitle(pageBlocks: XiaohongshuPageBlock[], fallbackTitle: string, pageIndex: number) {

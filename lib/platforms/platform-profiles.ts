@@ -101,7 +101,9 @@ export const platformProfiles = {
     profileSchemaVersion: PLATFORM_PROFILE_SCHEMA_VERSION,
     outputSchemaVersion: PLATFORM_OUTPUT_SCHEMA_VERSION,
     sourceTraceVersion: 1,
-    defaultAspectRatio: "3:4",
+    // 9:16 is the default publishing canvas. 3:4 remains an explicit option
+    // for accounts that use the alternate feed composition.
+    defaultAspectRatio: "9:16",
     aspectRatios: {
       "3:4": {
         width: 1080,

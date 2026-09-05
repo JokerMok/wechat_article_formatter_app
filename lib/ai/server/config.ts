@@ -28,7 +28,7 @@ export function readServerAIConfig(env: ServerAIEnv = process.env): ServerAIConf
   }
 
   const chatCompletionsPath = normalizePath(env.AI_CHAT_COMPLETIONS_PATH || "/chat/completions");
-  const timeoutMs = readInteger(env.AI_TIMEOUT_MS, 60000, 1000, 120000);
+  const timeoutMs = readTimeout(env.AI_TIMEOUT_MS);
   const maxRetries = readInteger(env.AI_MAX_RETRIES, 1, 0, 2);
   const reasoningEffort = readReasoningEffort(env.AI_REASONING_EFFORT);
 
@@ -50,6 +50,15 @@ function readInteger(value: string | undefined, fallback: number, min: number, m
     throw new ServerAIError("AI_NOT_CONFIGURED", "服务端 AI 数值配置无效。", false);
   }
   return parsed;
+}
+
+function readTimeout(value: string | undefined) {
+  if (!value?.trim()) return 30000;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1000) {
+    throw new ServerAIError("AI_NOT_CONFIGURED", "服务端 AI 数值配置无效。", false);
+  }
+  return Math.min(parsed, 30000);
 }
 
 function readReasoningEffort(value: string | undefined): OpenAICompatibleProviderConfig["reasoningEffort"] {

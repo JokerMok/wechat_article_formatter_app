@@ -775,12 +775,16 @@ function applyPageSkeleton(page: CardLayoutPage): CardLayoutPage {
   const centered = page.pageKind === "cover" || page.pageKind === "summary" || page.pageKind === "ending" || page.pageKind === "conclusion" || page.pageKind === "epilogue";
   const lowered = page.pageKind === "turning" || page.pageKind === "transition" || page.pageKind === "quote" || page.pageKind === "keyMetric";
   const compact = contentHeight <= page.safeArea.height * 0.68;
+  // Short pages need editorial breathing room, not a forced vertical center.
+  // Keeping them closer to the reading start makes the remaining whitespace
+  // intentional and leaves room for the page marker without creating a blank
+  // lower half. Covers retain more air than body pages.
   const targetTop = centered
-    ? page.safeArea.y + Math.round(available * 0.5)
+    ? page.safeArea.y + Math.round(available * (page.pageKind === "cover" ? 0.35 : 0.25))
     : lowered
-      ? page.safeArea.y + Math.round(available * 0.46)
+      ? page.safeArea.y + Math.round(available * 0.28)
       : compact
-        ? page.safeArea.y + Math.round(available * 0.42)
+        ? page.safeArea.y + Math.round(available * 0.30)
         : top;
   const delta = Math.max(0, targetTop - top);
   if (!delta) return page;

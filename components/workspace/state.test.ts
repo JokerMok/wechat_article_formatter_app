@@ -111,7 +111,7 @@ describe("workspace state", () => {
 
     expect(Object.keys(state.platforms).sort()).toEqual([...WORKSPACE_PLATFORM_IDS].sort());
     expect(state.platforms.wechat.content).not.toBe(state.platforms.xiaohongshu.content);
-    expect(state.platforms.douyinImage.ratio).toBe("3:4");
+    expect(state.platforms.douyinImage.ratio).toBe("9:16");
     expect(state.platforms.wechat.sourceRevision).toBe(state.sourceRevision);
     expect(state.designPlan.recommendedScheme).toBeDefined();
   });

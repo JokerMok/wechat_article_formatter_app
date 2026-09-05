@@ -201,4 +201,54 @@ describe("semantic analyzer", () => {
     const plannedText = plan.platformPlans.xiaohongshu.pages.flatMap((page) => page.blocks).map((block) => block.text);
     expect(plannedText.filter((text) => text === firstBody).length).toBe(1);
   });
+
+  it("keeps heading-free navigation cues from repeating the paragraph below", () => {
+    const source = parseArticleContent(
+      `很多公司开始招聘 AI 岗位，但职位描述往往覆盖整条生产线。\n\n真正的问题不是框架数量，而是组织没有先定义业务问题。\n\n更合理的顺序，是先选一个可量化的业务环节，再决定补产品、应用工程还是算法能力。`,
+      { mode: "knowledge" },
+    );
+    const plan = analyzeArticleDesign(source);
+    const sourceText = source.blocks.map((block) => block.text.replace(/[^\p{L}\p{N}]/gu, "")).join("");
+
+    for (const section of plan.blueprint.sections) {
+      const heading = section.displayHeading;
+      if (heading?.provenance !== "structuralSummary") continue;
+      const normalizedHeading = heading.text.replace(/[^\p{L}\p{N}]/gu, "");
+      expect(heading.text).toContain(" / ");
+      expect(heading.text).not.toContain("我并不赞成");
+      expect(heading.text).not.toContain("而不是继续堆技术名词");
+      expect(sourceText).toContain(normalizedHeading.slice(0, 6));
+      expect(plan.platformPlans.wechat.pages.flatMap((page) => page.blocks).filter((block) => block.role === "body").map((block) => block.text.replace(/[^\p{L}\p{N}]/gu, "")).some((text) => text.includes(normalizedHeading))).toBe(false);
+    }
+  });
+
+  it("builds a grounded semantic blueprint for a heading-free opinion article", () => {
+    const source = parseArticleContent(`我发现，很多公司根本没想清楚自己要招什么人
+
+最近我连续看了几份 AI 岗位说明，看到最后有点想笑。岗位名称写着 AI 应用工程师，要求却从模型训练、数据治理、后端开发一路覆盖到产品设计和项目交付，仿佛一个人要包办整条生产线。
+
+这种招聘方式看起来是在提高标准，实际上暴露的是组织没有先定义问题。老板说要做 AI，业务部门想要一个能马上提效的工具，技术团队担心数据和系统安全，人力部门最后只能把所有关键词都塞进职位描述。
+
+真正需要先回答的不是会不会某个框架，而是公司当前处于哪个阶段。还没有稳定场景时，需要的是能访谈业务、拆解流程和快速验证的人；已经有明确需求时，需要的是能接系统、做评测和保证交付的人；只有当数据规模、收益和长期壁垒都足够清晰时，才值得组建模型和算法团队。
+
+我见过一个团队一开始就招了三名算法工程师，半年后最有价值的成果却是一个连接知识库和客服系统的工作流。问题不在工程师能力，而在公司把“拥有算法团队”误当成“拥有 AI 能力”。
+
+更合理的顺序，是先选一个高频、可量化、有人负责的业务环节，用两到四周做出能被真实用户使用的最小方案。然后记录准确率、节省时间、人工接管率和失败类型，再决定下一步补产品、应用工程还是算法能力。
+
+招聘要求也应该跟着验证结果变化。如果瓶颈是接口和权限，就补集成能力；如果瓶颈是知识更新和召回，就补检索与评测；如果瓶颈是业务没人负责，就先明确产品负责人，而不是继续堆技术名词。
+
+所以我并不赞成一句话说传统企业不需要算法团队。更准确的说法是，在很多企业 AI 项目的第一阶段，最缺的往往不是训练模型的人，而是能把业务问题定义清楚、把现有模型接进流程并对结果负责的人。
+
+先把问题说清楚，再决定招什么人。这个顺序不炫，但通常更接近真实交付。`, { mode: "knowledge" });
+    const blueprint = analyzeArticleDesign(source).blueprint;
+    const units = [...blueprint.facts, ...blueprint.quantifiedDetails, ...blueprint.opinions, ...blueprint.examples, ...blueprint.methods, ...blueprint.boundaries];
+    expect(blueprint.primaryContentType).toBe("opinionAnalysis");
+    expect(blueprint.sections.length).toBeGreaterThanOrEqual(5);
+    expect(blueprint.examples.some((unit) => unit.text.includes("三名算法工程师"))).toBe(true);
+    expect(blueprint.methods.some((unit) => unit.text.includes("两到四周"))).toBe(true);
+    expect(blueprint.quantifiedDetails.some((unit) => unit.text.includes("准确率") && unit.text.includes("人工接管率"))).toBe(true);
+    expect(blueprint.boundaries.some((unit) => unit.text.includes("传统企业不需要算法团队"))).toBe(true);
+    expect(units.every((unit) => unit.sourceBlockIds.length > 0)).toBe(true);
+    expect(Object.values(analyzeArticleDesign(source).platformPlans).every((plan) => plan.integrity?.sourceCoverage === 1)).toBe(true);
+  });
 });

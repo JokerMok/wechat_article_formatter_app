@@ -109,10 +109,12 @@ export function analyzeArticleDesign(content: UnifiedArticleContent, options: An
   };
   const editorialPlans = buildEditorialPlans(content, blueprint);
   const platformPlans = buildPlatformDesignPlans(content, blueprint, scheme, { themeId, contentLayoutId, editorialPlans });
+  const analysisRevision = `analysis-${stableChecksum(JSON.stringify({ sourceRevision, generationMode, contentType, blueprint }))}`;
 
   return {
     schemaVersion: 1,
     sourceRevision,
+    analysisRevision,
     generationMode,
     contentType,
     targetAudience,
@@ -182,6 +184,7 @@ export function applySemanticBlueprint(
   return {
     ...base,
     generationMode: blueprint.generationMode,
+    analysisRevision: `analysis-${stableChecksum(JSON.stringify({ sourceRevision: base.sourceRevision, blueprint: semanticBlueprint }))}`,
     contentType: blueprint.primaryContentType,
     targetAudience: blueprint.targetAudience,
     coreMessage: blueprint.centralThesis,

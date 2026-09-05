@@ -19,7 +19,10 @@ export async function generateWithServerAI(
   if (input.platforms.length > 1) {
     const results: ProviderGenerateResult[] = [];
     for (const platform of input.platforms) {
-      results.push(await generateWithRetry(provider, { ...input, platforms: [platform] }, config.maxRetries));
+      results.push(await withHardTimeout(
+        generateWithRetry(provider, { ...input, platforms: [platform] }, config.maxRetries),
+        config.timeoutMs,
+      ));
     }
     const first = results[0];
     const editorialPlans = results.flatMap((result) => "editorialPlans" in result.response ? result.response.editorialPlans : []);
@@ -48,7 +51,7 @@ export async function generateWithServerAI(
     };
   }
 
-  return generateWithRetry(provider, input, config.maxRetries);
+  return withHardTimeout(generateWithRetry(provider, input, config.maxRetries), config.timeoutMs);
 }
 
 export async function analyzeWithServerAI(
@@ -63,7 +66,20 @@ export async function analyzeWithServerAI(
   const config = readServerAIConfig(dependencies.env);
   const createAnalyzer = dependencies.createAnalyzer ?? ((serverConfig, fetchImpl) => new OpenAICompatibleAdapter(serverConfig, fetchImpl));
   const analyzer = createAnalyzer(config, dependencies.fetchImpl);
-  return analyzeWithRetry(analyzer, input, config.maxRetries);
+  return withHardTimeout(analyzeWithRetry(analyzer, input, config.maxRetries), config.timeoutMs);
+}
+
+function withHardTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new ServerAIError("AI_TIMEOUT", "AI 服务响应超时，请稍后重试。", true, 504));
+    }, timeoutMs);
+  });
+
+  return Promise.race([operation, deadline]).finally(() => {
+    if (timeoutId) clearTimeout(timeoutId);
+  });
 }
 
 async function generateWithRetry(provider: ServerAIProvider, input: ProviderGenerateOptions, maxRetries: number): Promise<ProviderGenerateResult> {

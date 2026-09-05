@@ -88,7 +88,7 @@ export type SemanticCertainty = "certain" | "uncertain";
 
 export type DisplayHeading = {
   text: string;
-  provenance: "source" | "expressionOptimization";
+  provenance: ContentProvenance;
   confidence: number;
 };
 
@@ -136,6 +136,7 @@ export type ContentBlueprint = {
   sections: ContentSection[];
   keyPoints: string[];
   facts: SemanticUnit[];
+  quantifiedDetails: SemanticUnit[];
   opinions: SemanticUnit[];
   examples: SemanticUnit[];
   methods: SemanticUnit[];
@@ -296,6 +297,8 @@ export type DesignPlanBlock = {
 export type DesignPlan = {
   schemaVersion: 1;
   sourceRevision: string;
+  /** Stable identity of the semantic analysis used to build platform plans. */
+  analysisRevision?: string;
   generationMode: GenerationMode;
   contentType: ContentType;
   targetAudience: string;

@@ -11,14 +11,25 @@ export type SourcePosition = {
   endLine: number;
   startOffset: number;
   endOffset: number;
+  /** Offset aliases used by the semantic trace contract. */
+  start?: number;
+  end?: number;
   sourceText: string;
 };
+
+export type SourceSegmentType = "title" | "heading" | "paragraph" | "list-item" | "quote" | "image" | "card" | "lead" | "divider";
 
 export type SourceSegment = {
   id: string;
   blockId: string;
   text: string;
   sourceRange: SourcePosition;
+  /** Stable document order, independent of the semantic role assigned later. */
+  order?: number;
+  type?: SourceSegmentType;
+  rawText?: string;
+  normalizedText?: string;
+  imageId?: string;
 };
 
 type UnifiedBlockBase<TType extends UnifiedContentBlockType> = {
@@ -98,6 +109,9 @@ export type UnifiedArticleContent = {
 export type SourceDocument = UnifiedArticleContent & {
   sourceRevision: string;
   segments: SourceSegment[];
+  /** Canonical syntax-parser aliases used by the semantic pipeline. */
+  rawSource?: string;
+  format?: "markdown" | "plain-text";
 };
 
 export type ArticleContentParseOptions = {
