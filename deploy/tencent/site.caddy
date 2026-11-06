@@ -4,16 +4,54 @@ formatter.shizibandu.icu {
 	header X-Content-Type-Options nosniff
 	header Referrer-Policy strict-origin-when-cross-origin
 	header X-Frame-Options DENY
+
 	@assets path /_next/static/*
 	header @assets Cache-Control "public, max-age=31536000, immutable"
-	@home path /
-	header @home Cache-Control "no-cache"
-	@ai path /api/ai/analyze /api/ai/generate
-	handle @ai {
+
+	@dynamicPages {
+		method GET HEAD
+		path / /multiplatform
+		file /.formatter-dynamic
+	}
+	handle @dynamicPages {
+		header Cache-Control "private, no-store"
+		reverse_proxy 127.0.0.1:18877 {
+			header_up -RSC
+			header_up -Next-Action
+			header_up -Next-Resume
+			header_up -Next-Router-State-Tree
+			header_up -Next-Router-Prefetch
+			header_up -Next-Router-Segment-Prefetch
+			header_up -X-Middleware-Subrequest
+			header_up -X-Middleware-Set-Cookie
+		}
+	}
+
+	@dynamicAI {
+		method GET POST
+		path /api/ai/session /api/ai/analyze /api/ai/generate /api/ai/article-layout /api/ai/style-capture /api/ai/style-vision
+		file /.formatter-dynamic
+	}
+	handle @dynamicAI {
+		request_body {
+			max_size 6MB
+		}
+		reverse_proxy 127.0.0.1:18877 {
+			header_up -RSC
+			header_up -Next-Action
+			header_up -Next-Resume
+			header_up -X-Middleware-Subrequest
+			header_up -X-Middleware-Set-Cookie
+		}
+	}
+
+	@legacyAI path /api/ai/analyze /api/ai/generate
+	handle @legacyAI {
 		header Content-Type application/json
 		header Cache-Control no-store
 		respond `{"ok":false,"error":{"code":"AI_NOT_CONFIGURED","message":"此入口尚未启用服务端 AI。","retryable":false}}` 503
 	}
+
 	@public path / /_next/static/*
 	handle @public {
 		file_server

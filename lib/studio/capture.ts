@@ -493,7 +493,13 @@ export async function captureReference(input: {
   dom.window.close();
   let browser;
   try {
-    browser = await chromium.launch({ headless: true });
+    const executablePath = process.env.FORMATTER_CHROMIUM_PATH?.trim();
+    browser = await chromium.launch({
+      headless: true,
+      ...(executablePath
+        ? { executablePath, args: ["--disable-gpu", "--disable-software-rasterizer"] }
+        : {}),
+    });
   } catch {
     throw new Error(
       "采集浏览器不可用。请安装 Playwright Chromium，或改用截图手动学习。",

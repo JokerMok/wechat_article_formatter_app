@@ -1,4 +1,4 @@
-"""Package a static public entry and an independent loopback Next server."""
+"""Package the public assets and the loopback Next server."""
 import hashlib
 import json
 import os
@@ -12,10 +12,7 @@ sha = sys.argv[3]
 build = work / ".next"
 release = build / "standalone"
 assert (release / "server.js").is_file(), "Build a Next standalone runtime first"
-assert (build / "server/app/index.html").is_file(), "This deployment requires a prerendered homepage"
 assert not (work / "middleware.ts").exists() and not (work / "proxy.ts").exists(), "Review public routing for authenticated builds"
-if (build / "server/app/api/account").exists():
-    raise SystemExit("Use a reviewed account-enabled deployment for this version")
 
 # Only the private server uses Next. Image optimization is unnecessary for this release.
 image_native = release / "node_modules/@img"
@@ -31,7 +28,11 @@ if not static.exists():
     shutil.copytree(build / "static", static)
 web = release / "web"
 web.mkdir()
-shutil.copy2(build / "server/app/index.html", web / "index.html")
+prerendered_home = build / "server/app/index.html"
+if prerendered_home.is_file():
+    shutil.copy2(prerendered_home, web / "index.html")
+else:
+    (web / ".formatter-dynamic").write_text("loopback frontend and authenticated AI\n")
 shutil.copytree(static, web / "_next/static", copy_function=os.link)
 release_metadata = {
     "git_sha": sha,

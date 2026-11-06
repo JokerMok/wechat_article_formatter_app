@@ -42,7 +42,7 @@ activate() {
   return 1
 }
 case ${1:-status} in
-  install)
+  install|stage)
     archive=${2:?Archive required}
     expected=${3:?SHA-256 required}
     [[ "$archive" =~ ^/dev/shm/formatter-[a-f0-9]{40}\.[a-zA-Z0-9]+\.tar\.gz$ &&
@@ -79,7 +79,7 @@ PY
     fi
     printf '%s\n' "$expected" > "$stage/ARTIFACT.sha256"
     mv "$stage" "$root/releases/$git_sha"
-    activate "releases/$git_sha"
+    if [[ $1 == install ]]; then activate "releases/$git_sha"; fi
     ;;
   activate)
     sha=${2:?Git SHA required}
@@ -101,5 +101,5 @@ PY
     if [[ -L "$root/previous" ]]; then readlink "$root/previous"; fi
     cat "$root/current/RELEASE.json" "$root/current/ARTIFACT.sha256"
     ;;
-  *) echo "Usage: $0 {install ARCHIVE SHA256|activate GIT_SHA|rollback|status}" >&2; exit 2 ;;
+  *) echo "Usage: $0 {install ARCHIVE SHA256|stage ARCHIVE SHA256|activate GIT_SHA|rollback|status}" >&2; exit 2 ;;
 esac

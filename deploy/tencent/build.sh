@@ -12,8 +12,12 @@ if [[ -z $ref ]]; then
   ref=$(git -C "$repo" ls-remote --symref origin HEAD | awk '$1=="ref:" && $3=="HEAD"{print $2}')
   [[ $ref == refs/heads/* ]]
 fi
-git -C "$repo" fetch --no-tags origin "$ref" >&2
-sha=$(git -C "$repo" rev-parse --verify 'FETCH_HEAD^{commit}')
+if [[ $ref == local:* ]]; then
+  sha=$(git -C "$repo" rev-parse --verify "${ref#local:}^{commit}")
+else
+  git -C "$repo" fetch --no-tags origin "$ref" >&2
+  sha=$(git -C "$repo" rev-parse --verify 'FETCH_HEAD^{commit}')
+fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/formatter-build.XXXXXX")
 trap 'rm -rf -- "$work"' EXIT
 git -C "$repo" archive "$sha" | tar -x -C "$work"
