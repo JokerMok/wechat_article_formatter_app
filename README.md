@@ -1,6 +1,6 @@
 # 自媒体内容排版器
 
-本项目是本地优先的文章与图文排版工具。当前主入口 `/` 为公众号风格排版工作台（`components/studio/studio.tsx`）；原有四平台工作区保留在 `/multiplatform`（`components/workspace/unified-workspace.tsx`）。两个工作区使用独立本地数据，原稿件未自动迁移。仓库根目录的 `wechat_article_formatter_app.tsx` 继续保留为旧引用兼容导出。
+本项目是本地优先的文章与图文排版工具。当前主入口 `/` 为公众号风格排版工作台（`components/studio/studio.tsx`）；公开站点已移除四平台工作区入口。旧版实现和浏览器数据仍可通过相应历史版本用于迁移。仓库根目录的 `wechat_article_formatter_app.tsx` 继续保留为旧引用兼容导出。
 
 ## 公众号风格工作台（2026-11-05）
 

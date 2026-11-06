@@ -4,22 +4,23 @@
 
 | 项目 | 实际部署 |
 | --- | --- |
-| 本机源码快照 | `44ccda31b70ee4af0c7d8eb4a329b7a015ce57d3`，父提交为本机 `335bcb18c11a12255dc30aba3289219187bfaf99` |
-| 正式运行版本 | `974f2b02d123ad1ba3b605828cc859d3097df969`，本地发布分支 `codex/formatter-tencent-20261106-134204`，GitHub 维护分支 `codex/product-readiness` |
-| 发布包 SHA-256 | `741815173080959008f69c5aca80fd8e8c081033db6573a6b96b8401771ff471` |
-| 上一版 | `4b28751d9e935e365dab5be72009e2ab785a2198`，仍保留在 `previous` |
+| 正式运行版本 | `9265415259d9954eed8befab27c2f41d69e75e4c` |
+| 发布包 SHA-256 | `847b43031c94c2e560f26228ed43cbec1f4e62e7d5a603d67bf4f3545572f232` |
+| 上一版 | `974f2b02d123ad1ba3b605828cc859d3097df969`，同时是当前差分运行包的基础版本 |
 | 服务器 | `ssh tencent-main`，`/srv/apps/formatter` |
 | 后端 | systemd `formatter.service`，`127.0.0.1:18877`，开机自启 |
-| 入口 | Caddy 提供哈希静态资源，两个工作台和六条受控接口走同源回环反代 |
+| 入口 | Caddy 提供哈希静态资源，风格工作台、受控 API 和账号回调走同源回环反代 |
 | 运行时 | Node.js 24.22.0、Next.js 16.4.5、Chromium 153.0.8010.0 |
-| 运行包 | 压缩应用包及 `runtime/chromium-153.0.0.br` 持久保存，启动时解包至 `/run/formatter` |
+| 运行包 | 差分运行包以 `previous/runtime.tar.gz` 为基础并校验摘要；Chromium 压缩包保存在 `runtime/chromium-153.0.0.br`，启动时解包至 `/run/formatter` |
 | 私有配置 | `shared/config/runtime.env`，root 0600 |
 | 备份 | `server-config-backup.timer` 自动纳入维护记录、配置和发布指针，前版配置见 `shared/backups/before-974f2b02d123ad1ba3b605828cc859d3097df969` |
 
-新版首页为风格排版，原四平台入口为 `/multiplatform`。原稿、素材、风格保存在对应浏览器 IndexedDB，服务端本次没有业务数据库迁移。正式账号入口需独立登记与配置。腾讯云到现有模型中转的连接超时或重置，当前运行配置关闭模型语义分析，网页采集和规则排版可用。需要使用受控网页采集时，从服务器私有环境文件取得本产品访问口令。
+公网只提供风格排版，旧 `/multiplatform` 返回 404。浏览器稿件未执行删除或迁移。生产账号中心还没有本产品登记，环境未启用账号模式。站点显示真实的账号开通状态，后续回调固定为 `https://formatter.shizibandu.icu/auth/callback/wechat-article-formatter`。正式开通需要共享账号中心变更授权和独立产品数据库。
 
-公网 Chromium 验证了整篇粘贴、即时套版、确认保存、刷新恢复、HTML 下载、原四平台入口与同源请求。HTTPS 后端实测了口令会话、合成 HTML 采集和一篇公开公众号文章采集。35 项定向测试、Next.js 生产构建和文件校验通过。公网账号接口返回 404。部署后磁盘可用约 2.01 GiB，需继续关注共享备份要求的 2 GiB 空闲门槛。
+原模型密钥在 Mac 实测可成功返回补全。腾讯云直接访问同一个 Vercel 中转超时，线上环境未放入模型密钥，智能排版使用规则。服务端访问口令与模型密钥分开，网页采集仍可通过访问口令使用。公网浏览器已验证旧入口下线、账号与模型提示、整篇粘贴；生产构建和 HTTPS 通过。
+
+磁盘可用空间只略高于共享备份的 2 GiB 门槛。已将最早的 `4b28751d9e935e365dab5be72009e2ab785a2198` 完整发布归档到 Mac 的 `~/server-ops/tencent-main/files/formatter/releases/`，归档与逐文件清单均通过校验。保留服务器上的上一版完整运行包，当前差分依赖它。
 
 从 GitHub 维护分支更新时运行 `bash deploy/tencent/update.sh codex/product-readiness`。也可指定本地发布提交 `bash deploy/tencent/update.sh local:<提交SHA>`。独立构建需要保留当前部署工具和匹配的 Chromium 运行时。
 
-回退时执行 `ssh tencent-main 'sudo /srv/apps/formatter/shared/config/manage.sh rollback'`。Caddy 根据发布目录中的标记自动切回旧版静态入口。新版激活前已用该规则验证旧版页面；已保留 Caddy 和 systemd 的前版配置。代码切换不处理浏览器数据。
+回退时执行 `ssh tencent-main 'sudo /srv/apps/formatter/shared/config/manage.sh rollback'`。回退仅切换应用。前版 Caddy 和启动脚本保存在本次项目备份目录。代码切换不处理浏览器数据。
