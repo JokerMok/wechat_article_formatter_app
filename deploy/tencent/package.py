@@ -26,9 +26,9 @@ if image_native.is_dir():
     for package in image_native.glob("*darwin*"):
         shutil.rmtree(package)
 # Playwright traces the optional macOS filesystem watcher.
-watcher = release / "node_modules/fsevents"
-if watcher.exists():
-    shutil.rmtree(watcher)
+for watcher in list(release.rglob("fsevents")):
+    if watcher.is_dir() and watcher.parent.name == "node_modules":
+        shutil.rmtree(watcher)
 native_files = list(release.rglob("*.node"))
 if native_files:
     raise SystemExit("Review remaining native modules before packaging for Linux: " + str(native_files))
