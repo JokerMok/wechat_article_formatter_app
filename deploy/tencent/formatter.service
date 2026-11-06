@@ -10,8 +10,8 @@ EnvironmentFile=/srv/apps/formatter/shared/config/runtime.env
 Environment=FORMATTER_CHROMIUM_PATH=/run/formatter/chromium
 RuntimeDirectory=formatter
 RuntimeDirectoryMode=0700
-ExecStartPre=/srv/apps/beadgrid-studio/runtime/node-v24.22.0-linux-x64/bin/node /srv/apps/formatter/runtime/prepare-chromium.mjs
-ExecStart=/srv/apps/beadgrid-studio/runtime/node-v24.22.0-linux-x64/bin/node server.js
+ExecStartPre=/srv/apps/beadgrid-studio/runtime/node-v24.22.0-linux-x64/bin/node /srv/apps/formatter/runtime/prepare-runtime.mjs
+ExecStart=/srv/apps/beadgrid-studio/runtime/node-v24.22.0-linux-x64/bin/node /srv/apps/formatter/runtime/start.mjs
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=yes
@@ -19,7 +19,7 @@ PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
 UMask=0077
-MemoryMax=640M
+MemoryMax=768M
 CPUQuota=50%
 TasksMax=96
 

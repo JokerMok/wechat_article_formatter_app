@@ -19,6 +19,10 @@ image_native = release / "node_modules/@img"
 if image_native.is_dir():
     for package in image_native.glob("*darwin*"):
         shutil.rmtree(package)
+# Playwright traces the optional macOS filesystem watcher.
+watcher = release / "node_modules/fsevents"
+if watcher.exists():
+    shutil.rmtree(watcher)
 native_files = list(release.rglob("*.node"))
 if native_files:
     raise SystemExit("Review remaining native modules before packaging for Linux: " + str(native_files))
@@ -26,12 +30,20 @@ if native_files:
 static = release / ".next/static"
 if not static.exists():
     shutil.copytree(build / "static", static)
-web = release / "web"
-web.mkdir()
 prerendered_home = build / "server/app/index.html"
 if prerendered_home.is_file():
+    web = release / "web"
+    web.mkdir()
     shutil.copy2(prerendered_home, web / "index.html")
 else:
+    # Keep the active runtime in tmpfs to retain the server backup disk reserve.
+    runtime = release
+    release = build / "formatter-packed"
+    release.mkdir()
+    with tarfile.open(release / "runtime.tar.gz", "w:gz", compresslevel=6) as tar:
+        tar.add(runtime, arcname=".")
+    web = release / "web"
+    web.mkdir()
     (web / ".formatter-dynamic").write_text("loopback frontend and authenticated AI\n")
 shutil.copytree(static, web / "_next/static", copy_function=os.link)
 release_metadata = {
