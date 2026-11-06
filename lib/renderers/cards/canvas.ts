@@ -7,7 +7,6 @@ export type CardCanvasPreset = {
   body: string;
   rule: string;
   highlight: string;
-  dots: string;
   surface: string;
   muted: string;
   fontFamily?: string;
@@ -45,6 +44,7 @@ export type DrawCardImagePageOptions = {
   images?: Record<string, CanvasImageSource>;
   selectedImageId?: string;
   platform?: "xiaohongshu" | "douyinImage";
+  brandLabel?: string;
 };
 
 const DEFAULT_PRESET: CardCanvasPreset = {
@@ -54,7 +54,6 @@ const DEFAULT_PRESET: CardCanvasPreset = {
   body: "#6B3A16",
   rule: "#D8C5B1",
   highlight: "#F1E7DC",
-  dots: "#E9E0D7",
   surface: "#FFFFFF",
   muted: "#8C8178",
   fontFamily: "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif",
@@ -63,11 +62,13 @@ const DEFAULT_PRESET: CardCanvasPreset = {
 };
 
 export function drawCardImagePage(ctx: CardImageCanvasContext, page: CardLayoutPage, options: DrawCardImagePageOptions = {}) {
-  const preset = { ...DEFAULT_PRESET, ...options.preset };
+  const basePreset = { ...DEFAULT_PRESET, ...options.preset };
+  const preset = resolvePagePreset(page, basePreset);
   ctx.fillStyle = preset.background;
   ctx.fillRect(0, 0, page.canvas.width, page.canvas.height);
   ctx.textBaseline = "top";
   ctx.textAlign = "left";
+  drawPageWatermark(ctx, page, preset);
   drawPageFrame(ctx, page, preset, options.platform);
   drawPageKindAccent(ctx, page, preset);
 
@@ -75,7 +76,7 @@ export function drawCardImagePage(ctx: CardImageCanvasContext, page: CardLayoutP
     drawNode(ctx, node, preset, options);
   }
 
-  drawPageIndicator(ctx, page, preset);
+  drawBrandHeader(ctx, page, preset, options.brandLabel, options.platform);
 }
 
 /** Final renderer entry point for Xiaohongshu exports and previews. */
@@ -168,34 +169,33 @@ function drawNode(ctx: CardImageCanvasContext, node: CardLayoutNode, preset: Car
   }
 }
 
-function drawPageFrame(ctx: CardImageCanvasContext, page: CardLayoutPage, preset: CardCanvasPreset, platform?: DrawCardImagePageOptions["platform"]) {
+function drawPageFrame(
+  ctx: CardImageCanvasContext,
+  page: CardLayoutPage,
+  preset: CardCanvasPreset,
+  platform?: DrawCardImagePageOptions["platform"],
+) {
   if (platform === "douyinImage") {
     ctx.fillStyle = preset.title;
     ctx.fillRect(0, 0, page.canvas.width, 72);
     ctx.fillStyle = preset.background;
     ctx.font = `700 24px ${preset.fontFamily ?? "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"}`;
-    ctx.fillText(`抖音图文  /  ${String(page.pageNumber).padStart(2, "0")}`, page.safeArea.x, 23);
+    ctx.textAlign = "right";
+    ctx.fillText(`${String(page.pageNumber).padStart(2, "0")} / ${String(page.totalPages).padStart(2, "0")}`, page.canvas.width - page.safeArea.x, 23);
+    ctx.textAlign = "left";
     return;
   }
   const labelY = Math.max(44, page.safeArea.y - 78);
   if (preset.variant === "editorial") {
     ctx.fillStyle = preset.rule;
     ctx.fillRect(page.safeArea.x, page.safeArea.y - 36, page.safeArea.width, 3);
-    ctx.fillStyle = preset.muted;
-    ctx.font = `600 22px ${preset.fontFamily ?? "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"}`;
-    ctx.fillText(`编辑部  /  ${String(page.pageNumber).padStart(2, "0")}`, page.safeArea.x, labelY);
     return;
   }
 
   if (preset.variant === "checklist") {
-    ctx.fillStyle = preset.title;
-    ctx.fillRect(page.safeArea.x, labelY, 76, 8);
     ctx.fillStyle = preset.rule;
     ctx.font = `800 86px ${preset.fontFamily ?? "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"}`;
     ctx.fillText(String(page.pageNumber).padStart(2, "0"), page.safeArea.x + page.safeArea.width - 104, labelY - 36);
-    ctx.fillStyle = preset.muted;
-    ctx.font = `700 20px ${preset.fontFamily ?? "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"}`;
-    ctx.fillText(page.pageKind === "warning" ? "避坑提醒" : page.pageKind === "action" || page.pageKind === "callToAction" ? "执行清单" : "行动清单", page.safeArea.x, labelY + 20);
     return;
   }
 
@@ -205,30 +205,69 @@ function drawPageFrame(ctx: CardImageCanvasContext, page: CardLayoutPage, preset
     for (let index = 0; index <= 4; index += 1) ctx.fillRect(page.safeArea.x + column * index, page.safeArea.y - 28, 1, page.safeArea.height + 56);
     ctx.fillStyle = preset.title;
     ctx.fillRect(page.safeArea.x, page.safeArea.y - 36, page.safeArea.width, 4);
-    ctx.font = `700 21px ${preset.fontFamily ?? "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"}`;
-    ctx.fillText(`数据编辑部  ${String(page.pageNumber).padStart(2, "0")}`, page.safeArea.x, labelY);
     return;
   }
 
   ctx.fillStyle = preset.rule;
-  ctx.fillRect(page.safeArea.x, page.safeArea.y - 34, 72, 3);
-  ctx.fillRect(page.safeArea.x, page.safeArea.y - 34, 2, page.safeArea.height + 52);
+  ctx.fillRect(page.safeArea.x, page.safeArea.y, 2, page.safeArea.height + 18);
+}
+
+function resolvePagePreset(page: CardLayoutPage, preset: CardCanvasPreset): CardCanvasPreset {
+  if (page.pageKind !== "cover") return preset;
+  if (preset.variant === "checklist") {
+    return {
+      ...preset,
+      background: preset.rule,
+      title: "#101010",
+      body: "#171717",
+      rule: "#101010",
+      highlight: "#FFFFFF99",
+      muted: "#292929",
+    };
+  }
+  return {
+    ...preset,
+    background: preset.title,
+    title: preset.surface,
+    body: preset.surface,
+    rule: preset.rule,
+    highlight: "#FFFFFF1F",
+    muted: preset.background,
+  };
+}
+
+function drawPageWatermark(ctx: CardImageCanvasContext, page: CardLayoutPage, preset: CardCanvasPreset) {
+  if (page.pageKind === "cover") return;
+  ctx.save();
+  ctx.globalAlpha = 0.035;
   ctx.fillStyle = preset.title;
-  ctx.font = `600 22px ${preset.fontFamily ?? "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"}`;
-  ctx.fillText(`${storyLabel(page.pageKind)}  ${String(page.pageNumber).padStart(2, "0")}`, page.safeArea.x + 20, labelY);
+  ctx.font = `900 ${page.aspectRatio === "9:16" ? 320 : 260}px ${preset.fontFamily ?? "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"}`;
+  ctx.textAlign = "right";
+  ctx.fillText(String(page.pageNumber).padStart(2, "0"), page.canvas.width - page.safeArea.x, page.canvas.height - (page.aspectRatio === "9:16" ? 520 : 410));
+  ctx.restore();
+  ctx.textAlign = "left";
+  ctx.globalAlpha = 1;
+}
+
+function drawBrandHeader(
+  ctx: CardImageCanvasContext,
+  page: CardLayoutPage,
+  preset: CardCanvasPreset,
+  brandLabel?: string,
+  platform?: DrawCardImagePageOptions["platform"],
+) {
+  if (!brandLabel) return;
+  ctx.fillStyle = platform === "douyinImage" ? preset.background : preset.muted;
+  ctx.font = `600 19px ${preset.fontFamily ?? "-apple-system, BlinkMacSystemFont, PingFang SC, sans-serif"}`;
+  ctx.textAlign = "left";
+  ctx.fillText(brandLabel, page.safeArea.x, platform === "douyinImage" ? 25 : Math.max(44, page.safeArea.y - 78));
 }
 
 function drawPageKindAccent(ctx: CardImageCanvasContext, page: CardLayoutPage, preset: CardCanvasPreset) {
-  if (page.pageKind === "cover") {
-    ctx.fillStyle = preset.rule;
-    ctx.fillRect(page.safeArea.x, page.safeArea.y + page.safeArea.height - 20, Math.min(160, page.safeArea.width * 0.22), 3);
-    return;
-  }
+  if (page.pageKind === "cover") return;
   if (page.pageKind === "warning") {
-    ctx.strokeStyle = preset.rule;
-    ctx.setLineDash([10, 10]);
-    ctx.strokeRect(page.safeArea.x - 22, page.safeArea.y + 20, page.safeArea.width + 44, page.safeArea.height - 40);
-    ctx.setLineDash([]);
+    ctx.fillStyle = preset.rule;
+    ctx.fillRect(page.safeArea.x - 24, page.safeArea.y, 8, Math.min(page.safeArea.height * 0.7, 720));
     return;
   }
   if (page.pageKind === "keyMetric") {
@@ -253,35 +292,6 @@ function drawPageKindAccent(ctx: CardImageCanvasContext, page: CardLayoutPage, p
     ctx.fillStyle = preset.rule;
     const width = Math.min(180, page.safeArea.width * 0.24);
     ctx.fillRect(page.canvas.width / 2 - width / 2, page.safeArea.y + page.safeArea.height - 16, width, 3);
-  }
-}
-
-function storyLabel(kind: CardLayoutPage["pageKind"]) {
-  if (kind === "conflict") return "冲突";
-  if (kind === "turning" || kind === "transition") return "转折";
-  if (kind === "ending" || kind === "epilogue") return "尾声";
-  if (kind === "opening" || kind === "intro") return "开场";
-  return "章节";
-}
-
-function drawPageIndicator(ctx: CardImageCanvasContext, page: CardLayoutPage, preset: CardCanvasPreset) {
-  if (page.totalPages <= 1) return;
-  if (page.totalPages > 12) {
-    ctx.fillStyle = preset.muted;
-    ctx.font = `500 24px ${preset.fontFamily ?? "sans-serif"}`;
-    ctx.textAlign = "center";
-    ctx.fillText(`${page.pageNumber} / ${page.totalPages}`, page.canvas.width / 2, page.canvas.height - 72);
-    ctx.textAlign = "left";
-    return;
-  }
-  const dotGap = 24;
-  const startX = page.canvas.width / 2 - ((page.totalPages - 1) * dotGap) / 2;
-  const y = page.canvas.height - 62;
-  for (let index = 0; index < page.totalPages; index += 1) {
-    ctx.beginPath();
-    ctx.fillStyle = index + 1 === page.pageNumber ? preset.title : preset.dots;
-    ctx.arc(startX + index * dotGap, y, 7, 0, Math.PI * 2);
-    ctx.fill();
   }
 }
 

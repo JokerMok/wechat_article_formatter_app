@@ -1,6 +1,16 @@
 # 自媒体内容排版器
 
-本项目是本地优先的自媒体内容排版工作区。正式入口是 `app/page.tsx`，页面加载 `components/workspace/unified-workspace.tsx`。仓库根目录的 `wechat_article_formatter_app.tsx` 仅保留为旧引用兼容导出，不再是正式入口。
+本项目是本地优先的文章与图文排版工具。当前主入口 `/` 为公众号风格排版工作台（`components/studio/studio.tsx`）；原有四平台工作区保留在 `/multiplatform`（`components/workspace/unified-workspace.tsx`）。两个工作区使用独立本地数据，原稿件未自动迁移。仓库根目录的 `wechat_article_formatter_app.tsx` 继续保留为旧引用兼容导出。
+
+## 公众号风格工作台（2026-11-05）
+
+支持参考 URL / HTML 计算样式采集、截图/长图视觉分析接口、个人风格与版本库、并排比较、直接编辑、全局与局部样式、自动保存和历史回退、三候选可编辑封面、微信公众号图文复制及交付包。
+
+截图分析需要可用的视觉模型。当前已有火山方舟接入点实测返回 `InvalidEndpoint.ClosedEndpoint`；未配置或不可用时会显示原因，并保留手动调整路径。可以设置独立 `AI_VISION_MODEL`，沿用服务端连接和密钥。封面候选使用原创图形版式与独立文字层，支持上传自有背景；尚未接入绘画模型生成背景。
+
+参考 URL 采集须安装 Chromium：`npx playwright install chromium`。定向验证命令为 `npm run test:studio` 和 `npm run e2e:studio`。完整实现映射、运行条件及未验收项见 [工作台实现说明](docs/STYLE_STUDIO_IMPLEMENTATION.md)。
+
+以下为原有四平台工作区的功能与运行说明。
 
 ## 功能
 
@@ -136,3 +146,7 @@ npx playwright install
 - 微信编辑器内二次编辑后，正文结构仍可读。
 
 当浏览器权限或剪贴板能力无法证明微信粘贴效果时，测试会记录 `NEEDS_MANUAL_WECHAT_VERIFICATION`，不把该项伪装成自动通过。
+
+### 统一账号中心
+
+正式接入使用独立消费者应用、产品凭据和产品 PostgreSQL。启动、增量迁移、恢复调度及生产登记边界见 [账号中心接入](docs/ACCOUNT_CENTER_INTEGRATION.md)。

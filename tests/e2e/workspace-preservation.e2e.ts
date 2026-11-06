@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { analyzeArticleDesign } from "../../lib/design-plan";
 
 async function openWorkspace(page: Page) {
-  await page.goto("/");
+  await page.goto("/multiplatform");
   await expect(page.getByRole("button", { name: "生成当前平台", exact: true })).toBeEnabled();
 }
 

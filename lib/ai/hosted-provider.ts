@@ -1,3 +1,4 @@
+import { accountFetch } from "../accounts/browser";
 import { AIProviderError, type AIProvider, type ProviderGenerateOptions, type ProviderGenerateResult } from "./provider";
 
 type HostedAIResponse =
@@ -11,7 +12,7 @@ export class HostedAIProvider implements AIProvider {
   private readonly fetchImpl: typeof fetch;
 
   constructor(fetchImpl?: typeof fetch) {
-    this.fetchImpl = fetchImpl ?? globalThis.fetch.bind(globalThis);
+    this.fetchImpl = fetchImpl ?? accountFetch;
   }
 
   async generate(options: ProviderGenerateOptions): Promise<ProviderGenerateResult> {

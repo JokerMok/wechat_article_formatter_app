@@ -1,10 +1,10 @@
+import { authorizeAI } from "../../../../lib/accounts/feature";
 import { z } from "zod";
 import { GENERATION_MODE_IDS, type GenerationMode } from "../../../../lib/design-plan";
 import type { ProviderSemanticAnalyzeOptions } from "../../../../lib/ai/provider";
 import { unifiedArticleContentSchema } from "../../../../lib/content";
 import { analyzeWithServerAI, assertServerAISemanticRequest } from "../../../../lib/ai/server/gateway";
 import { readBoundedBody } from "../../../../lib/ai/server/bounded-body";
-import { assertServerAIAccess } from "../../../../lib/ai/server/access";
 import { normalizeServerAIError, publicAIError, ServerAIError } from "../../../../lib/ai/server/errors";
 import { acquireServerAILimit, assertAllowedRequestOrigin } from "../../../../lib/ai/server/limits";
 
@@ -23,7 +23,7 @@ export async function POST(request: Request) {
   let releaseLimit: (() => void) | undefined;
   try {
     assertAllowedRequestOrigin(request);
-    assertServerAIAccess(request);
+    await authorizeAI(request, "ANALYZE");
     const rawBody = await readBoundedBody(request, MAX_BODY_BYTES);
     let parsedBody: unknown;
     try {

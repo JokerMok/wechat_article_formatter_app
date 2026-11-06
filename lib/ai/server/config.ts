@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { ServerAIError } from "./errors";
 import type { OpenAICompatibleProviderConfig } from "../provider";
 
@@ -9,6 +10,8 @@ export type ServerAIConfig = {
   chatCompletionsPath: string;
   timeoutMs: number;
   maxRetries: number;
+  tokenLimitField?: OpenAICompatibleProviderConfig["tokenLimitField"];
+  temperature?: null;
   reasoningEffort?: OpenAICompatibleProviderConfig["reasoningEffort"];
 };
 
@@ -20,7 +23,7 @@ export function readServerAIConfig(env: ServerAIEnv = process.env): ServerAIConf
     throw new ServerAIError("AI_NOT_CONFIGURED", "当前服务端 AI Provider 尚未配置。", false);
   }
 
-  const apiKey = env.AI_API_KEY?.trim();
+  const apiKey = readAPIKey(env);
   const baseUrl = env.AI_BASE_URL?.trim();
   const model = env.AI_MODEL?.trim();
   if (!apiKey || !baseUrl || !model) {
@@ -31,8 +34,27 @@ export function readServerAIConfig(env: ServerAIEnv = process.env): ServerAIConf
   const timeoutMs = readTimeout(env.AI_TIMEOUT_MS);
   const maxRetries = readInteger(env.AI_MAX_RETRIES, 1, 0, 2);
   const reasoningEffort = readReasoningEffort(env.AI_REASONING_EFFORT);
+  const tokenLimitField = env.AI_CHAT_TOKEN_LIMIT_FIELD?.trim();
+  if (tokenLimitField && tokenLimitField !== "max_tokens" && tokenLimitField !== "max_completion_tokens") {
+    throw new ServerAIError("AI_NOT_CONFIGURED", "服务端 AI 输出上限字段无效。", false);
+  }
 
-  return { provider, apiKey, baseUrl, model, chatCompletionsPath, timeoutMs, maxRetries, ...(reasoningEffort ? { reasoningEffort } : {}) };
+  return {
+    provider, apiKey, baseUrl, model, chatCompletionsPath, timeoutMs, maxRetries,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(tokenLimitField === "max_tokens" || tokenLimitField === "max_completion_tokens" ? { tokenLimitField } : {}),
+    ...(env.AI_CHAT_TEMPERATURE?.trim() === "default" ? { temperature: null } : {}),
+  };
+}
+
+function readAPIKey(env: ServerAIEnv) {
+  const file = env.AI_API_KEY_FILE?.trim();
+  if (!file) return env.AI_API_KEY?.trim();
+  try {
+    return readFileSync(file, "utf8").trim();
+  } catch {
+    throw new ServerAIError("AI_NOT_CONFIGURED", "无法读取服务端 AI 密钥文件。", false);
+  }
 }
 
 function normalizePath(value: string) {

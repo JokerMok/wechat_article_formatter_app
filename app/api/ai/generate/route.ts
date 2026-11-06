@@ -1,3 +1,4 @@
+import { authorizeAI } from "../../../../lib/accounts/feature";
 import { z } from "zod";
 import { aiPlatformIds, generationAnalysisSchema, type ProviderGenerateOptions } from "../../../../lib/ai/provider";
 import { unifiedArticleContentSchema } from "../../../../lib/content";
@@ -5,7 +6,6 @@ import { assertServerAIRequest, generateWithServerAI } from "../../../../lib/ai/
 import { normalizeServerAIError, publicAIError, ServerAIError } from "../../../../lib/ai/server/errors";
 import { acquireServerAILimit, assertAllowedRequestOrigin } from "../../../../lib/ai/server/limits";
 import { readBoundedBody } from "../../../../lib/ai/server/bounded-body";
-import { assertServerAIAccess } from "../../../../lib/ai/server/access";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
   let releaseLimit: (() => void) | undefined;
   try {
     assertAllowedRequestOrigin(request);
-    assertServerAIAccess(request);
+    await authorizeAI(request, "GENERATE");
     const rawBody = await readBoundedBody(request, MAX_BODY_BYTES);
 
     let parsedBody: unknown;

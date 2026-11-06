@@ -1,3 +1,4 @@
+import { accountEnabled } from "../../../../lib/accounts/config";
 import { AI_SESSION_COOKIE, MAX_ACCESS_CODE_LENGTH, assertServerAIAccess, createAISession } from "../../../../lib/ai/server/access";
 import { assertAllowedRequestOrigin, acquireServerAILimit } from "../../../../lib/ai/server/limits";
 import { normalizeServerAIError, publicAIError } from "../../../../lib/ai/server/errors";
@@ -5,6 +6,7 @@ import { normalizeServerAIError, publicAIError } from "../../../../lib/ai/server
 export const runtime = "nodejs";
 
 export async function GET(request: Request) {
+  if (accountEnabled()) return new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
   try {
     assertServerAIAccess(request);
     return Response.json({ ok: true }, { headers: { "cache-control": "no-store" } });
@@ -18,6 +20,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  if (accountEnabled()) return new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
   let release: (() => void) | undefined;
   try {
     assertAllowedRequestOrigin(request);

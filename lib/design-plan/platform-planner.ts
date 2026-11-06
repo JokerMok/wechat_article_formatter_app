@@ -132,7 +132,12 @@ export function buildXiaohongshuPlan(input: PlatformPlannerInput): PlatformDesig
     });
   }
 
-  return createPlatformPlan(source, blueprint, scheme, theme, layout.id, "xiaohongshu", pages, publishCopyFor(units, editorialPlan), {
+  const compactedPages = compactSparseCardPages(pages, {
+    minimumPages: 6,
+    maximumCharacters: 280,
+    maximumBlocks: 9,
+  });
+  return createPlatformPlan(source, blueprint, scheme, theme, layout.id, "xiaohongshu", compactedPages, publishCopyFor(units, editorialPlan), {
     format: "png",
     width: 1080,
     height: 1440,
@@ -176,7 +181,12 @@ export function buildDouyinImagePlan(input: PlatformPlannerInput): PlatformDesig
     });
   }
 
-  return createPlatformPlan(source, blueprint, scheme, theme, layout.id, "douyinImage", pages, publishCopyFor(units, editorialPlan), {
+  const compactedPages = compactSparseCardPages(pages, {
+    minimumPages: 5,
+    maximumCharacters: 220,
+    maximumBlocks: 6,
+  });
+  return createPlatformPlan(source, blueprint, scheme, theme, layout.id, "douyinImage", compactedPages, publishCopyFor(units, editorialPlan), {
     format: "png",
     width: 1080,
     height: 1920,
@@ -235,10 +245,10 @@ function buildPreservedPlan(input: PlatformPlannerInput, platform: PlatformId): 
 }
 
 function sectionsForPlanner(source: UnifiedArticleContent, blueprint: ContentBlueprint, units: SourceUnit[], editorialPlan?: EditorialPlan) {
-  const sections = editorialPlan
-    ? editorialPlan.sections.map((section, index) => editorialSectionToContentSection(section, source, index))
-    : usableSections(blueprint, units);
-  return ensureSectionCoverage(sections, units);
+  if (editorialPlan) {
+    return editorialPlan.sections.map((section, index) => editorialSectionToContentSection(section, source, index));
+  }
+  return ensureSectionCoverage(usableSections(blueprint, units), units);
 }
 
 function ensureSectionCoverage(sections: ContentSection[], units: SourceUnit[]) {
@@ -383,6 +393,69 @@ function canMergeDouyinSections(left: ContentSection, right: ContentSection) {
     || (left.role === "method" && right.role === "result");
 }
 
+function compactSparseCardPages(
+  pages: PagePlan[],
+  limits: { minimumPages: number; maximumCharacters: number; maximumBlocks: number },
+) {
+  const compacted = pages.map((page) => ({
+    ...page,
+    sourceBlockIds: [...page.sourceBlockIds],
+    blocks: [...page.blocks],
+  }));
+
+  while (compacted.length > limits.minimumPages) {
+    let bestIndex = -1;
+    let bestPriority = Number.POSITIVE_INFINITY;
+    let bestCharacterCount = Number.POSITIVE_INFINITY;
+    for (let index = 0; index < compacted.length - 1; index += 1) {
+      const left = compacted[index]!;
+      const right = compacted[index + 1]!;
+      if (!canMergeSparseCardPages(left, right)) continue;
+      const blocks = [...left.blocks, ...right.blocks];
+      const characterCount = blocks.reduce((total, block) => total + Array.from(block.text.replace(/\s/gu, "")).length, 0);
+      const headingCount = blocks.filter((block) => block.role === "heading").length;
+      if (blocks.length > limits.maximumBlocks || headingCount > 2 || characterCount > limits.maximumCharacters) continue;
+      const priority = left.kind === "intro" && left.kind !== right.kind ? 0 : 1;
+      if (priority < bestPriority || (priority === bestPriority && characterCount < bestCharacterCount)) {
+        bestIndex = index;
+        bestPriority = priority;
+        bestCharacterCount = characterCount;
+      }
+    }
+    if (bestIndex < 0) break;
+
+    const left = compacted[bestIndex]!;
+    const right = compacted[bestIndex + 1]!;
+    const blocks = [...left.blocks, ...right.blocks];
+    compacted.splice(bestIndex, 2, {
+      ...left,
+      title: left.title ?? right.title,
+      sourceBlockIds: [...new Set([...left.sourceBlockIds, ...right.sourceBlockIds])],
+      blocks,
+    });
+  }
+
+  return compacted;
+}
+
+function canMergeSparseCardPages(left: PagePlan, right: PagePlan) {
+  const protectedKinds = new Set<PagePlanKind>([
+    "cover",
+    "boundary",
+    "keyMetric",
+    "summary",
+    "conclusion",
+    "callToAction",
+    "epilogue",
+    "ending",
+  ]);
+  if (protectedKinds.has(left.kind) || protectedKinds.has(right.kind)) return false;
+  if ([...left.blocks, ...right.blocks].some((block) => block.role === "media")) return false;
+  if (left.kind === right.kind) return true;
+  if (left.kind === "warning" && ["action", "step"].includes(right.kind)) return true;
+  return left.kind === "intro" && ["argument", "point", "checklist", "chapter"].includes(right.kind);
+}
+
 function editorialUnitsForCardSection(
   section: ContentSection,
   primarySection: EditorialPlan["sections"][number],
@@ -390,12 +463,13 @@ function editorialUnitsForCardSection(
   source: UnifiedArticleContent,
 ) {
   const sectionSourceIds = new Set(section.sourceBlockIds);
+  const primarySourceIds = new Set(primarySection.sourceBlockIds);
+  const wasMerged = section.sourceBlockIds.some((id) => !primarySourceIds.has(id));
+  if (!wasMerged) return editorialUnitsForSection(primarySection, source);
   const matchingSections = editorialPlan.sections.filter((candidate) =>
-    candidate.sourceBlockIds.some((id) => sectionSourceIds.has(id)),
+    candidate.id === primarySection.id
+      || candidate.sourceBlockIds.some((id) => sectionSourceIds.has(id) && !primarySourceIds.has(id)),
   );
-  if (matchingSections.length <= 1 && matchingSections[0]?.id === primarySection.id) {
-    return editorialUnitsForSection(primarySection, source);
-  }
 
   const seenUnitKeys = new Set<string>();
   return matchingSections.flatMap((candidate) => editorialUnitsForSection(candidate, source)).filter((unit) => {

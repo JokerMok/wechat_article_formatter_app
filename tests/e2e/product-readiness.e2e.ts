@@ -15,7 +15,7 @@ test("real article and stress variants preserve copy and match canvas exports ac
   test.setTimeout(180000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto("/");
+  await page.goto("/multiplatform");
   await expect(page.getByLabel("源文 Markdown")).toBeVisible();
   const picture = await page.evaluate(() => {
     const canvas = document.createElement("canvas");

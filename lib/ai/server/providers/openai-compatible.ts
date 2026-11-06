@@ -14,6 +14,8 @@ export class OpenAICompatibleAdapter implements ServerAIProvider, ServerSemantic
       chatCompletionsPath: config.chatCompletionsPath,
       timeoutMs: config.timeoutMs,
       maxOutputTokens: 8000,
+      tokenLimitField: config.tokenLimitField,
+      temperature: config.temperature,
       reasoningEffort: config.reasoningEffort,
       fetchImpl,
     };

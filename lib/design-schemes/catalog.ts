@@ -262,7 +262,6 @@ export function createCardPreset({ themeId, layoutId }: { themeId: VisualThemeId
     body: theme.colors.text,
     rule: theme.colors.secondary,
     highlight: theme.colors.highlight,
-    dots: `${theme.colors.primary}38`,
     surface: theme.colors.surface,
     muted: `${theme.colors.muted}A3`,
     fontFamily: theme.typography.bodyFamily,

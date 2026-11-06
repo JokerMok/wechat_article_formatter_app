@@ -3,6 +3,7 @@ import { parseArticleContent } from "../article-parser";
 import type { UnifiedArticleBlock, UnifiedArticleContent } from "../content";
 import { toDouyinImageText } from "../platforms/douyin";
 import { toXiaohongshuImageText } from "../platforms/xiaohongshu";
+import { createApproximateTextMeasurer, layoutCardPages } from "../renderers/cards";
 import { analyzeArticleDesign } from "./local-analyzer";
 import { buildPlatformArticle } from "./platform-adapter";
 
@@ -104,6 +105,17 @@ describe("buildPlatformArticle", () => {
     const douyin = buildPlatformArticle(article, "douyinImage", articlePlan);
     expect(xhs.blocks.find((block) => block.type === "title")?.text).toBe(article.title);
     expect(douyin.blocks.find((block) => block.type === "title")?.text).toBe(article.title);
+  });
+
+  it("keeps reach-optimized editorial page boundaries hard in card layout", () => {
+    const optimizedPlan = analyzeArticleDesign(source, { generationMode: "reachOptimized" });
+    const result = buildPlatformArticle(source, "xiaohongshu", optimizedPlan);
+    const breaks = result.blocks.filter((block) => block.type === "pageBreak");
+    const layout = layoutCardPages(result, createApproximateTextMeasurer(), { aspectRatio: "3:4" });
+
+    expect(breaks.length).toBeGreaterThan(0);
+    expect(breaks.every((block) => block.id.includes(":editorial-boundary:"))).toBe(true);
+    expect(layout.pages).toHaveLength(breaks.length + 1);
   });
 
   it("does not bind unrelated fallback paragraphs to checklist points", () => {

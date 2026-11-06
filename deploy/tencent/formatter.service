@@ -1,0 +1,23 @@
+[Unit]
+Description=Self-media formatter loopback service
+After=network.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+WorkingDirectory=/srv/apps/formatter/current
+EnvironmentFile=/srv/apps/formatter/shared/config/runtime.env
+ExecStart=/srv/apps/beadgrid-studio/runtime/node-v24.22.0-linux-x64/bin/node server.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+UMask=0077
+MemoryMax=384M
+CPUQuota=50%
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

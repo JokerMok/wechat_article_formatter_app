@@ -1,3 +1,5 @@
+import { scopedStorageName } from "../accounts/browser";
+import { protectWorkspaceStorage } from "../accounts/encrypted-storage";
 import Dexie, { type Table } from "dexie";
 import type { ProjectDocument, StoredAssetRecord } from "./types";
 import { StorageWriteError } from "./storage-error";
@@ -22,11 +24,12 @@ export class FormatterDatabase extends Dexie {
       throw new StorageWriteError("storage_unavailable", "当前环境无法使用本地存储。");
     }
 
-    super(options.dbName ?? DEFAULT_DATABASE_NAME, { indexedDB: idbFactory, IDBKeyRange: keyRange });
+    super(options.dbName ?? scopedStorageName(DEFAULT_DATABASE_NAME), { indexedDB: idbFactory, IDBKeyRange: keyRange });
     this.version(1).stores({
       projects: "id, updatedAt, schemaVersion",
       assets: "id, projectId, createdAt",
     });
+    protectWorkspaceStorage(this);
   }
 }
 

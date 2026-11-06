@@ -74,7 +74,17 @@ export function getCardSafeArea(aspectRatio: CardAspectRatio = "3:4", options: C
 }
 
 export function getCardTypography(options: CardLayoutOptions = {}): CardTypography {
-  return { ...DEFAULT_TYPOGRAPHY, ...options.typography };
+  const ratioTypography = options.aspectRatio === "9:16"
+    ? {
+        titleFontSize: 82,
+        headingFontSize: 48,
+        bodyFontSize: 43,
+        focusFontSize: 42,
+        paragraphSpacing: 46,
+        titleSpacing: 64,
+      }
+    : {};
+  return { ...DEFAULT_TYPOGRAPHY, ...ratioTypography, ...options.typography };
 }
 
 export function layoutCardPages(
@@ -111,7 +121,7 @@ export function layoutCardPages(
     ...lockedPages.map((page) => ({ ...page, anchorIndex: minSourceIndex(page), locked: true })),
   ].sort((left, right) => left.anchorIndex - right.anchorIndex || pageSortKey(left.id).localeCompare(pageSortKey(right.id)));
 
-  const pages = numberPages(positionedPages, aspectRatio).map((page) => {
+  const pages = numberPages(positionedPages, aspectRatio, options.sparsePageAlignment).map((page) => {
     const overflow = mergeOverflow([...page.overflow, ...detectPageOverflow(page)]);
     return { ...page, overflow };
   });
@@ -176,7 +186,17 @@ function createFlowEntries(blocks: UnifiedArticleBlock[]): FlowEntry[] {
   blocks.forEach((block, blockIndex) => {
     if (block.type === "divider") return;
     if (block.type === "pageBreak") {
-      entries.push({ id: `${block.id}:break`, blockId: block.id, kind: "pageBreak", text: "", sourceIndex: blockIndex * 1_000, softBreak: block.id.includes(":page:") && !block.id.includes(":page:cover:") && !block.id.includes(":semantic-boundary") });
+      entries.push({
+        id: `${block.id}:break`,
+        blockId: block.id,
+        kind: "pageBreak",
+        text: "",
+        sourceIndex: blockIndex * 1_000,
+        softBreak: block.id.includes(":page:")
+          && !block.id.includes(":page:cover:")
+          && !block.id.includes(":semantic-boundary")
+          && !block.id.includes(":editorial-boundary:"),
+      });
       return;
     }
     if (block.syntax === "markdown" && block.type !== "image") {
@@ -707,17 +727,37 @@ function textColumnWidth(safeWidth: number) {
 function wrapText(text: string, maxWidth: number, style: TextStyle, measurer: TextMeasurer): string[] {
   const lines: string[] = [];
   let line = "";
-  for (const char of Array.from(text)) {
-    if (char === "\n") {
+  const placeToken = (token: string) => {
+    if (measurer.measureText(token, style).width <= maxWidth) {
+      line = token;
+      return;
+    }
+    let fragment = "";
+    for (const char of Array.from(token)) {
+      const candidate = fragment + char;
+      if (fragment && measurer.measureText(candidate, style).width > maxWidth) {
+        lines.push(fragment);
+        fragment = char;
+      } else fragment = candidate;
+    }
+    line = fragment;
+  };
+  const tokens = text.match(/\r?\n|[A-Za-z0-9]+(?:[._/+:-][A-Za-z0-9]+)*|./gu) ?? [];
+  for (const token of tokens) {
+    if (token === "\n" || token === "\r\n") {
       // Newlines occupy source offsets even though canvas draws no newline glyph.
-      lines.push(line + char);
+      lines.push(line + token);
       line = "";
       continue;
     }
-    const candidate = line + char;
-    if (line && measurer.measureText(candidate, style).width > maxWidth && !BREAK_BEFORE_CHARS.test(char)) {
+    if (!line) {
+      placeToken(token);
+      continue;
+    }
+    const candidate = line + token;
+    if (line && measurer.measureText(candidate, style).width > maxWidth && !BREAK_BEFORE_CHARS.test(token)) {
       lines.push(line);
-      line = char;
+      placeToken(token);
     } else line = candidate;
   }
   if (line) lines.push(line);
@@ -755,14 +795,20 @@ function clonePage(page: CardLayoutPage, locked = page.locked ?? false, manual =
 }
 
 function minSourceIndex(page: Pick<CardLayoutPage, "nodes">) {
-  return Math.min(...page.nodes.map((node) => node.sourceIndex), Number.MAX_SAFE_INTEGER);
+  let minimum = Number.MAX_SAFE_INTEGER;
+  for (const node of page.nodes) minimum = Math.min(minimum, node.sourceIndex);
+  return minimum;
 }
 
 function pageSortKey(id: string) {
   return id.replace(/\d+/g, (value) => value.padStart(8, "0"));
 }
 
-function numberPages(pages: PageDraft[], aspectRatio: CardAspectRatio): CardLayoutPage[] {
+function numberPages(
+  pages: PageDraft[],
+  aspectRatio: CardAspectRatio,
+  sparsePageAlignment: CardLayoutOptions["sparsePageAlignment"] = "top",
+): CardLayoutPage[] {
   const totalPages = pages.length;
   const ids = getUniquePageIds(pages);
   return pages.map((page, index) => applyPageSkeleton({
@@ -772,7 +818,7 @@ function numberPages(pages: PageDraft[], aspectRatio: CardAspectRatio): CardLayo
     pageNumber: index + 1,
     totalPages,
     aspectRatio,
-  }));
+  }, sparsePageAlignment));
 }
 
 function inferPageKind(page: Pick<CardLayoutPage, "nodes">): CardLayoutPage["pageKind"] {
@@ -787,21 +833,28 @@ function inferPageKind(page: Pick<CardLayoutPage, "nodes">): CardLayoutPage["pag
   return "argument";
 }
 
-function applyPageSkeleton(page: CardLayoutPage): CardLayoutPage {
+function applyPageSkeleton(page: CardLayoutPage, sparsePageAlignment: CardLayoutOptions["sparsePageAlignment"]): CardLayoutPage {
   if (!page.pageKind || page.nodes.length === 0 || page.manual || page.locked) return page;
-  const top = Math.min(...page.nodes.map((node) => node.y));
-  const bottom = Math.max(...page.nodes.map((node) => node.y + node.height));
+  let top = Number.POSITIVE_INFINITY;
+  let bottom = Number.NEGATIVE_INFINITY;
+  for (const node of page.nodes) {
+    top = Math.min(top, node.y);
+    bottom = Math.max(bottom, node.y + node.height);
+  }
   const contentHeight = bottom - top;
   const available = page.safeArea.height - contentHeight;
   if (available <= 0) return page;
 
   const centered = page.pageKind === "cover" || page.pageKind === "summary" || page.pageKind === "ending" || page.pageKind === "conclusion" || page.pageKind === "epilogue";
   const lowered = page.pageKind === "turning" || page.pageKind === "transition" || page.pageKind === "quote" || page.pageKind === "keyMetric";
+  const sparse = contentHeight < page.safeArea.height * 0.62;
   const targetTop = centered
     ? page.safeArea.y + Math.round(available * (page.pageKind === "cover" ? 0.35 : 0.25))
     : lowered
       ? page.safeArea.y + Math.round(available * 0.46)
-      : top;
+      : sparse && sparsePageAlignment === "balanced"
+        ? page.safeArea.y + Math.round(available * 0.18)
+        : top;
   const delta = Math.max(0, targetTop - top);
   if (!delta) return page;
 

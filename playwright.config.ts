@@ -5,6 +5,7 @@ const baseURL = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  testIgnore: "**/style-studio.e2e.ts",
   timeout: 45_000,
   expect: {
     timeout: 8_000,

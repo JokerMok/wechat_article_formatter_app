@@ -34,4 +34,16 @@ ${"这是一段需要自动重排的正文内容，用于验证字号和间距�
 
     expect(result.fitScale).toBe(1);
   });
+
+  it("uses the default typography when no overrides are provided", () => {
+    const source = parseArticleContent(`# 标题
+
+${"默认配置也要在有限页面内持续推进文本，不能生成空节点。".repeat(80)}`, { mode: "knowledge" });
+    const result = layoutCardPagesToTarget(source, createApproximateTextMeasurer(), { aspectRatio: "3:4" }, 1);
+
+    expect(result.pages.length).toBeGreaterThan(1);
+    expect(result.pages.flatMap((page) => page.nodes).length).toBeLessThan(100);
+    expect(result.pages.flatMap((page) => page.nodes).every((node) => node.text.length > 0)).toBe(true);
+    expect(result.overflow).toEqual([]);
+  });
 });

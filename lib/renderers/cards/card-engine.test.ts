@@ -75,6 +75,31 @@ function measuringSpy(base: TextMeasurer) {
 }
 
 describe("card image layout engine", () => {
+  it("keeps ordinary Latin words intact when wrapping mixed-language titles", () => {
+    const result = layoutCardPages(
+      article([textBlock("title", "title", "非技术产品经理用 Codex 拆解算法包")]),
+      createApproximateTextMeasurer(),
+      { aspectRatio: "3:4", safeArea: { left: 260, right: 260 } },
+    );
+    const lines = result.pages.flatMap((page) => page.nodes).flatMap((node) => node.lines.map((line) => line.text));
+
+    expect(lines.some((line) => line === "Cod" || line === "ex")).toBe(false);
+    expect(lines.join("")).toContain("Codex");
+  });
+
+  it("splits an unavoidably long token without exceeding the text column", () => {
+    const result = layoutCardPages(
+      article([textBlock("body", "paragraph", "https://example.com/" + "segment".repeat(40))]),
+      createApproximateTextMeasurer(),
+      { aspectRatio: "3:4", safeArea: { left: 300, right: 300 } },
+    );
+
+    for (const node of result.pages.flatMap((page) => page.nodes)) {
+      expect(node.lines.every((line) => line.width <= node.width)).toBe(true);
+    }
+    expect(result.overflow).toEqual([]);
+  });
+
   it("keeps ordinary reading pages at the top without shrinking typography", () => {
     const blocks = [
       textBlock("xiaohongshu:page:conflict:3:block:title", "section", "第一次汇报后，方向变了"),
@@ -516,5 +541,74 @@ describe("card image layout engine", () => {
     expect(drawnText).toContain("正文必须进入 fillText，不能在 Canvas 阶段 break 截断。");
     expect(calls).not.toContain("clip");
     expect(calls).toContain("drawImage:2");
+  });
+
+  it("omits internal labels and swipe dots from customer-facing card images", () => {
+    const calls: string[] = [];
+    const textPositions: Array<{ text: string; x: number; y: number }> = [];
+    const ctx: CardImageCanvasContext = {
+      fillStyle: "",
+      font: "",
+      textBaseline: "top",
+      textAlign: "left",
+      globalAlpha: 1,
+      beginPath: () => calls.push("beginPath"),
+      moveTo: () => calls.push("moveTo"),
+      arcTo: () => calls.push("arcTo"),
+      closePath: () => calls.push("closePath"),
+      fill: () => calls.push("fill"),
+      fillRect: (...args) => calls.push(`fillRect:${args.join(",")}`),
+      fillText: (text, x, y) => {
+        calls.push(`fillText:${text}`);
+        textPositions.push({ text, x, y });
+      },
+      arc: () => calls.push("arc"),
+      save: () => calls.push("save"),
+      restore: () => calls.push("restore"),
+      translate: () => calls.push("translate"),
+      rotate: () => calls.push("rotate"),
+      drawImage: () => calls.push("drawImage"),
+      setLineDash: () => calls.push("setLineDash"),
+      strokeRect: () => calls.push("strokeRect"),
+      measureText: (text) => ({ width: text.length * 18 }) as TextMetrics,
+    };
+    const page: CardLayoutPage = {
+      id: "customer-cover",
+      pageKind: "cover",
+      pageNumber: 1,
+      totalPages: 3,
+      aspectRatio: "3:4",
+      canvas: { width: 1080, height: 1440 },
+      safeArea: { top: 120, right: 90, bottom: 120, left: 90, x: 90, y: 120, width: 900, height: 1200 },
+      nodes: [],
+      overflow: [],
+    };
+
+    drawCardImagePage(ctx, page, {
+      brandLabel: "臻一人工智能实验室",
+      platform: "xiaohongshu",
+      preset: { variant: "checklist" },
+    });
+
+    expect(calls).toContain("fillText:01");
+    expect(calls).toContain("fillText:臻一人工智能实验室");
+    expect(calls).not.toContain("fillText:AI");
+    expect(calls.some((call) => /封面观点|问题现场|行动清单|观点编辑部|数据编辑部|抖音图文/u.test(call))).toBe(false);
+    expect(calls).not.toContain("arc");
+    expect(calls.filter((call) => call.startsWith("fillRect:"))).toEqual(["fillRect:0,0,1080,1440"]);
+    expect(textPositions).toContainEqual({ text: "臻一人工智能实验室", x: 90, y: 44 });
+
+    calls.length = 0;
+    textPositions.length = 0;
+    drawCardImagePage(ctx, page, {
+      brandLabel: "臻一人工智能实验室",
+      platform: "douyinImage",
+      preset: { variant: "checklist" },
+    });
+
+    expect(calls).toContain("fillText:01 / 03");
+    expect(calls).not.toContain("fillText:抖音图文");
+    expect(calls).not.toContain("arc");
+    expect(textPositions).toContainEqual({ text: "臻一人工智能实验室", x: 90, y: 25 });
   });
 });

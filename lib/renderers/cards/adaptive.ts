@@ -1,5 +1,5 @@
 import type { UnifiedArticleContent } from "../../content";
-import { layoutCardPages } from "./layout";
+import { getCardTypography, layoutCardPages } from "./layout";
 import type { CardLayoutOptions, CardLayoutResult, TextMeasurer } from "./types";
 
 export type AdaptiveCardLayoutResult = CardLayoutResult & {
@@ -21,10 +21,10 @@ export function layoutCardPagesToTarget(
 
   let best = initial;
   let bestScale = 1;
+  const typography = getCardTypography(options);
   // Density may tighten slightly, but page count is allowed to grow. Text on a
   // 1080px social card must never be reduced to thumbnail-sized body copy.
   for (const scale of [0.96, 0.92, 0.88]) {
-    const typography = options.typography ?? {};
     const candidate = layoutCardPages(source, measurer, {
       ...options,
       typography: {

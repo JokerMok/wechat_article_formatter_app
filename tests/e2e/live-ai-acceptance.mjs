@@ -16,7 +16,7 @@ page.on("request", (request) => {
   if (request.method() === "POST" && /\/api\/ai\/(analyze|generate)$/.test(request.url())) requests.push(new URL(request.url()).pathname);
 });
 try {
-  await page.goto(baseUrl);
+  await page.goto(new URL("/multiplatform", baseUrl).href);
   await page.getByLabel("源文 Markdown").fill(productArticle);
   await page.getByRole("group", { name: "内容处理方式" }).getByRole("button", { name: "传播力优化" }).click();
   await page.getByRole("group", { name: "生成引擎" }).getByRole("button", { name: "服务端 AI", exact: true }).click();

@@ -63,6 +63,7 @@ export type CardManualPageSpec = {
 
 export type CardLayoutOptions = {
   aspectRatio?: CardAspectRatio;
+  sparsePageAlignment?: "top" | "balanced";
   safeArea?: Partial<CardInsets>;
   typography?: Partial<CardTypography>;
   imagePlacements?: Record<string, CardImagePlacement>;

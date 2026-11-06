@@ -1,3 +1,4 @@
+import { accountFetch } from "../accounts/browser";
 import {
   AIProviderError,
   OpenAICompatibleProvider,
@@ -22,7 +23,7 @@ export class HostedSemanticAnalyzer implements SemanticAnalyzer {
   private readonly fetchImpl: typeof fetch;
 
   constructor(fetchImpl?: typeof fetch) {
-    this.fetchImpl = fetchImpl ?? globalThis.fetch.bind(globalThis);
+    this.fetchImpl = fetchImpl ?? accountFetch;
   }
 
   async analyze(options: ProviderSemanticAnalyzeOptions): Promise<ProviderSemanticAnalyzeResult> {

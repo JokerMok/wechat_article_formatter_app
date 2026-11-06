@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "@/components/studio/studio.css";
 
 export const metadata: Metadata = {
-  title: "自媒体内容排版器",
-  description: "支持多模板切换、Markdown 导入、HTML 导出、图片占位识别，以及更强的文章结构分析。",
+  title: "风格排版 · 公众号文章工作台",
+  description: "学习参考风格、编辑公众号文章、制作封面并导出微信图文。",
 };
 
 export default function RootLayout({

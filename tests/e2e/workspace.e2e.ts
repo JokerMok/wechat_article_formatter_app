@@ -6,7 +6,7 @@ const onePixelPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAA
 const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 async function openWorkspace(page: Page) {
-  await page.goto("/");
+  await page.goto("/multiplatform");
   await expect(page.getByLabel("源文 Markdown")).toBeVisible();
   await expect(page.getByRole("button", { name: "生成当前平台" })).toBeEnabled();
 }

@@ -27,3 +27,9 @@ artifacts/product-readiness/
 *.njsproj
 *.sln
 *.sw?
+
+# Local studio acceptance evidence
+artifacts/style-studio/
+
+# Local account center acceptance evidence
+artifacts/account-center/

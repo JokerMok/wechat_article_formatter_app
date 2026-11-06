@@ -34,7 +34,7 @@ async function expectCardScreenshot(card: import("@playwright/test").Locator, sn
 }
 
 test("TEST-020 narrow workspace exposes source, editor and preview views without horizontal overflow", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/multiplatform");
   await expect(page.getByRole("button", { name: "源文", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "源文", exact: true }).click();

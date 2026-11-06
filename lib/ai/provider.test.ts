@@ -645,6 +645,13 @@ describe("OpenAICompatibleProvider", () => {
     expect(result).toMatchObject({ ok: false, error: { code: "schema", diagnostics: { details: expect.arrayContaining(["wechat:fact_check_rejected:unsupported_number_count:1"]) } } });
   });
 
+  it("rejects unsupported quantity inflation", () => {
+    const result = validateGeneratedFacts("看了几十份招聘 JD，多数公司都没有想清楚岗位目标。", source);
+
+    expect(result.unsupportedQuantifiers).toEqual(["几十份", "多数公司"]);
+    expect(result.ok).toBe(false);
+  });
+
   it("TEST-021 keeps unsupported quoted claims out of diagnostics", async () => {
     const unsupportedQuote = "内部客户密钥需要保密不能出现在诊断里";
     const assistantContent = JSON.parse(String(validFixture.choices[0].message.content)) as {

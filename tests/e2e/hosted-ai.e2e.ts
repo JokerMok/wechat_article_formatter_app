@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("hosted AI uses the real route and updates only the current platform", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/multiplatform");
   await expect(page.getByLabel("源文 Markdown")).toBeVisible();
   const xiaohongshuTitle = await page.getByRole("navigation", { name: "目标平台" }).getByRole("button", { name: /^小红书/ }).count();
   expect(xiaohongshuTitle).toBe(1);

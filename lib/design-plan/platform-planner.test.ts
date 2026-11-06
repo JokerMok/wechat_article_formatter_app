@@ -241,4 +241,115 @@ describe("platform design planner", () => {
     expect(texts).toContain("表达优化后的第一段。");
     expect(texts).toContain("表达优化后的第二段。");
   });
+
+  it("keeps overlapping editorial references on their intended Douyin pages", () => {
+    const article = parseArticleContent(`# 原文标题
+
+第一段说明岗位背景。
+
+第二段连接问题与结论。
+
+第三段给出最终做法。`, { mode: "knowledge" });
+    const base = analyzeArticleDesign(article, { generationMode: "reachOptimized" });
+    const paragraphIds = article.blocks.filter((block) => block.type === "paragraph").map((block) => block.id);
+    const editorialPlan: EditorialPlan = {
+      schemaVersion: 1,
+      platform: "douyinImage",
+      contentType: base.blueprint.primaryContentType,
+      title: "岗位先写交付",
+      sections: [
+        {
+          id: "first",
+          role: "claim",
+          heading: "先看岗位背景",
+          body: "第一张卡只解释岗位背景。",
+          sourceBlockIds: [paragraphIds[0]!, paragraphIds[1]!],
+        },
+        {
+          id: "second",
+          role: "conclusion",
+          heading: "再写交付结果",
+          body: "第二张卡单独给出最终做法。",
+          sourceBlockIds: [paragraphIds[1]!, paragraphIds[2]!],
+        },
+      ],
+    };
+    const plans = buildPlatformDesignPlans(article, base.blueprint, getDesignScheme("knowledgeMinimal"), {
+      themeId: "informationCard",
+      contentLayoutId: "checklist",
+      editorialPlans: { douyinImage: editorialPlan },
+    });
+    const bodyByPage = plans.douyinImage.pages.slice(1).map((page) => page.blocks.filter((block) => block.role !== "heading").map((block) => block.text));
+
+    expect(bodyByPage).toEqual([
+      ["第一张卡只解释岗位背景。"],
+      ["第二张卡单独给出最终做法。"],
+    ]);
+  });
+
+  it("combines adjacent sparse card sections without merging protected conclusions", () => {
+    const article = parseArticleContent(`# 原文标题
+
+第一段说明岗位现状。
+
+第二段说明交付目标。
+
+第三段说明项目卡点。
+
+第四段说明资料问题。
+
+第五段说明岗位边界。
+
+第六段说明招聘顺序。
+
+第七段说明检查问题。
+
+第八段给出最终结论。`, { mode: "knowledge" });
+    const base = analyzeArticleDesign(article, { generationMode: "reachOptimized" });
+    const paragraphIds = article.blocks.filter((block) => block.type === "paragraph").map((block) => block.id);
+    const sections = paragraphIds.map((id, index) => ({
+      id: `section-${index + 1}`,
+      role: index === paragraphIds.length - 1 ? "conclusion" as const : "claim" as const,
+      heading: `观点${index + 1}`,
+      body: `第${index + 1}段的简短说明。`,
+      sourceBlockIds: [id],
+    }));
+    const xiaohongshuSections = sections.map((section, index) => ({
+      ...section,
+      ...(index === 0 ? { bullets: ["问题一", "问题二", "问题三"] } : {}),
+      ...(index === 1 ? { bullets: ["原因一", "原因二"] } : {}),
+    }));
+    const plans = buildPlatformDesignPlans(article, base.blueprint, getDesignScheme("checklistGuide"), {
+      themeId: "informationCard",
+      contentLayoutId: "checklist",
+      editorialPlans: {
+        xiaohongshu: {
+          schemaVersion: 1,
+          platform: "xiaohongshu",
+          contentType: base.blueprint.primaryContentType,
+          title: "原文标题",
+          sections: xiaohongshuSections,
+        },
+        douyinImage: {
+          schemaVersion: 1,
+          platform: "douyinImage",
+          contentType: base.blueprint.primaryContentType,
+          title: "原文标题",
+          sections: sections.slice(0, 7),
+        },
+      },
+    });
+
+    expect(plans.xiaohongshu.pages).toHaveLength(6);
+    expect(plans.douyinImage.pages).toHaveLength(5);
+    expect(plans.xiaohongshu.pages.some((page) => {
+      const headings = page.blocks.filter((block) => block.role === "heading").map((block) => block.text);
+      return headings.includes("观点1") && headings.includes("观点2") && page.blocks.length === 9;
+    })).toBe(true);
+    expect(plans.xiaohongshu.pages.some((page) => page.blocks.filter((block) => block.role === "heading").length === 2)).toBe(true);
+    expect(plans.douyinImage.pages.some((page) => page.blocks.filter((block) => block.role === "heading").length === 2)).toBe(true);
+    expect(plans.douyinImage.pages.every((page) => page.blocks.filter((block) => block.role === "heading").length <= 2)).toBe(true);
+    expect(plans.xiaohongshu.pages.at(-1)?.kind).toBe("callToAction");
+    expect(plans.xiaohongshu.pages.at(-1)?.blocks).toHaveLength(2);
+  });
 });

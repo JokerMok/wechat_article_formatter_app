@@ -293,7 +293,7 @@ function createImageUrlByBlock(article: UnifiedArticleContent, assets: AssetPlac
   );
 }
 
-export default function UnifiedWorkspace() {
+export default function UnifiedWorkspace({ accountMode = false }: { accountMode?: boolean } = {}) {
   const [workspace, setWorkspace] = React.useState<WorkspacePersistedState>(() => createWorkspaceState());
   const [measurer, setMeasurer] = React.useState(createApproximateTextMeasurer);
   React.useEffect(() => {
@@ -807,7 +807,7 @@ export default function UnifiedWorkspace() {
     }
 
     const missingFields = getMissingAiProviderFields(workspace.ai, sessionApiKey);
-    if (!isAiProviderConfigured(workspace.ai, sessionApiKey)) {
+    if (!accountMode && !isAiProviderConfigured(workspace.ai, sessionApiKey)) {
       replaceWorkspace(markAiConfigurationIncomplete(workspaceRef.current, missingFields));
       setAiRunState("error");
       const message = `服务端 AI 尚未配置完整：请填写 ${missingFields.join("、") || "Base URL、模型、Session API Key"}，或切回本地模式后重新生成。`;
@@ -841,7 +841,7 @@ export default function UnifiedWorkspace() {
     setAiStatusMessage("正在生成平台版本");
     setStatusMessage("正在生成平台版本");
 
-    const provider = workspace.ai.mode === "hosted"
+    const provider = accountMode || workspace.ai.mode === "hosted"
       ? new HostedAIProvider()
       : new OpenAICompatibleProvider({
           baseUrl: workspace.ai.baseUrl.trim(),
@@ -984,7 +984,7 @@ export default function UnifiedWorkspace() {
     const key = semanticAnalysisCacheKey(localPlan.sourceRevision, localPlan.generationMode, settings.mode, settings.baseUrl, settings.model);
     const cached = semanticAnalysisCacheRef.current.get(key);
     if (cached) return { ...cached, cached: true };
-    const analyzer = settings.mode === "hosted"
+    const analyzer = accountMode || settings.mode === "hosted"
       ? new HostedSemanticAnalyzer()
       : new OpenAICompatibleSemanticAnalyzer({ baseUrl: settings.baseUrl.trim(), model: settings.model.trim(), apiKey: sessionApiKey.trim(), timeoutMs: 30000 });
     const result = await analyzer.analyze({ source: article, sourceVersionId: localPlan.sourceRevision, generationMode: localPlan.generationMode, signal });
@@ -1009,7 +1009,7 @@ export default function UnifiedWorkspace() {
     const current = workspaceRef.current;
     const pendingAtStart = current.parsedDrafts?.[analysisPlatform];
     const pendingSignatureAtStart = pendingAtStart ? createPlatformDraftSignature(pendingAtStart) : undefined;
-    if (current.ai.mode === "custom" && !isAiProviderConfigured(current.ai, sessionApiKey)) {
+    if (!accountMode && current.ai.mode === "custom" && !isAiProviderConfigured(current.ai, sessionApiKey)) {
       const missing = getMissingAiProviderFields(current.ai, sessionApiKey);
       const message = `AI 配置不完整：请填写 ${missing.join("、")}，或切换本地模式。当前编辑稿未改变。`;
       setAiRunState("error");
@@ -1556,7 +1556,8 @@ export default function UnifiedWorkspace() {
             onExportCard={(page) => void exportCardPng(page)}
             onCopyCard={(page) => void copyCardPng(page)}
             onExportPackage={() => void exportCardPackage()}
-            aiMode={workspace.ai.mode}
+            accountMode={accountMode}
+            aiMode={accountMode && workspace.ai.mode === "custom" ? "hosted" : workspace.ai.mode}
             generationMode={workspace.designPlan.generationMode}
             aiBaseUrl={workspace.ai.baseUrl}
             aiModel={workspace.ai.model}
@@ -1979,6 +1980,7 @@ function PreviewPanel(props: {
   onExportCard: (page: CardLayoutPage) => void;
   onCopyCard: (page: CardLayoutPage) => void;
   onExportPackage: () => void;
+  accountMode?: boolean;
   aiMode: "deterministic" | "hosted" | "custom";
   generationMode: GenerationMode;
   aiBaseUrl: string;
@@ -2031,10 +2033,10 @@ function PreviewPanel(props: {
         <div className="mt-1 grid grid-cols-3 gap-1 rounded-md bg-[#edf1ee] p-1" role="group" aria-label="生成引擎">
           <Toggle className="h-7 w-full px-1 text-[11px]" pressed={props.aiMode === "deterministic"} onPressedChange={() => props.onAiModeChange("deterministic")}>本地</Toggle>
           <Toggle className="h-7 w-full px-1 text-[11px]" pressed={props.aiMode === "hosted"} onPressedChange={() => props.onAiModeChange("hosted")}>服务端 AI</Toggle>
-          <Toggle className="h-7 w-full px-1 text-[11px]" pressed={props.aiMode === "custom"} onPressedChange={() => props.onAiModeChange("custom")}>自定义接口</Toggle>
+          {!props.accountMode && <Toggle className="h-7 w-full px-1 text-[11px]" pressed={props.aiMode === "custom"} onPressedChange={() => props.onAiModeChange("custom")}>自定义接口</Toggle>}
         </div>
 
-        {props.aiMode === "hosted" && <AIAccess />}
+        {!props.accountMode && props.aiMode === "hosted" && <AIAccess />}
         {(props.aiRunState === "generating" || props.aiRunState === "error") && (
           <div className={cn("mt-2 rounded-md border px-3 py-2 text-xs", props.aiRunState === "error" ? "border-red-200 bg-red-50 text-red-800" : "border-[#c8d8cf] bg-[#f1f7f3] text-[#28553d]")} role={props.aiRunState === "error" ? "alert" : "status"} aria-live="polite">
             <div className="flex items-start gap-2">
@@ -2054,7 +2056,7 @@ function PreviewPanel(props: {
           </div>
         )}
 
-        {props.aiMode === "custom" && (
+        {!props.accountMode && props.aiMode === "custom" && (
           <details className="mt-2 rounded-md border bg-[#fbfcfb] px-3 py-2 text-xs">
             <summary className="cursor-pointer font-medium">自定义接口设置</summary>
             <div className="mt-2 grid gap-2">

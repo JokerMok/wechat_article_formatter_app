@@ -72,7 +72,7 @@ function renderXiaohongshuPages(
   return pages.flatMap((page, pageIndex) => {
     const blocks = page.blocks.flatMap((block, blockIndex) => renderPlannedBlock(block, page, blockIndex, source, sourceBlocks, "xiaohongshu"));
     if (pageIndex === pages.length - 1) return blocks;
-    return [...blocks, createPageBreak(source, `${page.id}:break:${pages[pageIndex + 1]?.kind ?? "argument"}`)];
+    return [...blocks, createPageBreak(source, `${page.id}:editorial-boundary:${pages[pageIndex + 1]?.kind ?? "argument"}`)];
   });
 }
 
@@ -84,7 +84,7 @@ function renderDouyinImagePages(
   return pages.flatMap((page, pageIndex) => {
     const blocks = page.blocks.flatMap((block, blockIndex) => renderPlannedBlock(block, page, blockIndex, source, sourceBlocks, "douyinImage"));
     if (pageIndex === pages.length - 1) return blocks;
-    return [...blocks, createPageBreak(source, `${page.id}:break:${pages[pageIndex + 1]?.kind ?? "point"}`)];
+    return [...blocks, createPageBreak(source, `${page.id}:editorial-boundary:${pages[pageIndex + 1]?.kind ?? "point"}`)];
   });
 }
 
@@ -152,12 +152,13 @@ function createTextBlock(
 }
 
 function createListBlock(id: string, text: string, source: SourcePosition): UnifiedArticleBlock {
+  const displayText = `• ${text}`;
   return {
     id,
     type: "list",
-    items: [text],
-    text,
-    plainText: text,
+    items: [displayText],
+    text: displayText,
+    plainText: displayText,
     markdown: `- ${text}`,
     source,
   };

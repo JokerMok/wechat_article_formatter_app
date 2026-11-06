@@ -17,7 +17,7 @@ const opinionArticle = `# 企业 AI 先做什么
 应用暴露的问题，应当反过来推动数据、接口和权限建设。`;
 
 test("同时重新排版会切换当前平台内容骨架并保持其他平台不变", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/multiplatform");
   await expect(page.getByLabel("源文 Markdown")).toBeVisible();
   await page.getByLabel("源文 Markdown").fill(opinionArticle);
   await page.getByRole("button", { name: "分析源文", exact: true }).click();

@@ -219,6 +219,19 @@ export type GeneratePlatformVersionsResult =
       error: AIProviderErrorInfo;
     };
 
+export type ApplyEditorialPlansOptions = {
+  source: UnifiedArticleContent;
+  analyzedDesignPlan: DesignPlan;
+  editorialPlans: EditorialPlan[];
+  platforms: PlatformId[];
+  updatedAt?: string;
+};
+
+export type AppliedEditorialPlans = {
+  versions: PlatformVersionMap;
+  designPlan: DesignPlan;
+};
+
 export type OpenAICompatibleProviderConfig = {
   baseUrl: string;
   apiKey: string;
@@ -226,6 +239,8 @@ export type OpenAICompatibleProviderConfig = {
   timeoutMs?: number;
   chatCompletionsPath?: string;
   maxOutputTokens?: number;
+  tokenLimitField?: "max_tokens" | "max_completion_tokens";
+  temperature?: number | null;
   reasoningEffort?: "minimal" | "low" | "medium" | "high";
   fetchImpl?: typeof fetch;
 };
@@ -292,6 +307,8 @@ export class OpenAICompatibleProvider {
   private readonly endpoint: string;
   private readonly timeoutMs: number;
   private readonly maxOutputTokens?: number;
+  private readonly tokenLimitField: NonNullable<OpenAICompatibleProviderConfig["tokenLimitField"]>;
+  private readonly temperature?: number | null;
   private readonly reasoningEffort?: OpenAICompatibleProviderConfig["reasoningEffort"];
   private readonly fetchImpl: typeof fetch;
 
@@ -301,6 +318,8 @@ export class OpenAICompatibleProvider {
     this.endpoint = buildChatCompletionsUrl(config.baseUrl, config.chatCompletionsPath);
     this.timeoutMs = config.timeoutMs ?? 30000;
     this.maxOutputTokens = config.maxOutputTokens;
+    this.tokenLimitField = config.tokenLimitField ?? "max_tokens";
+    this.temperature = config.temperature;
     this.reasoningEffort = config.reasoningEffort;
     this.fetchImpl = config.fetchImpl ?? fetch;
   }
@@ -401,7 +420,7 @@ export class OpenAICompatibleProvider {
             throw this.schemaError(["Section identity or source reference is invalid."], responseDiagnostics);
           }
           if (!validateGeneratedFacts(editorialPlanText(plan), options.source).ok) {
-            throw this.schemaError(["Unsupported numeric or quoted claim."], responseDiagnostics);
+            throw this.schemaError(["Unsupported numeric, quantity, or quoted claim."], responseDiagnostics);
           }
           for (const section of plan.sections) {
             const referenced = options.source.blocks.filter((block) => section.sourceBlockIds.includes(block.id));
@@ -529,15 +548,15 @@ export class OpenAICompatibleProvider {
   private buildRequestBody(source: UnifiedArticleContent, platforms: PlatformId[], generationMode: GenerationMode, analysis?: GenerationAnalysis, validationFeedback?: string[]) {
     return {
       model: this.model,
-      temperature: 0.2,
-      ...(this.maxOutputTokens ? { max_tokens: this.maxOutputTokens } : {}),
+      ...(this.temperature === null ? {} : { temperature: this.temperature ?? 0.2 }),
+      ...(this.maxOutputTokens ? { [this.tokenLimitField]: this.maxOutputTokens } : {}),
       ...(this.reasoningEffort ? { reasoning_effort: this.reasoningEffort } : {}),
       response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
           content:
-            `Return only JSON matching this exact schema: ${JSON.stringify(z.toJSONSchema(generatedEditorialResponseSchema))}. Optional fields without content must be omitted, not null or empty strings. Use only the requested platforms and the enumerated contentType and role values. sourceBlockIds must refer to the supplied source blocks; each section must include every source block supporting its claims. Do not return designPlan, drafts, UnifiedArticleContent, HTML, CSS, JavaScript, or page geometry. ${generationInstruction(generationMode)} ${platformGenerationInstruction(platforms, source.sourceText.length)} Preserve source facts and important limitations; do not invent data, cases, people, policies, quotes, or outcomes. Keep numeric quantities and their units exactly as written in the source; do not turn authored lists into unsupported numeric claims. Quotation marks are only for verbatim source quotes.`,
+            `Return only JSON matching this exact schema: ${JSON.stringify(z.toJSONSchema(generatedEditorialResponseSchema))}. Optional fields without content must be omitted, not null or empty strings. Use only the requested platforms and the enumerated contentType and role values. sourceBlockIds must refer to the supplied source blocks; each section must include every source block supporting its claims. Do not return designPlan, drafts, UnifiedArticleContent, HTML, CSS, JavaScript, or page geometry. ${generationInstruction(generationMode)} ${platformGenerationInstruction(platforms, source.sourceText.length)} Preserve source facts and important limitations; do not invent data, cases, people, policies, quotes, or outcomes. Keep numeric and qualitative quantities exactly as written: never turn 几份 into 几十份, 很多 into 多数, or a scoped observation into a universal claim. Do not turn authored lists into unsupported numeric claims. Quotation marks are only for verbatim source quotes.`,
         },
         {
           role: "user",
@@ -555,9 +574,9 @@ export class OpenAICompatibleProvider {
   private buildSemanticRequestBody(options: ProviderSemanticAnalyzeOptions) {
     return {
       model: this.model,
-      temperature: 0.1,
+      ...(this.temperature === null ? {} : { temperature: this.temperature ?? 0.1 }),
       ...(this.reasoningEffort ? { reasoning_effort: this.reasoningEffort } : {}),
-      ...(this.maxOutputTokens ? { max_tokens: Math.min(this.maxOutputTokens, 6000) } : {}),
+      ...(this.maxOutputTokens ? { [this.tokenLimitField]: Math.min(this.maxOutputTokens, 6000) } : {}),
       response_format: { type: "json_object" },
       messages: [
         {
@@ -1046,9 +1065,9 @@ function platformGenerationInstruction(platforms: PlatformId[], sourceLength: nu
         ? "For WeChat, preserve the core reasoning but compress long source material to roughly 5000 Chinese characters; do not repeat the source unnecessarily."
         : "For WeChat, preserve the source article's complete reasoning and necessary body paragraphs without repeating the source unnecessarily.";
     case "xiaohongshu":
-      return "For Xiaohongshu, organize a concise, readable sequence with a strong hook, one key point per page, and a practical takeaway; target roughly 600-1200 Chinese characters.";
+      return "For Xiaohongshu, create 6-9 concise carousel sections after the cover. Use a tension-driven title, a specific opening hook, one key point per section, and a practical takeaway. Every section needs a concrete 4-12 Chinese-character heading and roughly 60-150 Chinese characters of body or bullets. Target roughly 700-1100 Chinese characters total; remove repetition without dropping necessary limitations.";
     case "douyinImage":
-      return "For Douyin image-text, organize 5-9 short card-ready sections with one clear point per section and roughly 40-90 Chinese characters per section.";
+      return "For Douyin image-text, create 5-8 fast-scanning sections after the cover. Use a direct tension-driven title, a short hook, one conclusion per section, a concrete 4-10 Chinese-character heading, and roughly 35-80 Chinese characters of body or bullets. End with a decisive takeaway, not a generic engagement request.";
     case "douyinLongform":
       return "For Douyin longform, rewrite as a compact narrative with a hook, progression, and conclusion; target roughly 800-1600 Chinese characters.";
   }
@@ -1131,9 +1150,15 @@ export async function generatePlatformVersions(options: GeneratePlatformVersions
     let designPlan: DesignPlan;
     let generatedContent: { versions: PlatformVersionMap; factCheckWarnings: string[] };
     if ("editorialPlans" in generated.response) {
-      const effectivePlans = generated.response.editorialPlans;
-      designPlan = designPlanWithEditorialPlans(options.source, fallbackDesignPlan, effectivePlans);
-      generatedContent = buildEditorialPlatformVersions(effectivePlans, platforms, options.source, designPlan, generationMode, now);
+      const applied = applyEditorialPlans({
+        source: options.source,
+        analyzedDesignPlan: fallbackDesignPlan,
+        editorialPlans: generated.response.editorialPlans,
+        platforms,
+        updatedAt: now,
+      });
+      designPlan = applied.designPlan;
+      generatedContent = { versions: applied.versions, factCheckWarnings: [] };
     } else {
       designPlan = generated.response.designPlan ?? fallbackDesignPlan;
       generatedContent = buildGeneratedPlatformVersions(generated.response.drafts, platforms, options.source, now);
@@ -1162,6 +1187,19 @@ export async function generatePlatformVersions(options: GeneratePlatformVersions
       error: normalizeAIError(error, options.provider.model, options.sourceVersionId),
     };
   }
+}
+
+export function applyEditorialPlans(options: ApplyEditorialPlansOptions): AppliedEditorialPlans {
+  const designPlan = designPlanWithEditorialPlans(options.source, options.analyzedDesignPlan, options.editorialPlans);
+  const generated = buildEditorialPlatformVersions(
+    options.editorialPlans,
+    options.platforms,
+    options.source,
+    designPlan,
+    "reachOptimized",
+    options.updatedAt ?? new Date().toISOString(),
+  );
+  return { versions: generated.versions, designPlan };
 }
 
 export function buildFallbackPlatformVersions(source: UnifiedArticleContent, platforms: PlatformId[], updatedAt: string): PlatformVersionMap {
@@ -1223,13 +1261,16 @@ export function buildPlatformChangeRecords(
 export function validateGeneratedFacts(generatedText: string, source: UnifiedArticleContent) {
   const sourceText = sourceSupportedText(source);
   const sourceNumbers = new Set(extractNumbers(sourceText));
+  const sourceQuantifiers = new Set(extractQuantifiedClaims(sourceText));
   const unsupportedNumbers = unique(extractNumbers(generatedText).filter((number) => !sourceNumbers.has(number)));
+  const unsupportedQuantifiers = unique(extractQuantifiedClaims(generatedText).filter((claim) => !sourceQuantifiers.has(claim)));
   const unsupportedQuotes = unique(extractQuotedClaims(generatedText).filter((quote) => !sourceText.includes(quote)));
 
   return {
     unsupportedNumbers,
+    unsupportedQuantifiers,
     unsupportedQuotes,
-    ok: unsupportedNumbers.length === 0 && unsupportedQuotes.length === 0,
+    ok: unsupportedNumbers.length === 0 && unsupportedQuantifiers.length === 0 && unsupportedQuotes.length === 0,
   };
 }
 
@@ -1269,6 +1310,7 @@ function buildGeneratedPlatformVersions(
           provider: "openai-compatible", model: "unknown", errorCode: "schema",
           details: [
             `${platform}:fact_check_rejected:unsupported_number_count:${factCheck.unsupportedNumbers.length}`,
+            `${platform}:fact_check_rejected:unsupported_quantity_count:${factCheck.unsupportedQuantifiers.length}`,
             `${platform}:fact_check_rejected:unsupported_quote_count:${factCheck.unsupportedQuotes.length}`,
           ],
         },
@@ -1292,6 +1334,21 @@ function buildGeneratedPlatformVersions(
 }
 
 function assertEditorialBodyReferences(plan: EditorialPlan, source: UnifiedArticleContent) {
+  const sourceIds = new Set(source.blocks.map((block) => block.id));
+  const invalidSourceBlockIds = unique(plan.sections.flatMap((section) => section.sourceBlockIds).filter((id) => !sourceIds.has(id)));
+  if (invalidSourceBlockIds.length) {
+    throw new AIProviderError({
+      code: "schema",
+      message: "优化稿引用了不存在的原文段落，已阻止生成。",
+      retryable: false,
+      diagnostics: {
+        provider: "openai-compatible",
+        model: "unknown",
+        errorCode: "schema",
+        details: invalidSourceBlockIds.map((id) => `invalid source block: ${id}`),
+      },
+    });
+  }
   const bodyIds = new Set(source.blocks.filter((block) => !["title", "section", "subsection", "divider", "pageBreak"].includes(block.type) && block.plainText.trim()).map((block) => block.id));
   if (bodyIds.size && !plan.sections.some((section) => section.sourceBlockIds.some((id) => bodyIds.has(id)))) {
     throw new AIProviderError({ code: "schema", message: "AI 未返回有效正文，已保留当前编辑稿。请重试。", retryable: true, diagnostics: { provider: "openai-compatible", model: "unknown", errorCode: "schema", details: ["No section references source body."] } });
@@ -1340,6 +1397,7 @@ function buildEditorialPlatformVersions(
           provider: "openai-compatible", model: "unknown", errorCode: "schema",
           details: [
             `${platform}:fact_check_rejected:unsupported_number_count:${factCheck.unsupportedNumbers.length}`,
+            `${platform}:fact_check_rejected:unsupported_quantity_count:${factCheck.unsupportedQuantifiers.length}`,
             `${platform}:fact_check_rejected:unsupported_quote_count:${factCheck.unsupportedQuotes.length}`,
           ],
         },
@@ -1381,13 +1439,19 @@ function designPlanWithEditorialPlans(
     douyinLongform: generatedByPlatform.get("douyinLongform") ?? buildLocalEditorialPlan(source, base.blueprint, "douyinLongform"),
   } satisfies Record<PlatformId, EditorialPlan>;
   const scheme = getDesignScheme(base.recommendedScheme);
+  const platformPlans = buildPlatformDesignPlans(source, base.blueprint, scheme, {
+    themeId: base.recommendedThemeId ?? scheme.themeId,
+    contentLayoutId: base.contentLayoutId ?? scheme.contentLayoutId,
+    editorialPlans,
+  });
   return {
     ...base,
-    platformPlans: buildPlatformDesignPlans(source, base.blueprint, scheme, {
-      themeId: base.recommendedThemeId ?? scheme.themeId,
-      contentLayoutId: base.contentLayoutId ?? scheme.contentLayoutId,
-      editorialPlans,
-    }),
+    pagination: {
+      ...base.pagination,
+      xiaohongshuTargetPages: platformPlans.xiaohongshu.pages.length,
+      douyinImageTargetPages: platformPlans.douyinImage.pages.length,
+    },
+    platformPlans,
   };
 }
 
@@ -1857,6 +1921,10 @@ function cloneUnifiedArticleContent(content: UnifiedArticleContent): UnifiedArti
 
 function extractNumbers(text: string) {
   return text.match(/\d+(?:[.,]\d+)*(?:\s*(?:%|％|万亿|亿元|万元|亿|万|元|倍|年|月|日|天|小时|分钟|秒|人|项|次|个))?/g)?.map((value) => value.replace(/\s/g, "").replace("％", "%")) ?? [];
+}
+
+function extractQuantifiedClaims(text: string) {
+  return text.match(/(?:几十|数十|上百|数百|上千|数千|成千上万)(?:份|个|家|次|条|类|人)?|(?:绝大多数|大多数|多数|所有|全部)(?:公司|企业|岗位|团队|项目|候选人|员工|客户)/gu) ?? [];
 }
 
 function extractQuotedClaims(text: string) {
