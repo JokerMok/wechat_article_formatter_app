@@ -10,7 +10,7 @@ formatter.shizibandu.icu {
 
 	@dynamicPages {
 		method GET HEAD
-		path / /multiplatform
+		path /
 		file /.formatter-dynamic
 	}
 	handle @dynamicPages {
@@ -35,6 +35,24 @@ formatter.shizibandu.icu {
 	handle @dynamicAI {
 		request_body {
 			max_size 6MB
+		}
+		reverse_proxy 127.0.0.1:18877 {
+			header_up -RSC
+			header_up -Next-Action
+			header_up -Next-Resume
+			header_up -X-Middleware-Subrequest
+			header_up -X-Middleware-Set-Cookie
+		}
+	}
+
+	@account {
+		method GET POST
+		path /api/account/status /api/account/login /api/account/switch /api/account/logout /api/account/logout-all /api/account/entry /auth/callback/wechat-article-formatter
+		file /.formatter-dynamic
+	}
+	handle @account {
+		request_body {
+			max_size 8KB
 		}
 		reverse_proxy 127.0.0.1:18877 {
 			header_up -RSC

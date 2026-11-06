@@ -1,11 +1,14 @@
 """Package the public assets and the loopback Next server."""
+import gzip
 import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tarfile
+import tempfile
 
 work, output = map(Path, sys.argv[1:3])
 sha = sys.argv[3]
@@ -48,6 +51,28 @@ else:
     release.mkdir()
     with tarfile.open(release / "runtime.tar.gz", "w:gz", compresslevel=6) as tar:
         tar.add(runtime, arcname=".")
+    delta_base = os.environ.get("FORMATTER_DELTA_BASE")
+    if delta_base:
+        base_sha = os.environ["FORMATTER_DELTA_BASE_SHA"]
+        if len(base_sha) != 40 or any(char not in "0123456789abcdef" for char in base_sha):
+            raise ValueError("Invalid runtime base commit")
+        base = Path(delta_base)
+        current = release / "runtime.tar.gz"
+        with tempfile.TemporaryDirectory(prefix="formatter-delta.") as directory:
+            old_tar, new_tar = (Path(directory) / name for name in ("old.tar", "new.tar"))
+            for archive, raw in ((base, old_tar), (current, new_tar)):
+                with gzip.open(archive, "rb") as src, raw.open("wb") as dst:
+                    shutil.copyfileobj(src, dst)
+            subprocess.run([
+                "zstd", "-q", "-8", "--long=27", f"--patch-from={old_tar}",
+                str(new_tar), "-o", str(release / "runtime.patch.zst"),
+            ], check=True)
+            (release / "runtime-base.json").write_text(json.dumps({
+                "release": base_sha,
+                "archiveSha256": hashlib.sha256(base.read_bytes()).hexdigest(),
+                "tarSha256": hashlib.sha256(new_tar.read_bytes()).hexdigest(),
+            }) + "\n")
+        current.unlink()
     web = release / "web"
     web.mkdir()
     (web / ".formatter-dynamic").write_text("loopback frontend and authenticated AI\n")

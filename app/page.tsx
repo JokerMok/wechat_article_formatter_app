@@ -1,8 +1,20 @@
 import Studio from "@/components/studio/studio";
 import { AccountStudio } from "@/components/accounts/workspaces";
+import { readServerAIConfig } from "@/lib/ai/server/config";
 import { accountEnabled, legacyWorkspaceURL } from "@/lib/accounts/config";
 
 export const dynamic = "force-dynamic";
 export default function Home() {
-  return accountEnabled() ? <AccountStudio legacy={legacyWorkspaceURL()} /> : <Studio />;
+  if (accountEnabled()) return <AccountStudio legacy={legacyWorkspaceURL()} />;
+  let cloudConfigured = false;
+  try {
+    readServerAIConfig();
+    cloudConfigured = true;
+  } catch {
+    // The workspace can still apply rules and capture HTML without a model.
+  }
+  return <Studio connectionStatus={{
+    cloudConfigured,
+    layoutOff: process.env.AI_LAYOUT_PROVIDER?.trim() === "off",
+  }} />;
 }

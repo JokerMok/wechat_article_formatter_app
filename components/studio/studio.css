@@ -160,8 +160,8 @@
 .studio-save-state.error {
   color: #f2bbb4;
 }
-.studio-legacy-link {
-  display: flex;
+.studio-account-status {
+  display: inline-flex;
   gap: 5px;
   align-items: center;
   font-size: 11px;
@@ -1724,9 +1724,6 @@
   .studio-header nav button {
     padding: 0 10px;
   }
-  .studio-legacy-link {
-    display: none;
-  }
   .studio-editor-grid {
     --sidebar-width: 190px;
     --inspector-width: 258px;
@@ -2514,5 +2511,5 @@
 .formatter-account-actions button{display:block;width:100%;text-align:left;padding:6px;border-radius:5px}
 .formatter-account-actions button:hover{background:#eef4ef}
 .formatter-logout-confirm{display:flex}
-.formatter-account-feedback,.formatter-multi-account{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 12px;background:#f1f6f2;color:#23382c;font-size:13px}
+.formatter-account-feedback{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 12px;background:#f1f6f2;color:#23382c;font-size:13px}
 @media(max-width:520px){.formatter-account-menu summary span{max-width:58px}}

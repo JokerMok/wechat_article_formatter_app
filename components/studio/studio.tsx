@@ -19,6 +19,7 @@ import {
   Redo2,
   Search,
   Settings2,
+  UserRound,
   Smartphone,
   Sparkles,
   Undo2,
@@ -95,7 +96,13 @@ type Management =
   | { kind: "deleteStyle"; profile: StyleProfile; used: number }
   | { kind: "style"; mode: StyleAssetMode; profile: StyleProfile };
 type View = "home" | "editor" | "library" | "learn" | "cover";
-export default function Studio({ accountMenu }: { accountMenu?: ReactNode } = {}) {
+export default function Studio({
+  accountMenu,
+  connectionStatus,
+}: {
+  accountMenu?: ReactNode;
+  connectionStatus?: { layoutOff: boolean; cloudConfigured: boolean };
+} = {}) {
   const s = useStudio();
   const smartLayout = useArticleLayout(s.update);
   const [showLayout, setShowLayout] = useState(false);
@@ -143,7 +150,7 @@ export default function Studio({ accountMenu }: { accountMenu?: ReactNode } = {}
     [sideTab, setSideTab] = useState<"styles" | "outline">("outline"),
     [scope, setScope] = useState<"global" | "block">("global");
   const [dialog, setDialog] = useState<
-    "import" | "export" | "history" | "settings" | null
+    "import" | "export" | "history" | "settings" | "account" | null
   >(null);
   const [importFormat, setImportFormat] = useState<
       "text" | "markdown" | "html"
@@ -714,10 +721,16 @@ export default function Studio({ accountMenu }: { accountMenu?: ReactNode } = {}
           >
             <Settings2 size={18} />
           </button>}
-          <a href="/multiplatform" className="studio-legacy-link">
-            多平台工作区
-            <ArrowRight size={14} />
-          </a>
+          {!accountMenu && (
+            <button
+              type="button"
+              className="studio-account-status"
+              onClick={() => setDialog("account")}
+            >
+              <UserRound size={15} aria-hidden="true" />
+              账号未开通
+            </button>
+          )}
         </div>
       </header>
       {(s.error || s.message) && (
@@ -1721,16 +1734,20 @@ export default function Studio({ accountMenu }: { accountMenu?: ReactNode } = {}
           onUse={(id) => s.update((a) => ({ ...a, coverId: id }))}
         />
       )}
+      {dialog === "account" && (
+        <StudioDialog title="统一账号" onClose={() => setDialog(null)}>
+          <p className="studio-note">本站的统一账号登录尚未开通。当前稿件保存在此浏览器。</p>
+        </StudioDialog>
+      )}
       {dialog === "settings" && (
         <StudioDialog title="服务端连接" onClose={() => setDialog(null)}>
           <AIAccess />
-          <a className="studio-text-btn" href="/multiplatform">
-            打开多平台工作区
-            <ArrowRight size={14} />
-          </a>
-          <p className="studio-note">
-            截图分析使用服务端配置的视觉模型。模型密钥由服务端管理；本地排版、风格切换和封面文字排版不调用模型。
-          </p>
+          {connectionStatus && (
+            <div className="studio-note">
+              {connectionStatus.layoutOff && <p>智能排版当前使用规则。</p>}
+              <p>{connectionStatus.cloudConfigured ? "云端模型已配置。" : "此站点尚未配置云端模型，截图分析不可用。"}</p>
+            </div>
+          )}
         </StudioDialog>
       )}
       {dialog === "import" && (

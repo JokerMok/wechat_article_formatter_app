@@ -4,6 +4,6 @@ import { pathToFileURL } from "node:url";
 
 const release = process.env.FORMATTER_RELEASE_DIR || "/srv/apps/formatter/current";
 const directory = process.env.RUNTIME_DIRECTORY || "/run/formatter";
-const app = existsSync(join(release, "runtime.tar.gz")) ? join(directory, "app") : release;
+const app = existsSync(join(release, "web", ".formatter-dynamic")) ? join(directory, "app") : release;
 process.chdir(app);
 await import(pathToFileURL(join(app, "server.js")).href);

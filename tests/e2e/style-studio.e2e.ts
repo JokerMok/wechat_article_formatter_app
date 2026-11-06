@@ -693,17 +693,12 @@ test("screenshot fallback keeps reference and parameters when vision is unavaila
     page.getByRole("button", { name: "预览风格 截图手调风格", exact: true }),
   ).toBeVisible();
 });
-test("existing multi-platform workspace remains reachable", async ({
-  page,
-}) => {
-  await page.goto("/multiplatform");
-  await expect(
-    page.getByRole("heading", { name: "自媒体内容排版器", exact: true }),
-  ).toBeVisible();
-  await expect(page.getByLabel("源文 Markdown", { exact: true })).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "生成当前平台", exact: true }),
-  ).toBeEnabled();
+test("the workbench omits the retired multi-platform entry", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("link", { name: /多平台工作区/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "账号未开通", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "统一账号" })).toContainText("尚未开通");
+  expect((await page.goto("/multiplatform"))?.status()).toBe(404);
 });
 
 test("responsive panels prioritize the canvas and keep keyboard focus inside tools", async ({
