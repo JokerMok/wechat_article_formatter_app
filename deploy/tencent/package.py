@@ -14,6 +14,12 @@ release = build / "standalone"
 assert (release / "server.js").is_file(), "Build a Next standalone runtime first"
 assert not (work / "middleware.ts").exists() and not (work / "proxy.ts").exists(), "Review public routing for authenticated builds"
 
+# Playwright resolves its browser metadata dynamically, outside the Next trace.
+for package in ("playwright", "playwright-core"):
+    source = work / "node_modules" / package
+    if source.is_dir():
+        shutil.copytree(source, release / "node_modules" / package, dirs_exist_ok=True)
+
 # Only the private server uses Next. Image optimization is unnecessary for this release.
 image_native = release / "node_modules/@img"
 if image_native.is_dir():
