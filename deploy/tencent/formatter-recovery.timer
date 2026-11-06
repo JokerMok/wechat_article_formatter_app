@@ -1,0 +1,10 @@
+[Unit]
+Description=Reconcile incomplete formatter entitlement jobs
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+Unit=formatter-recovery.service
+
+[Install]
+WantedBy=timers.target

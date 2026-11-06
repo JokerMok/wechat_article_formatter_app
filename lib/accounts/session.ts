@@ -91,9 +91,15 @@ export async function startLogin() {
 
 export async function completeLogin(request: Request) {
   const c = accountConfig();
-  const incoming = new URL(request.url);
-  if (incoming.origin !== c.redirect.origin || incoming.pathname !== c.redirect.pathname)
+  const internal = new URL(request.url);
+  // Next standalone constructs request.url with its loopback listener.
+  // The edge proxy preserves Host and sets X-Forwarded-Proto from the actual connection.
+  const protocol = request.headers.get("x-forwarded-proto") ?? internal.protocol.slice(0, -1);
+  if (request.headers.get("host") !== c.redirect.host || `${protocol}:` !== c.redirect.protocol ||
+      internal.pathname !== c.redirect.pathname)
     throw invalidLogin();
+  const incoming = new URL(c.redirect);
+  incoming.search = internal.search;
   const state = incoming.searchParams.get("state") ?? "";
   if (!/^[a-zA-Z0-9_-]{43}$/.test(state) || incoming.searchParams.getAll("state").length !== 1)
     throw invalidLogin();

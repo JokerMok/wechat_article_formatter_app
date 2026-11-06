@@ -1,0 +1,15 @@
+[Unit]
+Description=Recover formatter entitlement jobs
+After=formatter.service
+ConditionPathExists=/srv/apps/formatter/shared/config/runtime.env
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+EnvironmentFile=/srv/apps/formatter/shared/config/runtime.env
+ExecStart=/usr/bin/python3 /srv/apps/formatter/runtime/recover-jobs.py
+TimeoutStartSec=70
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
