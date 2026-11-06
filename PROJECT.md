@@ -4,23 +4,25 @@
 
 | 项目 | 实际部署 |
 | --- | --- |
-| 正式运行版本 | `9265415259d9954eed8befab27c2f41d69e75e4c` |
-| 发布包 SHA-256 | `847b43031c94c2e560f26228ed43cbec1f4e62e7d5a603d67bf4f3545572f232` |
-| 上一版 | `974f2b02d123ad1ba3b605828cc859d3097df969`，同时是当前差分运行包的基础版本 |
+| 正式运行版本 | `d7caaef183dfb7396d70135414d1a48470823fc3` |
+| 发布包 SHA-256 | `a610cedf91222883aa0b8d570661497b39b129c85c75327d28bbc87e739c4855` |
+| 上一版 | `9265415259d9954eed8befab27c2f41d69e75e4c`，两个差分包均依赖 `974f2b02d123ad1ba3b605828cc859d3097df969` |
 | 服务器 | `ssh tencent-main`，`/srv/apps/formatter` |
 | 后端 | systemd `formatter.service`，`127.0.0.1:18877`，开机自启 |
 | 入口 | Caddy 提供哈希静态资源，风格工作台、受控 API 和账号回调走同源回环反代 |
 | 运行时 | Node.js 24.22.0、Next.js 16.4.5、Chromium 153.0.8010.0 |
-| 运行包 | 差分运行包以 `previous/runtime.tar.gz` 为基础并校验摘要；Chromium 压缩包保存在 `runtime/chromium-153.0.0.br`，启动时解包至 `/run/formatter` |
+| 运行包 | 差分运行包使用 `runtime-base.json` 指定的基础版本并校验摘要；Chromium 压缩包在 `runtime/chromium-153.0.0.br`，启动时解包至 `/run/formatter` |
 | 私有配置 | `shared/config/runtime.env`，root 0600 |
-| 备份 | `server-config-backup.timer` 自动纳入维护记录、配置和发布指针，前版配置见 `shared/backups/before-974f2b02d123ad1ba3b605828cc859d3097df969` |
+| 产品账号库 | PostgreSQL `formatter_accounts`，专用角色 `formatter_account`，只经 `127.0.0.1:5342`。复用同一 PostgreSQL 实例，角色无中心两库连接权限 |
+| 恢复任务 | `formatter-recovery.timer` 每两分钟核对本产品待恢复任务，调用仅回环可达 |
+| 备份 | `server-config-backup.timer` 纳入配置、指针及 `40-formatter-accounts.sh` 一致性备份钩子。接入前快照在 Mac 运维目录 `files/formatter/account-prechange-20261106-172101/` |
 
-公网只提供风格排版，旧 `/multiplatform` 返回 404。浏览器稿件未执行删除或迁移。生产账号中心还没有本产品登记，环境未启用账号模式。站点显示真实的账号开通状态，后续回调固定为 `https://formatter.shizibandu.icu/auth/callback/wechat-article-formatter`。正式开通需要共享账号中心变更授权和独立产品数据库。
+公网只提供风格排版，旧 `/multiplatform` 返回 404。正式 Casdoor、业务产品与私密鉴权已登记。实际回调为 `https://formatter.shizibandu.icu/auth/callback/wechat-article-formatter`。浏览器旧稿未删除、迁移或关联。旧版入口仍指向原 Vercel 域名。此前在正式域名创建的匿名草稿留在原浏览器存储中。接入说明见 [账号中心接入](docs/ACCOUNT_CENTER_INTEGRATION.md)。
 
-原模型密钥在 Mac 实测可成功返回补全。腾讯云直接访问同一个 Vercel 中转超时，线上环境未放入模型密钥，智能排版使用规则。服务端访问口令与模型密钥分开，网页采集仍可通过访问口令使用。公网浏览器已验证旧入口下线、账号与模型提示、整篇粘贴；生产构建和 HTTPS 通过。
+腾讯云直连已配置的 Vercel 模型中转仍超时。正式应用曾通过临时验收通道完成一次真实模型调用、扣次及交付，现已移除该通道与临时凭据。日常使用规则排版。账号登录、基础网页采集、会员和兑换走各自的正式服务。验收范围见 [账号中心验收](docs/ACCOUNT_CENTER_ACCEPTANCE.md)。
 
-磁盘可用空间只略高于共享备份的 2 GiB 门槛。已将最早的 `4b28751d9e935e365dab5be72009e2ab785a2198` 完整发布归档到 Mac 的 `~/server-ops/tencent-main/files/formatter/releases/`，归档与逐文件清单均通过校验。保留服务器上的上一版完整运行包，当前差分依赖它。
+磁盘可用空间接近共享备份的 2 GiB 门槛。本次回收可重建的固件及软件目录缓存，保留共享备份。早期版本 `4b28751d9e935e365dab5be72009e2ab785a2198` 的完整发布归档在 Mac 的 `~/server-ops/tencent-main/files/formatter/releases/`。保留当前和上一版所需的差分基础包。
 
-从 GitHub 维护分支更新时运行 `bash deploy/tencent/update.sh codex/product-readiness`。也可指定本地发布提交 `bash deploy/tencent/update.sh local:<提交SHA>`。独立构建需要保留当前部署工具和匹配的 Chromium 运行时。
+从 GitHub 维护分支更新时运行 `bash deploy/tencent/update.sh codex/product-readiness`，也可传入 `local:<提交SHA>`。需要差分构建时先从服务器取基础包，并将其路径和版本分别传入 `FORMATTER_DELTA_BASE`、`FORMATTER_DELTA_BASE_SHA`。基础版本 `974f2b02d123ad1ba3b605828cc859d3097df969` 的包位于 `/srv/apps/formatter/releases/974f2b02d123ad1ba3b605828cc859d3097df969/runtime.tar.gz`。独立构建需要保留当前部署工具和匹配的 Chromium 运行时。
 
-回退时执行 `ssh tencent-main 'sudo /srv/apps/formatter/shared/config/manage.sh rollback'`。回退仅切换应用。前版 Caddy 和启动脚本保存在本次项目备份目录。代码切换不处理浏览器数据。
+普通回退用 `ssh tencent-main 'sudo /srv/apps/formatter/shared/config/manage.sh rollback'`。当前上一版的正式回调在反代后不可用，回退到它前先按 [账号回退步骤](docs/ACCOUNT_CENTER_INTEGRATION.md#正式环境回退) 暂停账号模式。回退保留账号库、加密稿件和旧浏览器数据。
