@@ -33,3 +33,6 @@ artifacts/style-studio/
 
 # Local account center acceptance evidence
 artifacts/account-center/
+
+# Local Codex project state
+.codex/PROJECT_STATE.md
