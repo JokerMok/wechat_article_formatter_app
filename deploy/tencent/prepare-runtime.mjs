@@ -12,7 +12,7 @@ const directory = process.env.RUNTIME_DIRECTORY || "/run/formatter";
 if (existsSync(join(release, "runtime.tar.gz"))) {
   const app = join(directory, "app");
   await mkdir(app, { mode: 0o700 });
-  execFileSync("/usr/bin/tar", ["--no-same-owner", "-xzf", join(release, "runtime.tar.gz"), "-C", app]);
+  execFileSync("/usr/bin/python3", ["-m", "tarfile", "-e", join(release, "runtime.tar.gz"), app], { stdio: "inherit" });
   const destination = join(directory, "chromium");
   const temporary = destination + ".pending";
   try {
