@@ -2,7 +2,7 @@ import { ServerAIError } from "./errors";
 
 const BODY_TIMEOUT_MS = 5_000;
 
-export async function readBoundedBody(request: Request, maxBytes: number): Promise<string> {
+export async function readBoundedBody(request: Request, maxBytes: number, timeoutMs = BODY_TIMEOUT_MS): Promise<string> {
   const cancelled = () => new ServerAIError("AI_ABORTED", "请求已取消。", false);
   const tooLarge = () => new ServerAIError("AI_INVALID_REQUEST", "请求内容过大，请拆分后重试。", false, 413);
   const contentLength = Number(request.headers.get("content-length"));
@@ -14,7 +14,7 @@ export async function readBoundedBody(request: Request, maxBytes: number): Promi
   }
 
   const reader = request.body.getReader();
-  const expiresAt = Date.now() + BODY_TIMEOUT_MS;
+  const expiresAt = Date.now() + timeoutMs;
   let failure: ServerAIError | undefined;
   let cancellationStarted = false;
   const cancelReader = (reason: unknown) => {
@@ -40,7 +40,7 @@ export async function readBoundedBody(request: Request, maxBytes: number): Promi
     if (Date.now() >= expiresAt) timeout();
     if (failure) throw failure;
   };
-  const timeoutId = setTimeout(timeout, BODY_TIMEOUT_MS);
+  const timeoutId = setTimeout(timeout, timeoutMs);
   request.signal.addEventListener("abort", cancel, { once: true });
 
   const read = async () => {

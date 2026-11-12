@@ -62,7 +62,6 @@ export function DraftList({
   trash,
   setTrash,
   onOpen,
-  onNew,
   onRename,
   onCopy,
   onDelete,
@@ -74,7 +73,6 @@ export function DraftList({
   trash: boolean;
   setTrash: (trash: boolean) => void;
   onOpen: (id: string) => void;
-  onNew: () => void;
   onRename: (article: ArticleDocument) => void;
   onCopy: (id: string) => void;
   onDelete: (ids: string[]) => void;
@@ -187,13 +185,8 @@ export function DraftList({
         </>
       ) : (
         <div className="studio-home-empty">
-          <BookOpen size={30} />
+          <BookOpen size={30} aria-hidden="true" />
           <h3>{trash ? "回收站为空" : "还没有稿件"}</h3>
-          {!trash && (
-            <button className="studio-btn" onClick={onNew}>
-              导入我的文章
-            </button>
-          )}
         </div>
       )}
     </section>

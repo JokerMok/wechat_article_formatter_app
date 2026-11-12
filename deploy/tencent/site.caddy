@@ -29,7 +29,7 @@ formatter.shizibandu.icu {
 
 	@dynamicAI {
 		method GET POST
-		path /api/ai/session /api/ai/analyze /api/ai/generate /api/ai/article-layout /api/ai/style-capture /api/ai/style-vision
+		path /api/ai/session /api/ai/analyze /api/ai/generate /api/ai/article-layout /api/ai/style-capture /api/ai/style-vision /api/ai/cover-prompt /api/ai/cover-image
 		file /.formatter-dynamic
 	}
 	handle @dynamicAI {
@@ -47,7 +47,7 @@ formatter.shizibandu.icu {
 
 	@account {
 		method GET POST
-		path /api/account/status /api/account/login /api/account/switch /api/account/logout /api/account/logout-all /api/account/entry /auth/callback/wechat-article-formatter
+		path /api/account/status /api/account/login /api/account/register /api/account/reset /api/account/switch /api/account/logout /api/account/logout-all /api/account/entry /auth/callback/wechat-article-formatter
 		file /.formatter-dynamic
 	}
 	handle @account {

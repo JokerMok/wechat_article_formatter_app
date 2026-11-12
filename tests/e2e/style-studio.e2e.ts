@@ -656,6 +656,63 @@ test("three editable covers, independent cover style and downloadable original P
   ).toHaveValue("64");
 });
 
+test("AI cover waits for edited prompt approval and preserves the artwork pixels", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route("**/api/ai/cover-prompt", (route) =>
+    route.fulfill({ json: { data: { prompt: "绘制标题「阅读新发现」，用靛蓝与金色构图。" } } }),
+  );
+  const imageRequests: unknown[] = [];
+  await page.route("**/api/ai/cover-image", (route) => {
+    imageRequests.push(route.request().postDataJSON());
+    if (imageRequests.length === 1)
+      return route.fulfill({ status: 502, json: { error: "图片暂未生成，请重试。" } });
+    return route.fulfill({
+      contentType: "image/png",
+      body: Buffer.from(ownPng, "base64"),
+    });
+  });
+  await page.goto("/");
+  await importSource(page);
+  await page.getByRole("button", { name: "封面", exact: true }).click();
+  await page.getByRole("button", { name: "内容与参考", exact: true }).click();
+  const sourcePanel = page.getByRole("dialog", { name: "内容与参考" });
+  const start = sourcePanel.getByRole("button", { name: "生成封面提示词" });
+  const review = page.getByRole("dialog", { name: "确认封面提示词" });
+  await start.click();
+  await expect(review).toBeVisible();
+  await review.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(review).not.toBeVisible();
+  await expect(sourcePanel).toBeVisible();
+  expect(imageRequests).toHaveLength(0);
+  await start.click();
+  const prompt = review.getByRole("textbox", { name: "封面提示词" });
+  await expect(prompt).toHaveValue("绘制标题「阅读新发现」，用靛蓝与金色构图。");
+  const edited = "绘制标题「读书手记」，用深蓝与暖橙构图。";
+  await prompt.fill(edited);
+  expect(imageRequests).toHaveLength(0);
+  const confirm = review.getByRole("button", { name: "确认并生成图片" });
+  await confirm.click();
+  await expect(review.getByRole("alert")).toHaveText("图片暂未生成，请重试。");
+  await expect(prompt).toHaveValue(edited);
+  await confirm.click();
+  await expect(page.getByRole("heading", { name: "AI 完整封面" })).toBeVisible();
+  expect(imageRequests).toEqual(Array(2).fill({ prompt: edited, width: 900, height: 383, confirmed: true }));
+  const canvas = page.locator('canvas[aria-label="AI 完整封面"]');
+  await expect(canvas).toHaveAttribute("width", "900");
+  const sourceImage = `data:image/png;base64,${ownPng}`;
+  expect(await canvas.evaluate(async (element, src) => {
+    const target = element as HTMLCanvasElement;
+    const image = new Image();
+    image.src = src;
+    await image.decode();
+    const expected = document.createElement("canvas");
+    expected.width = target.width;
+    expected.height = target.height;
+    expected.getContext("2d")!.drawImage(image, 0, 0, expected.width, expected.height);
+    return target.toDataURL() === expected.toDataURL();
+  }, sourceImage)).toBe(true);
+});
+
 test("screenshot fallback keeps reference and parameters when vision is unavailable", async ({
   page,
 }) => {

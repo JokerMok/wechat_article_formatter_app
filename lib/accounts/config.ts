@@ -30,11 +30,6 @@ export function accountConfig() {
       !/^[a-z][a-z0-9-]{1,100}$/.test(application) ||
       redirect.pathname !== `/auth/callback/${product}`
     ) throw unavailable();
-    if (process.env.NODE_ENV === "production" && redirect.protocol === "https:") {
-      const legacy = new URL(required("ACCOUNT_LEGACY_URL"));
-      if (legacy.protocol !== "https:" || legacy.origin === redirect.origin ||
-          legacy.username || legacy.password || legacy.search || legacy.hash) throw unavailable();
-    }
     const serviceKey = required("PRODUCT_SERVICE_KEY");
     if (serviceKey.length < 32) throw unavailable();
     return {
@@ -49,15 +44,4 @@ export function accountConfig() {
 
 export function accountError(error: unknown) {
   return error instanceof AccountError ? error : unavailable();
-}
-
-export function legacyWorkspaceURL() {
-  try {
-    const url = new URL(process.env.ACCOUNT_LEGACY_URL || "");
-    const current = accountConfig().redirect;
-    if (url.origin !== current.origin && !url.username && !url.password && !url.search && !url.hash &&
-        (url.protocol === "https:" || (current.protocol === "http:" && url.protocol === "http:" &&
-          ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))) return url.href;
-  } catch { /* optional, independently operated legacy entry */ }
-  return undefined;
 }

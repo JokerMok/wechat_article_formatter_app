@@ -212,7 +212,7 @@ export function StyleLearning({
         open={!compact || panel === "source"}
         onClose={() => setPanel(null)}
       >
-        {!compact && <h2>学习新风格</h2>}
+        {!compact && <h3>参考来源</h3>}
         <div className="studio-segment source-types">
           {(
             [

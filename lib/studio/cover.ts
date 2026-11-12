@@ -41,6 +41,11 @@ export function newCover(
     updatedAt: new Date().toISOString(),
   };
 }
+
+export function activeCoverArtwork(cover: CoverDocument) {
+  return cover.renderMode === "manual" ? undefined : cover.aiArtwork;
+}
+
 function wrapText(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -59,17 +64,48 @@ function wrapText(
   }
   return lines;
 }
+
+async function drawCoverImage(
+  ctx: CanvasRenderingContext2D,
+  src: string,
+  width: number,
+  height: number,
+  zoom = 1,
+  x = 50,
+  y = 50,
+) {
+  const image = new Image();
+  image.src = src;
+  await image.decode();
+  const scale = Math.max(width / image.width, height / image.height) * zoom;
+  ctx.drawImage(
+    image,
+    ((width - image.width * scale) * x) / 100,
+    ((height - image.height * scale) * y) / 100,
+    image.width * scale,
+    image.height * scale,
+  );
+}
+
 export async function drawCover(
   canvas: HTMLCanvasElement,
   cover: CoverDocument,
   assets: AssetMap,
   candidate = cover.candidate,
 ) {
-  canvas.width = cover.width;
-  canvas.height = cover.height;
+  const artwork = activeCoverArtwork(cover);
+  const { width: w, height: h } = artwork ?? cover;
+  canvas.width = w;
+  canvas.height = h;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("当前浏览器无法绘制封面。");
-  const { style, width: w, height: h } = cover;
+  if (artwork) {
+    const src = assets[artwork.imageId]?.dataUrl;
+    if (!src) throw new Error("AI 封面图片缺失，请重新生成或切换到手动版式。");
+    await drawCoverImage(ctx, src, w, h);
+    return canvas;
+  }
+  const { style } = cover;
   const backgrounds = [style.background, style.accent, style.foreground];
   const bg = backgrounds[candidate % 3];
   const contrast = (hex: string) => {
@@ -91,17 +127,7 @@ export async function drawCover(
   if (cover.imageId) {
     const src = assets[cover.imageId]?.dataUrl;
     if (!src) throw new Error("封面背景图片缺失，请重新上传。");
-    const img = new Image();
-    img.src = src;
-    await img.decode();
-    const scale = Math.max(w / img.width, h / img.height) * cover.imageScale;
-    ctx.drawImage(
-      img,
-      ((w - img.width * scale) * cover.imageX) / 100,
-      ((h - img.height * scale) * cover.imageY) / 100,
-      img.width * scale,
-      img.height * scale,
-    );
+    await drawCoverImage(ctx, src, w, h, cover.imageScale, cover.imageX, cover.imageY);
     ctx.fillStyle = "rgba(0,0,0,.32)";
     ctx.fillRect(0, 0, w, h);
   } else {

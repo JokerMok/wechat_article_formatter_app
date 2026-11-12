@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, LayoutTemplate, UserRound } from "lucide-react";
+import { ArrowRight, ChevronDown, LayoutTemplate, UserRound } from "lucide-react";
 import type { z } from "zod";
 import type { AccountTab, entitlementsSchema } from "@/lib/accounts/center";
 import { accountFetch, bindWorkspace } from "@/lib/accounts/browser";
@@ -14,6 +14,7 @@ type AccountState = SignedIn | { state: "signed-out" | "error"; error?: string }
 const marker = "formatter-account-session-change";
 const loginMessages: Record<string, string> = {
   "login-failed": "登录未完成，请重试。",
+  "invalid-credentials": "账号或密码不正确，请重试。",
   "login-expired": "登录请求已过期、已使用或被另一个标签页替换，请重新登录。",
   "mapping-conflict": "账号关联未完成，已有作品归属未变更。",
   cancelled: "已取消登录。",
@@ -26,8 +27,8 @@ function notifyTabs() {
   try { localStorage.setItem(marker, crypto.randomUUID()); } catch {}
 }
 
-export function WorkspaceGate({ legacy, children }: {
-  legacy?: string; children: (menu: ReactNode) => ReactNode;
+export function WorkspaceGate({ children }: {
+  children: (menu: ReactNode) => ReactNode;
 }) {
   const [state, setState] = useState<AccountState>();
   const [notice, setNotice] = useState("");
@@ -143,17 +144,59 @@ export function WorkspaceGate({ legacy, children }: {
 
   if (!active) return (
     <main className="formatter-signin">
-      <section aria-label="风格排版账号">
-        <div className="formatter-signin-brand"><LayoutTemplate size={23} aria-hidden="true" />风格排版</div>
-        {!state ? <p role="status">正在检查登录状态…</p> : (
-          <>
-            {(notice || state.error) && <p role="status">{notice || state.error}</p>}
-            {state.state === "error" ? <button type="button" onClick={() => { setState(undefined); void refresh(); }}>重试</button> :
-              <form method="post" action="/api/account/login"><button type="submit">登录</button></form>}
-            {legacy && <a href={legacy}>旧版工作区</a>}
-          </>
-        )}
-      </section>
+      <div className="formatter-signin-layout">
+        <section aria-labelledby="formatter-signin-title">
+          <span className="formatter-brand-mark"><LayoutTemplate size={24} aria-hidden="true" /></span>
+          <h1 id="formatter-signin-title">登录风格排版</h1>
+          <div className="formatter-signin-actions">
+            {!state ? <p role="status">正在检查登录状态…</p> : (
+              <>
+                {(notice || state.error) && <p role="status">{notice || state.error}</p>}
+                {state.state === "error" ? (
+                  <button className="formatter-signin-primary" type="button" onClick={() => { setState(undefined); void refresh(); }}>重试</button>
+                ) : (
+                  <>
+                    <form method="post" action="/api/account/login" className="formatter-password-form">
+                      <label>
+                        <span>账号</span>
+                        <input name="username" autoComplete="username" autoCapitalize="none" spellCheck={false} maxLength={160} required />
+                      </label>
+                      <label>
+                        <span>密码</span>
+                        <input name="password" type="password" autoComplete="current-password" maxLength={256} required />
+                      </label>
+                      <button className="formatter-signin-primary" type="submit">登录 <ArrowRight size={18} aria-hidden="true" /></button>
+                    </form>
+                    <div className="formatter-signin-links">
+                      <form method="post" action="/api/account/register">
+                        <button type="submit">注册账号</button>
+                      </form>
+                      <form method="get" action="/api/account/reset">
+                        <button type="submit">找回密码</button>
+                      </form>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        </section>
+        <div className="formatter-signin-preview" aria-hidden="true">
+          <div className="formatter-preview-window">
+            <div className="formatter-preview-bar"><i /><i /><i /><span /></div>
+            <div className="formatter-preview-layout">
+              <div className="formatter-preview-tools"><i /><i /><i /><i /></div>
+              <div className="formatter-preview-article">
+                <div className="formatter-preview-cover" />
+                <strong>把思路写清楚</strong>
+                <div className="formatter-preview-lines"><i /><i /><i /></div>
+                <div className="formatter-preview-quote">先说结论，再展开细节。</div>
+                <div className="formatter-preview-lines"><i /><i /></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </main>
   );
 

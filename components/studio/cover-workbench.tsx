@@ -9,17 +9,38 @@ import type {
   StyleProfile,
 } from "@/lib/studio/types";
 import { uid } from "@/lib/studio/types";
-import { newCover, drawCover, coverBlob } from "@/lib/studio/cover";
+import { activeCoverArtwork, newCover, drawCover, coverBlob } from "@/lib/studio/cover";
+import { coverPromptMaxLength } from "@/lib/studio/cover-design";
 import { storeImage, studioDB } from "@/lib/studio/storage";
 import { downloadBlob, type AssetMap } from "@/lib/studio/renderer";
 import { plainHTML } from "@/lib/studio/import";
+import { accountFetch } from "@/lib/accounts/browser";
 import { ColorField, RangeField } from "./controls";
+import { StudioDialog } from "./dialog";
 import {
   PanelToggle,
   WorkspacePanel,
   useCompactWorkspace,
 } from "./workspace-panel";
 import { postJSON, visionImage, type VisionResult } from "./client-utils";
+
+async function requestCoverAI(action: "prompt" | "image", data: object, signal: AbortSignal) {
+  const response = await accountFetch(`/api/ai/cover-${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+    signal,
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(
+      (typeof body?.error === "string" ? body.error : body?.error?.message) ||
+      "AI 封面请求失败，请稍后重试。",
+    );
+  }
+  return response;
+}
+
 function CoverCanvas({
   cover,
   assets,
@@ -31,6 +52,8 @@ function CoverCanvas({
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState("");
+  const artwork = activeCoverArtwork(cover);
+  const { width, height } = artwork ?? cover;
   useEffect(() => {
     let alive = true;
     const temp = document.createElement("canvas");
@@ -53,8 +76,8 @@ function CoverCanvas({
     <div className="studio-cover-frame">
       <canvas
         ref={ref}
-        aria-label={`封面候选 ${(candidate ?? cover.candidate) + 1}`}
-        style={{ aspectRatio: `${cover.width}/${cover.height}` }}
+        aria-label={artwork ? "AI 完整封面" : `封面候选 ${(candidate ?? cover.candidate) + 1}`}
+        style={{ aspectRatio: `${width}/${height}` }}
       />
       {error && (
         <p role="alert" className="studio-cover-error">
@@ -88,7 +111,14 @@ export function CoverWorkbench({
   const [busy, setBusy] = useState(false);
   const [generated, setGenerated] = useState(false);
   const [reference, setReference] = useState("");
+  const [imageBrief, setImageBrief] = useState("");
+  const [aiStep, setAIStep] = useState<"prompt" | "image" | null>(null);
+  const [review, setReview] = useState<{ prompt: string; width: number; height: number }>();
+  const [reviewError, setReviewError] = useState("");
+  const generation = useRef<AbortController | null>(null);
+  const currentCover = useRef<CoverDocument | undefined>(undefined);
   const initial = useRef({ article, profile });
+  useEffect(() => () => generation.current?.abort(), []);
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -101,18 +131,14 @@ export function CoverWorkbench({
           );
       const savedStyles = await db.coverStyles.toArray();
       if (alive) {
-        setCover(
-          old ??
-            newCover(
-              article.id,
-              plainHTML(
-                article.blocks.find((b) => b.kind === "title")?.html ??
-                  article.name,
-              ),
-              profile,
-            ),
+        const draft = old ?? newCover(
+          article.id,
+          plainHTML(article.blocks.find((b) => b.kind === "title")?.html ?? article.name),
+          profile,
         );
-        setGenerated(Boolean(old));
+        currentCover.current = draft;
+        setCover(draft);
+        setGenerated(Boolean(old && !old.imageId));
         setStyles(savedStyles);
       }
     })().catch(() => onError("封面草稿读取失败，请检查本地存储。"));
@@ -121,8 +147,12 @@ export function CoverWorkbench({
     };
   }, [onError]); // The parent keys this workbench by article ID.
   if (!cover) return <p className="studio-loading">正在恢复封面…</p>;
+  const artwork = activeCoverArtwork(cover);
+  const { width, height } = artwork ?? cover;
+  const canDeliver = Boolean(artwork || cover.title.trim());
   const change = (next: Partial<CoverDocument>) => {
-    const updated = { ...cover, ...next, updatedAt: new Date().toISOString() };
+    const updated = { ...(currentCover.current ?? cover), ...next, updatedAt: new Date().toISOString() };
+    currentCover.current = updated;
     setCover(updated);
     void studioDB()
       .covers.put(updated)
@@ -130,8 +160,70 @@ export function CoverWorkbench({
   };
   const changeStyle = (next: Partial<CoverStyle>) =>
     change({ style: { ...cover.style, ...next } });
+  const runCoverAI = async (step: "prompt" | "image", action: (signal: AbortSignal) => Promise<void>) => {
+    if (generation.current) return;
+    const controller = new AbortController();
+    generation.current = controller;
+    setAIStep(step);
+    setReviewError("");
+    try {
+      await action(controller.signal);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        const message = error instanceof Error ? error.message : "AI 封面生成失败，请稍后重试。";
+        if (step === "image") setReviewError(message);
+        else {
+          setPanel(null);
+          onError(message);
+        }
+      }
+    } finally {
+      generation.current = null;
+      setAIStep(null);
+    }
+  };
+  const generatePrompt = () => runCoverAI("prompt", async (signal) => {
+    const excerpt = article.blocks
+      .filter((block) => block.kind !== "title" && block.kind !== "image")
+      .slice(0, 24)
+      .map((block) => plainHTML(block.html).slice(0, 600))
+      .join("\n")
+      .slice(0, 2400);
+    const { name, background, foreground, accent, composition, fontFamily } = cover.style;
+    const response = await requestCoverAI("prompt", {
+      title: (cover.title.trim() || article.name).slice(0, 160),
+      subtitle: cover.subtitle.slice(0, 160),
+      excerpt,
+      brief: imageBrief,
+      style: JSON.stringify({ name, background, foreground, accent, composition, fontFamily }).slice(0, 240),
+      width,
+      height,
+    }, signal);
+    const { data } = await response.json() as { data?: { prompt?: string } };
+    if (!data?.prompt) throw new Error("AI 未返回可用的封面提示词，请重试。");
+    if (!signal.aborted) setReview({ prompt: data.prompt, width, height });
+  });
+  const generateImage = () => {
+    if (!review?.prompt.trim()) return;
+    return runCoverAI("image", async (signal) => {
+      const response = await requestCoverAI("image", { ...review, confirmed: true }, signal);
+      const image = await response.blob();
+      if (signal.aborted) return;
+      const asset = await storeImage(new File([image], "AI 完整封面.png", { type: image.type }), "owned");
+      await onRefresh();
+      if (signal.aborted) return;
+      change({ aiArtwork: { imageId: asset.id, width: review.width, height: review.height }, renderMode: "ai" });
+      setReview(undefined);
+      setPanel(null);
+      onMessage("AI 封面已生成，可下载或用于当前文章。");
+    });
+  };
+  const closeReview = () => {
+    generation.current?.abort();
+    setReview(undefined);
+  };
   return (
-    <div className="studio-cover-workbench">
+    <div className="studio-cover-workbench" data-artwork={Boolean(artwork)}>
       <div className="studio-workspace-tools">
         <h2>封面工作台</h2>
         <div>
@@ -143,14 +235,16 @@ export function CoverWorkbench({
             onClick={() => setPanel("source")}
             icon={<ImagePlus size={16} />}
           />
-          <PanelToggle
-            label="文字与构图"
-            controls="cover-settings"
-            compact={compact}
-            open={panel === "settings"}
-            onClick={() => setPanel("settings")}
-            icon={<Sparkles size={16} />}
-          />
+          {!artwork && (
+            <PanelToggle
+              label="文字与构图"
+              controls="cover-settings"
+              compact={compact}
+              open={panel === "settings"}
+              onClick={() => setPanel("settings")}
+              icon={<Sparkles size={16} />}
+            />
+          )}
         </div>
       </div>
       <WorkspacePanel
@@ -161,34 +255,40 @@ export function CoverWorkbench({
         open={!compact || panel === "source"}
         onClose={() => setPanel(null)}
       >
-        {!compact && <h2>封面工作台</h2>}
-        <label className="studio-field">
-          <span>文章标题</span>
-          <textarea
-            aria-label="封面标题"
-            rows={3}
-            value={cover.title}
-            onChange={(e) => change({ title: e.target.value })}
-          />
-        </label>
-        <label className="studio-field">
-          <span>副标题</span>
-          <input
-            aria-label="封面副标题"
-            value={cover.subtitle}
-            onChange={(e) => change({ subtitle: e.target.value })}
-          />
-        </label>
+        {!compact && <h3>内容与参考</h3>}
+        {!artwork && (
+          <>
+            <label className="studio-field">
+              <span>文章标题</span>
+              <textarea
+                aria-label="封面标题"
+                rows={3}
+                value={cover.title}
+                onChange={(e) => change({ title: e.target.value })}
+              />
+            </label>
+            <label className="studio-field">
+              <span>副标题</span>
+              <input
+                aria-label="封面副标题"
+                value={cover.subtitle}
+                onChange={(e) => change({ subtitle: e.target.value })}
+              />
+            </label>
+          </>
+        )}
         <label className="studio-field">
           <span>尺寸</span>
           <select
             aria-label="封面尺寸"
-            value={`${cover.width}x${cover.height}`}
+            value={`${width}x${height}`}
+            disabled={Boolean(aiStep)}
             onChange={(e) => {
               const [width, height] = e.target.value.split("x").map(Number);
               change({
                 width,
                 height,
+                renderMode: "manual",
                 fontSize: width === 900 ? 58 : 72,
                 y: 24,
                 x: 8,
@@ -201,6 +301,24 @@ export function CoverWorkbench({
             <option value="1080x1440">竖版封面 · 1080 × 1440</option>
           </select>
         </label>
+        <label className="studio-field">
+          <span>AI 封面要求</span>
+          <textarea
+            rows={2}
+            maxLength={300}
+            value={imageBrief}
+            placeholder="可选，描述风格、文案或画面"
+            onChange={(event) => setImageBrief(event.target.value)}
+          />
+        </label>
+        <button
+          className="studio-btn primary"
+          disabled={Boolean(aiStep) || busy}
+          onClick={() => void generatePrompt()}
+        >
+          <Sparkles size={16} aria-hidden="true" />
+          {aiStep === "prompt" ? "正在生成提示词…" : "生成封面提示词"}
+        </button>
         <h3>参考封面</h3>
         <label className="studio-upload compact">
           <ImagePlus size={22} />
@@ -300,25 +418,31 @@ export function CoverWorkbench({
         >
           沿用正文主题
         </button>
-        <button
-          className="studio-btn primary"
-          disabled={!cover.title.trim()}
-          onClick={() => {
-            setGenerated(true);
-            setPanel(null);
-            change({ candidate: 0 });
-          }}
-        >
-          生成三张候选
-        </button>
+        {!artwork && (
+          <button
+            className="studio-btn"
+            disabled={!cover.title.trim()}
+            onClick={() => {
+              setGenerated(true);
+              setPanel(null);
+              change({ candidate: 0 });
+            }}
+          >
+            生成三张候选
+          </button>
+        )}
       </WorkspacePanel>
       <main className="studio-cover-stage">
         <div className="studio-section-heading">
-          <h3>封面预览</h3>
-          <span>文字层可编辑</span>
+          <h3>{artwork ? "AI 完整封面" : "封面预览"}</h3>
+          {cover.aiArtwork && (
+            <button className="studio-text-btn" type="button" onClick={() => change({ renderMode: artwork ? "manual" : "ai" })}>
+              {artwork ? "切换到手动版式" : "查看 AI 封面"}
+            </button>
+          )}
         </div>
         <CoverCanvas cover={cover} assets={assets} />
-        {generated && (
+        {generated && !artwork && (
           <div className="studio-cover-candidates">
             {[0, 1, 2].map((candidate) => (
               <button
@@ -343,7 +467,7 @@ export function CoverWorkbench({
         <div className="studio-cover-delivery">
           <button
             className="studio-btn"
-            disabled={busy || !cover.title.trim()}
+            disabled={busy || !canDeliver}
             onClick={async () => {
               try {
                 downloadBlob(
@@ -361,7 +485,7 @@ export function CoverWorkbench({
           </button>
           <button
             className="studio-btn primary"
-            disabled={!cover.title.trim()}
+            disabled={!canDeliver}
             onClick={async () => {
               try {
                 await studioDB().covers.put(cover);
@@ -377,7 +501,7 @@ export function CoverWorkbench({
           </button>
         </div>
       </main>
-      <WorkspacePanel
+      {!artwork && <WorkspacePanel
         id="cover-settings"
         title="文字与构图"
         className="studio-inspector"
@@ -569,7 +693,36 @@ export function CoverWorkbench({
             ))}
           </details>
         )}
-      </WorkspacePanel>
+      </WorkspacePanel>}
+      {review && (
+        <StudioDialog title="确认封面提示词" wide onClose={closeReview}>
+          <label className="studio-field">
+            <span>封面提示词</span>
+            <textarea
+              autoFocus
+              rows={10}
+              maxLength={coverPromptMaxLength}
+              value={review.prompt}
+              disabled={aiStep === "image"}
+              onChange={(event) => setReview({ ...review, prompt: event.target.value })}
+            />
+          </label>
+          {reviewError && <p role="alert" className="studio-cover-prompt-error">{reviewError}</p>}
+          {aiStep === "image" && <p role="status" className="studio-note">正在生成完整封面…</p>}
+          <div className="studio-dialog-actions">
+            <button className="studio-btn" type="button" onClick={closeReview}>取消</button>
+            <button
+              className="studio-btn primary"
+              type="button"
+              disabled={Boolean(aiStep) || !review.prompt.trim()}
+              onClick={() => void generateImage()}
+            >
+              <Sparkles size={16} aria-hidden="true" />
+              确认并生成图片
+            </button>
+          </div>
+        </StudioDialog>
+      )}
     </div>
   );
 }

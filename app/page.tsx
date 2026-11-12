@@ -1,11 +1,11 @@
 import Studio from "@/components/studio/studio";
 import { AccountStudio } from "@/components/accounts/workspaces";
 import { readServerAIConfig } from "@/lib/ai/server/config";
-import { accountEnabled, legacyWorkspaceURL } from "@/lib/accounts/config";
+import { accountEnabled } from "@/lib/accounts/config";
 
 export const dynamic = "force-dynamic";
 export default function Home() {
-  if (accountEnabled()) return <AccountStudio legacy={legacyWorkspaceURL()} />;
+  if (accountEnabled()) return <AccountStudio />;
   let cloudConfigured = false;
   try {
     readServerAIConfig();

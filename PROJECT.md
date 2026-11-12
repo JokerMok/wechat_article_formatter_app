@@ -19,7 +19,7 @@
 
 公网只提供风格排版，旧 `/multiplatform` 返回 404。正式 Casdoor、业务产品与私密鉴权已登记。实际回调为 `https://formatter.shizibandu.icu/auth/callback/wechat-article-formatter`。浏览器旧稿未删除、迁移或关联。旧版入口仍指向原 Vercel 域名。此前在正式域名创建的匿名草稿留在原浏览器存储中。接入说明见 [账号中心接入](docs/ACCOUNT_CENTER_INTEGRATION.md)。
 
-腾讯云直连已配置的 Vercel 模型中转仍超时。正式应用曾通过临时验收通道完成一次真实模型调用、扣次及交付，现已移除该通道与临时凭据。日常使用规则排版。账号登录、基础网页采集、会员和兑换走各自的正式服务。验收范围见 [账号中心验收](docs/ACCOUNT_CENTER_ACCEPTANCE.md)。
+2026-11-12，生产智能排版启用 `https://api-relay.shizibandu.icu/v1`，模型为 `gpt-6.1-terra`。腾讯云直连健康检查与模型列表返回 200。使用正式版本的排版代码，以合成稿验证了真实模型调用和方案校验，用时约 5.4 秒。生产服务重启后已核对运行配置与公网账号状态接口。仅切换运行配置，继续使用上表所列制品。需要暂停智能排版时，可在私有配置设 `AI_LAYOUT_PROVIDER=off` 后重启服务。历史账号与扣次验收见 [账号中心验收](docs/ACCOUNT_CENTER_ACCEPTANCE.md)。
 
 磁盘可用空间接近共享备份的 2 GiB 门槛。本次回收可重建的固件及软件目录缓存，保留共享备份。早期版本 `4b28751d9e935e365dab5be72009e2ab785a2198` 的完整发布归档在 Mac 的 `~/server-ops/tencent-main/files/formatter/releases/`。保留当前和上一版所需的差分基础包。
 

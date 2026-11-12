@@ -183,6 +183,8 @@ export type CoverDocument = {
   y: number;
   textWidth: number;
   imageId?: string;
+  aiArtwork?: { imageId: string; width: number; height: number };
+  renderMode?: "manual" | "ai";
   textColor?: string;
   textColors?: Record<number, string>;
   imageScale: number;

@@ -682,8 +682,8 @@ export default function Studio({
           onClick={() => setView("home")}
           aria-label="返回我的工作台"
         >
-          <span>
-            <LayoutTemplate size={21} />
+          <span className="formatter-brand-mark">
+            <LayoutTemplate size={19} aria-hidden="true" />
           </span>
           <strong>风格排版</strong>
         </button>
@@ -698,11 +698,11 @@ export default function Studio({
           ).map(([key, label, Icon]) => (
             <button
               key={key}
-              aria-current={view === key ? "page" : undefined}
+              aria-current={view === key || (view === "learn" && key === "library") ? "page" : undefined}
               onClick={() => setView(key)}
             >
-              <Icon size={16} />
-              {label}
+              <Icon size={16} aria-hidden="true" />
+              <span>{label}</span>
             </button>
           ))}
         </nav>
@@ -810,21 +810,19 @@ export default function Studio({
       />
       {view === "home" && (
         <main className="studio-home">
-          <div className="studio-home-heading">
-            <div>
-              <h1>我的工作台</h1>
-            </div>
+          <div className="studio-home-heading studio-home-hero">
+            <h1>我的工作台</h1>
             <div className="studio-home-actions">
-              <button className="studio-btn" onClick={startLearn}>
-                <Sparkles size={17} />
-                学习新风格
-              </button>
               <button
                 className="studio-btn primary"
                 onClick={() => void run(() => openEditor())}
               >
                 <Plus size={18} />
                 排版我的文章
+              </button>
+              <button className="studio-btn" onClick={startLearn}>
+                <Sparkles size={17} />
+                学习新风格
               </button>
             </div>
           </div>
@@ -835,7 +833,6 @@ export default function Studio({
             trash={trash}
             setTrash={setTrash}
             onOpen={(id) => void run(() => openEditor(id))}
-            onNew={() => void run(() => openEditor())}
             onRename={renameDraft}
             onCopy={copyDraft}
             onDelete={requestTrash}
@@ -972,140 +969,144 @@ export default function Studio({
       {view === "editor" && (
         <>
           <div className="studio-editor-toolbar">
-            <div className="studio-document-name">
-              <button
-                className="studio-icon-btn"
-                aria-label="返回稿件列表"
-                onClick={() => setView("home")}
-              >
-                <ArrowLeft size={17} />
-              </button>
-              <input
-                aria-label="稿件名称"
-                maxLength={80}
-                value={article.name}
-                onPaste={(event) => {
-                  const pasted = event.clipboardData.getData("text/plain");
-                  if (!/\r?\n/.test(pasted) || !/^\s*#\s+/.test(pasted)) return;
-                  const title = parseArticle(
-                    pasted.split(/\r?\n/)[0],
-                    "markdown",
-                  )[0];
-                  if (title?.kind !== "title") return;
-                  event.preventDefault();
-                  s.update((a) => ({
-                    ...a,
-                    name: plainHTML(title.html).trim().slice(0, 80),
-                  }));
-                }}
-                onChange={(e) =>
-                  s.update((a) => ({ ...a, name: e.target.value }), true)
-                }
-              />
-              <DraftMenu
-                article={article}
-                onRename={() => renameDraft(article)}
-                onCopy={() => copyDraft(article.id)}
-                onDelete={() => requestTrash([article.id])}
-              />
-            </div>
-            <div className="studio-toolbar-group">
-              <button
-                className="studio-icon-btn"
-                aria-label="撤销"
-                disabled={!s.historyCount.undo}
-                onClick={s.undo}
-              >
-                <Undo2 size={17} />
-              </button>
-              <button
-                className="studio-icon-btn"
-                aria-label="重做"
-                disabled={!s.historyCount.redo}
-                onClick={s.redo}
-              >
-                <Redo2 size={17} />
-              </button>
-              <button
-                className="studio-icon-btn"
-                aria-label="编辑历史"
-                onClick={() =>
-                  void run(async () => {
-                    await s.loadRevisions();
-                    setDialog("history");
-                  })
-                }
-              >
-                <History size={17} />
-              </button>
-            </div>
-            <div className="studio-segment studio-preview-switch">
-              {(
-                [
-                  ["mobile", "手机预览", Smartphone],
-                  ["desktop", "桌面预览", Monitor],
-                  ["compare", "比较风格", Columns2],
-                ] as const
-              ).map(([key, label, Icon]) => (
+            <div className="studio-toolbar-document">
+              <div className="studio-document-name">
                 <button
-                  key={key}
-                  aria-label={label}
-                  title={label}
-                  aria-pressed={canvasPreview === key}
-                  disabled={key === "compare" && !article.blocks.length}
-                  onClick={() => changePreview(key)}
+                  className="studio-icon-btn"
+                  aria-label="返回稿件列表"
+                  onClick={() => setView("home")}
                 >
-                  <Icon size={16} />
-                  <span>
-                    {key === "mobile"
-                      ? "手机"
-                      : key === "desktop"
-                        ? "桌面"
-                        : "比较"}
-                  </span>
+                  <ArrowLeft size={17} />
                 </button>
-              ))}
-            </div>
-            <div className="studio-panel-toggles">
-              <PanelToggle
-                label="风格与结构"
-                controls="editor-styles"
-                compact={compact}
-                open={showSidebar}
-                onClick={() => togglePanel("styles")}
-                icon={<Palette size={16} />}
-              />
-              <PanelToggle
-                label="样式设置"
-                controls="editor-inspector"
-                compact={compact}
-                open={showInspector}
-                onClick={() => togglePanel("settings")}
-                icon={<Settings2 size={16} />}
-              />
-            </div>
-            <div className="studio-toolbar-end">
-              {article.blocks.length > 0 && (
+                <input
+                  aria-label="稿件名称"
+                  maxLength={80}
+                  value={article.name}
+                  onPaste={(event) => {
+                    const pasted = event.clipboardData.getData("text/plain");
+                    if (!/\r?\n/.test(pasted) || !/^\s*#\s+/.test(pasted)) return;
+                    const title = parseArticle(
+                      pasted.split(/\r?\n/)[0],
+                      "markdown",
+                    )[0];
+                    if (title?.kind !== "title") return;
+                    event.preventDefault();
+                    s.update((a) => ({
+                      ...a,
+                      name: plainHTML(title.html).trim().slice(0, 80),
+                    }));
+                  }}
+                  onChange={(e) =>
+                    s.update((a) => ({ ...a, name: e.target.value }), true)
+                  }
+                />
+                <DraftMenu
+                  article={article}
+                  onRename={() => renameDraft(article)}
+                  onCopy={() => copyDraft(article.id)}
+                  onDelete={() => requestTrash([article.id])}
+                />
+              </div>
+              <div className="studio-toolbar-group">
                 <button
-                  className="studio-btn"
-                  aria-label="导入"
-                  onClick={() => setDialog("import")}
+                  className="studio-icon-btn"
+                  aria-label="撤销"
+                  disabled={!s.historyCount.undo}
+                  onClick={s.undo}
                 >
-                  <Upload size={15} />
-                  <span className="studio-import-label">导入</span>
+                  <Undo2 size={17} />
                 </button>
-              )}
-              <button
-                className="studio-btn primary"
-                aria-label="导出"
-                disabled={!article.blocks.length || busy || !!candidate}
-                title={candidate ? "确认应用或取消预览后可导出" : undefined}
-                onClick={() => void run(openExport)}
-              >
-                <Download size={15} />
-                <span className="studio-export-label">导出</span>
-                <ChevronDown className="studio-export-chevron" size={13} />
-              </button>
+                <button
+                  className="studio-icon-btn"
+                  aria-label="重做"
+                  disabled={!s.historyCount.redo}
+                  onClick={s.redo}
+                >
+                  <Redo2 size={17} />
+                </button>
+                <button
+                  className="studio-icon-btn"
+                  aria-label="编辑历史"
+                  onClick={() =>
+                    void run(async () => {
+                      await s.loadRevisions();
+                      setDialog("history");
+                    })
+                  }
+                >
+                  <History size={17} />
+                </button>
+              </div>
+            </div>
+            <div className="studio-toolbar-actions">
+              <div className="studio-segment studio-preview-switch">
+                {(
+                  [
+                    ["mobile", "手机预览", Smartphone],
+                    ["desktop", "桌面预览", Monitor],
+                    ["compare", "比较风格", Columns2],
+                  ] as const
+                ).map(([key, label, Icon]) => (
+                  <button
+                    key={key}
+                    aria-label={label}
+                    title={label}
+                    aria-pressed={canvasPreview === key}
+                    disabled={key === "compare" && !article.blocks.length}
+                    onClick={() => changePreview(key)}
+                  >
+                    <Icon size={16} />
+                    <span>
+                      {key === "mobile"
+                        ? "手机"
+                        : key === "desktop"
+                          ? "桌面"
+                          : "比较"}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <div className="studio-panel-toggles">
+                <PanelToggle
+                  label="风格与结构"
+                  controls="editor-styles"
+                  compact={compact}
+                  open={showSidebar}
+                  onClick={() => togglePanel("styles")}
+                  icon={<Palette size={16} />}
+                />
+                <PanelToggle
+                  label="样式设置"
+                  controls="editor-inspector"
+                  compact={compact}
+                  open={showInspector}
+                  onClick={() => togglePanel("settings")}
+                  icon={<Settings2 size={16} />}
+                />
+              </div>
+              <div className="studio-toolbar-end">
+                {article.blocks.length > 0 && (
+                  <button
+                    className="studio-btn"
+                    aria-label="导入"
+                    onClick={() => setDialog("import")}
+                  >
+                    <Upload size={15} />
+                    <span className="studio-import-label">导入</span>
+                  </button>
+                )}
+                <button
+                  className="studio-btn primary"
+                  aria-label="导出"
+                  disabled={!article.blocks.length || busy || !!candidate}
+                  title={candidate ? "确认应用或取消预览后可导出" : undefined}
+                  onClick={() => void run(openExport)}
+                >
+                  <Download size={15} />
+                  <span className="studio-export-label">导出</span>
+                  <ChevronDown className="studio-export-chevron" size={13} />
+                </button>
+              </div>
             </div>
           </div>
           <section className="studio-quick-styles" aria-label="快速风格切换">

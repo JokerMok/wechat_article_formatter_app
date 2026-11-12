@@ -17,9 +17,14 @@ const errorResponse = (error: unknown) => {
 };
 
 export async function GET(request: Request, context: Context) {
-  if (!accountEnabled() || (await context.params).action !== "status")
-    return json({ code: "NOT_FOUND" }, 404);
+  if (!accountEnabled()) return json({ code: "NOT_FOUND" }, 404);
+  const { action } = await context.params;
   try {
+    if (action === "reset") {
+      const { issuer, application } = accountConfig();
+      return noStore(NextResponse.redirect(new URL(`/forget/${application}`, issuer), 303));
+    }
+    if (action !== "status") return json({ code: "NOT_FOUND" }, 404);
     if (!(await localSession()))
       return json({ state: "signed-out" });
     const { identity, session } = await activeSession(request.headers.has("x-formatter-session") ? request : undefined);
@@ -47,13 +52,22 @@ export async function POST(request: Request, context: Context) {
   const { action } = await context.params;
   try {
     assertAccountOrigin(request);
-    if (action === "login" || action === "switch") {
-      if (action === "switch") {
-        const binding = new URLSearchParams(await readBoundedBody(request, 1024)).get("binding");
-        const session = await localSession();
-        if (!session || !equal(binding ?? "", session.binding))
-          throw new AccountError(409, "ACCOUNT_CHANGED", "账号已切换，请刷新当前页面。");
-      }
+    if (action === "register") return await startLogin("register");
+    if (action === "login") {
+      const fields = new URLSearchParams(await readBoundedBody(request, 4096));
+      const credentials = z.object({
+        username: z.string().trim().min(1).max(160),
+        password: z.string().min(1).max(256),
+      }).safeParse({ username: fields.get("username"), password: fields.get("password") });
+      if (!credentials.success)
+        throw new AccountError(401, "INVALID_CREDENTIALS", "账号或密码不正确，请重试。");
+      return await startLogin(credentials.data);
+    }
+    if (action === "switch") {
+      const binding = new URLSearchParams(await readBoundedBody(request, 1024)).get("binding");
+      const session = await localSession();
+      if (!session || !equal(binding ?? "", session.binding))
+        throw new AccountError(409, "ACCOUNT_CHANGED", "账号已切换，请刷新当前页面。");
       return await startLogin();
     }
     if (action === "logout") {
@@ -77,10 +91,13 @@ export async function POST(request: Request, context: Context) {
     }
     return json({ code: "NOT_FOUND" }, 404);
   } catch (error) {
-    if (action === "login" || action === "switch") {
+    if (action === "login" || action === "switch" || action === "register") {
       try {
         assertAccountOrigin(request);
-        return noStore(NextResponse.redirect(new URL("/?account=login-failed", accountConfig().redirect), 303));
+        const reason = error instanceof AccountError && error.code === "INVALID_CREDENTIALS"
+          ? "invalid-credentials"
+          : "login-failed";
+        return noStore(NextResponse.redirect(new URL(`/?account=${reason}`, accountConfig().redirect), 303));
       } catch { /* wrong origin or incomplete configuration */ }
     }
     if (error instanceof z.ZodError || error instanceof SyntaxError)

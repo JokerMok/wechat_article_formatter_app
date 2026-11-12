@@ -64,7 +64,67 @@ async function oidcConfig() {
   return config;
 }
 
-export async function startLogin() {
+type LoginCredentials = { username: string; password: string };
+
+async function passwordLogin(credentials: LoginCredentials, authURL: URL) {
+  const config = accountConfig();
+  const target = new URL("/api/login", config.issuer);
+  const params = authURL.searchParams;
+  target.search = new URLSearchParams({
+    clientId: config.clientId,
+    responseType: "code",
+    type: "code",
+    redirectUri: config.redirect.href,
+    scope: params.get("scope") ?? "",
+    state: params.get("state") ?? "",
+    nonce: params.get("nonce") ?? "",
+    code_challenge_method: "S256",
+    code_challenge: params.get("code_challenge") ?? "",
+  }).toString();
+  const response = await fetch(target, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...credentials,
+      application: config.application,
+      organization: "consumers",
+      type: "code",
+      autoSignin: false,
+      signinMethod: "Password",
+      loginMethod: "password",
+    }),
+    cache: "no-store",
+    redirect: "error",
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (response.status === 429) return authURL;
+  if (!response.ok) throw unavailable();
+  const result = z.object({
+    status: z.enum(["ok", "error"]),
+    msg: z.string().optional(),
+    data: z.unknown(),
+    data2: z.unknown(),
+    data3: z.unknown(),
+  }).parse(await response.json());
+  if (result.status === "error") {
+    if (/captcha|turing|验证码|人机|obfuscat|decrypt/i.test(result.msg ?? "")) return authURL;
+    throw new AccountError(401, "INVALID_CREDENTIALS", "账号或密码不正确，请重试。");
+  }
+  // Casdoor returns a hex code or UUID for a completed code grant. A prompt,
+  // consent, password update or MFA response continues on the issuer's UI.
+  if (result.data2 != null || result.data3 != null ||
+      typeof result.data !== "string" ||
+      !/^(?:[a-f0-9]{32,64}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i.test(result.data))
+    return authURL;
+  const callback = new URL(config.redirect);
+  callback.searchParams.set("code", result.data);
+  // The code came directly from the configured issuer, without a hosted redirect.
+  callback.searchParams.set("iss", target.origin);
+  callback.searchParams.set("state", params.get("state") ?? "");
+  return callback;
+}
+
+export async function startLogin(options?: LoginCredentials | "register") {
   const c = accountConfig();
   const oidcClient = await oidcConfig();
   const jar = await cookies();
@@ -79,11 +139,18 @@ export async function startLogin() {
     state, nonce, code_challenge: await oidc.calculatePKCECodeChallenge(verifier),
     code_challenge_method: "S256", prompt: "login",
   });
+  let target = authURL;
+  if (options === "register") {
+    target = new URL("/signup/oauth/authorize", c.issuer);
+    target.search = authURL.search;
+  } else if (options) {
+    target = await passwordLogin(options, authURL);
+  }
   await accountDB().query(
     "INSERT INTO formatter_accounts.attempts VALUES($1,$2,$3,$4,$5,now()+interval '8 minutes')",
     [digest(state), digest(browser), prior?.token_hash ?? null, verifier, nonce],
   );
-  const response = noStore(NextResponse.redirect(authURL, 303));
+  const response = noStore(NextResponse.redirect(target, 303));
   response.cookies.set(attemptCookie(), browser, { ...cookieOptions(), maxAge: 480 });
   if (previous && !prior) clearSession(response);
   return response;
