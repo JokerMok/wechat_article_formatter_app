@@ -486,6 +486,9 @@ for (const mode of ["selection", "clipboard-api", "denied"] as const) {
     expect(payload.text).not.toContain("<section");
     const target = await context.newPage();
     try {
+      await target.route("**/clipboard-paste-test", (route) =>
+        route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+      );
       await target.goto("/clipboard-paste-test");
       await target.evaluate(() => {
         const editor = document.createElement("div");
