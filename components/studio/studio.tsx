@@ -180,6 +180,7 @@ export default function Studio({
   );
   const [versionPicks, setVersionPicks] = useState<Record<string, number>>({});
   const [exportWidth, setExportWidth] = useState(390);
+  const [copyNotice, setCopyNotice] = useState<{ ok: boolean; message: string }>();
   const [exportResult, setExportResult] = useState<{
       html: string;
       warnings: string[];
@@ -551,6 +552,7 @@ export default function Studio({
     if (!article) return;
     await checkImages(article, s.assets);
     setExportResult(wechatHTML(article, profile, s.assets));
+    setCopyNotice(undefined);
     setDialog("export");
   };
   const exportPackage = async () => {
@@ -2002,18 +2004,25 @@ export default function Studio({
                 disabled={busy}
                 onClick={() =>
                   void run(async () => {
+                    setCopyNotice(undefined);
                     const result = await copyRichText(exportResult.html);
-                    if (!result.ok)
-                      throw new Error(
-                        "浏览器未允许复制，请下载 HTML 后手动复制。",
-                      );
-                    s.setMessage("图文已复制，请在公众号后台粘贴并核对。");
+                    setCopyNotice({
+                      ok: result.ok,
+                      message: result.ok
+                        ? "图文已复制，请在公众号后台粘贴并核对。"
+                        : "复制失败，请允许浏览器访问剪贴板后重试。",
+                    });
                   })
                 }
               >
                 <Copy size={16} />
                 复制公众号图文
               </button>
+              {copyNotice && (
+                <p className={`studio-copy-notice ${copyNotice.ok ? "" : "error"}`} role={copyNotice.ok ? "status" : "alert"}>
+                  {copyNotice.message}
+                </p>
+              )}
               <button
                 className="studio-btn"
                 onClick={() =>

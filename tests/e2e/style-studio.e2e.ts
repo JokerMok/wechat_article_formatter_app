@@ -447,6 +447,65 @@ test("whole import automatically attempts one semantic layout and retains rules 
   expect(requests).toBe(1);
   await expect(canvas).toContainText("一、记录现象");
 });
+for (const mode of ["selection", "clipboard-api", "denied"] as const) {
+  test(`WeChat copy writes and pastes real rich content from the export dialog (${mode})`, async ({ page, context }) => {
+    await page.goto("/");
+    await importSource(page);
+    await page.evaluate((mode) => {
+      if (mode !== "clipboard-api") {
+        Object.defineProperty(navigator.clipboard, "write", {
+          configurable: true,
+          value: async () => { throw new DOMException("Denied", "NotAllowedError"); },
+        });
+      }
+      if (mode !== "selection") {
+        const original = document.execCommand.bind(document);
+        document.execCommand = (command, ...args) => command === "copy" ? false : original(command, ...args);
+      }
+    }, mode);
+    await page.getByRole("button", { name: "导出", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "导出到公众号" });
+    await page.evaluate(() => navigator.clipboard.writeText("CLIPBOARD_BEFORE_COPY"));
+    await dialog.getByRole("button", { name: "复制公众号图文", exact: true }).click();
+    if (mode === "denied") {
+      await expect(dialog.getByRole("alert")).toContainText("复制失败");
+      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("CLIPBOARD_BEFORE_COPY");
+      await expect(dialog.getByText("图文已复制", { exact: false })).toHaveCount(0);
+      return;
+    }
+    await expect(dialog.getByRole("status")).toHaveText("图文已复制，请在公众号后台粘贴并核对。");
+    const payload = await page.evaluate(async () => {
+      const items = await navigator.clipboard.read();
+      const item = items.find((entry) => entry.types.includes("text/html"))!;
+      return { html: await (await item.getType("text/html")).text(), text: await (await item.getType("text/plain")).text() };
+    });
+    expect(payload.html).toContain("42%");
+    expect(payload.html).toContain("<img");
+    expect(payload.html).toContain("style=");
+    expect(payload.text).toContain("阅读里的新发现");
+    expect(payload.text).not.toContain("<section");
+    const target = await context.newPage();
+    try {
+      await target.goto("/clipboard-paste-test");
+      await target.evaluate(() => {
+        const editor = document.createElement("div");
+        editor.contentEditable = "true";
+        editor.setAttribute("role", "textbox");
+        editor.setAttribute("aria-label", "富文本粘贴验收");
+        document.body.appendChild(editor);
+      });
+      const receiver = target.getByRole("textbox", { name: "富文本粘贴验收" });
+      await receiver.focus();
+      await target.keyboard.press("ControlOrMeta+v");
+      await expect(receiver).toContainText("42%");
+      await expect(receiver.locator("img")).toHaveCount(1);
+      expect(await receiver.locator("[style]").count()).toBeGreaterThan(0);
+    } finally {
+      await target.close();
+    }
+  });
+}
+
 test("article editing, themes, local overrides, history, refresh and WeChat exports", async ({
   page,
   context,

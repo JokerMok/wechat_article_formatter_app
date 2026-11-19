@@ -4,13 +4,63 @@ export type CopyRichTextResult = {
 };
 
 function htmlToPlainText(html: string) {
-  return html
+  const text = html
     .replace(/<img\b[^>]*\balt=(["'])(.*?)\1[^>]*>/gi, "$2")
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/(?:p|section|div|h[1-6]|li)>/gi, "\n")
     .replace(/<[^>]+>/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+  if (typeof document === "undefined") return text;
+  const container = document.createElement("textarea");
+  container.innerHTML = text;
+  return container.value;
+}
+
+function copySelection(html: string, text: string) {
+  if (typeof document === "undefined" || typeof document.execCommand !== "function") return false;
+  const selection = window.getSelection();
+  if (!selection) return false;
+  const focused = document.activeElement as HTMLElement | null;
+  const ranges = Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index).cloneRange());
+  const container = document.createElement("div");
+  container.contentEditable = "true";
+  container.tabIndex = -1;
+  Object.assign(container.style, {
+    position: "fixed", left: "0", top: "0", width: "1px", height: "1px",
+    opacity: "0", overflow: "hidden", pointerEvents: "none",
+  });
+  container.innerHTML = html;
+  // Modal dialogs make the rest of the document inert, including a body-level copy target.
+  const host = focused?.closest("dialog[open]") ?? document.querySelector("dialog[open]") ?? document.body;
+  let populated = false;
+  const onCopy = (event: ClipboardEvent) => {
+    if (!event.clipboardData) return;
+    try {
+      event.clipboardData.setData("text/html", html);
+      event.clipboardData.setData("text/plain", text);
+      event.preventDefault();
+      populated = true;
+    } catch { /* Keep failure visible to the caller. */ }
+  };
+  try {
+    host.appendChild(container);
+    container.focus({ preventScroll: true });
+    const range = document.createRange();
+    range.selectNodeContents(container);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    container.addEventListener("copy", onCopy);
+    return document.execCommand("copy") && populated;
+  } catch {
+    return false;
+  } finally {
+    container.removeEventListener("copy", onCopy);
+    container.remove();
+    focused?.focus({ preventScroll: true });
+    selection.removeAllRanges();
+    for (const range of ranges) selection.addRange(range);
+  }
 }
 
 export async function copyRichText(html: string): Promise<CopyRichTextResult> {
@@ -18,10 +68,14 @@ export async function copyRichText(html: string): Promise<CopyRichTextResult> {
     return { ok: false, method: "noop" };
   }
 
+  const text = htmlToPlainText(html);
+  // Run while the click still grants clipboard access, including in Safari.
+  if (copySelection(html, text)) return { ok: true, method: "selection" };
+
   if ("ClipboardItem" in window && navigator.clipboard?.write) {
     try {
       const htmlBlob = new Blob([html], { type: "text/html" });
-      const textBlob = new Blob([htmlToPlainText(html)], { type: "text/plain" });
+      const textBlob = new Blob([text], { type: "text/plain" });
       await navigator.clipboard.write([
         new ClipboardItem({
           "text/html": htmlBlob,
@@ -30,29 +84,9 @@ export async function copyRichText(html: string): Promise<CopyRichTextResult> {
       ]);
       return { ok: true, method: "clipboard-write" };
     } catch {
-      // Fall through to selection copy for browser or permission edge cases.
+      return { ok: false, method: "noop" };
     }
   }
 
-  if (typeof document === "undefined") {
-    return { ok: false, method: "noop" };
-  }
-
-  const container = document.createElement("div");
-  container.setAttribute("contenteditable", "true");
-  container.style.position = "fixed";
-  container.style.left = "-9999px";
-  container.style.top = "0";
-  container.innerHTML = html;
-  document.body.appendChild(container);
-
-  const selection = window.getSelection();
-  const range = document.createRange();
-  range.selectNodeContents(container);
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-  const copied = document.execCommand("copy");
-  selection?.removeAllRanges();
-  container.remove();
-  return { ok: copied, method: "selection" };
+  return { ok: false, method: "noop" };
 }

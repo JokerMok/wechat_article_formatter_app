@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { JSDOM } from "jsdom";
 import { copyRichText } from "./copy-rich-text";
 
 class MockClipboardItem {
@@ -35,42 +36,53 @@ describe("copyRichText", () => {
     await expect(item.getType("text/html").then((blob) => blob.text())).resolves.toBe(html);
   });
 
-  it("falls back to selection copy when clipboard write is denied", async () => {
+  it("copies inside the active modal during the user gesture and restores focus", async () => {
     const write = vi.fn(async () => {
       throw new Error("denied");
     });
-    const appended: Array<{ remove: () => void }> = [];
-    const remove = vi.fn();
-    vi.stubGlobal("ClipboardItem", MockClipboardItem);
-    vi.stubGlobal("window", {
-      ClipboardItem: MockClipboardItem,
-      getSelection: () => ({
-        removeAllRanges: vi.fn(),
-        addRange: vi.fn(),
-      }),
-    });
-    vi.stubGlobal("navigator", { clipboard: { write } });
-    vi.stubGlobal("document", {
-      createElement: () => ({
-        setAttribute: vi.fn(),
-        style: {},
-        innerHTML: "",
-        remove,
-      }),
-      createRange: () => ({
-        selectNodeContents: vi.fn(),
-      }),
-      body: {
-        appendChild: (node: { remove: () => void }) => appended.push(node),
+    const dom = new JSDOM('<dialog open><button id="copy">Copy</button></dialog>');
+    const doc = dom.window.document;
+    const button = doc.querySelector<HTMLButtonElement>("#copy")!;
+    button.focus();
+    const values: Record<string, string> = {};
+    Object.assign(doc, {
+      execCommand: () => {
+        expect(doc.activeElement?.closest("dialog")).toBe(doc.querySelector("dialog"));
+        const event = new dom.window.Event("copy", { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "clipboardData", {
+          value: { setData: (type: string, value: string) => { values[type] = value; } },
+        });
+        doc.activeElement!.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+        return true;
       },
-      execCommand: vi.fn(() => true),
     });
+    vi.stubGlobal("window", dom.window);
+    vi.stubGlobal("document", doc);
+    vi.stubGlobal("navigator", { clipboard: { write } });
+    try {
+      const html = '<section><p>A &amp; B</p><img src="data:image/png;base64,abc" alt="Image alt" /></section>';
+      expect(await copyRichText(html)).toEqual({ ok: true, method: "selection" });
+      expect(values).toEqual({ "text/html": html, "text/plain": "A & B\nImage alt" });
+      expect(write).not.toHaveBeenCalled();
+      expect(doc.activeElement).toBe(button);
+      expect(doc.querySelector('[contenteditable="true"]')).toBeNull();
+    } finally {
+      dom.window.close();
+    }
+  });
 
-    const result = await copyRichText('<section><p>Fallback</p><img src="data:image/png;base64,abc" alt="Image alt" /></section>');
-
-    expect(write).toHaveBeenCalledOnce();
-    expect(appended).toHaveLength(1);
-    expect(remove).toHaveBeenCalledOnce();
-    expect(result).toEqual({ ok: true, method: "selection" });
+  it("rejects an empty selection copy even when execCommand returns true", async () => {
+    const dom = new JSDOM("<button>Copy</button>");
+    Object.assign(dom.window.document, { execCommand: () => true });
+    vi.stubGlobal("window", dom.window);
+    vi.stubGlobal("document", dom.window.document);
+    vi.stubGlobal("navigator", {});
+    try {
+      expect(await copyRichText("<p>Not copied</p>")).toEqual({ ok: false, method: "noop" });
+      expect(dom.window.document.querySelector('[contenteditable="true"]')).toBeNull();
+    } finally {
+      dom.window.close();
+    }
   });
 });

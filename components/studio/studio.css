@@ -1420,6 +1420,15 @@
   width: 100%;
   margin-bottom: 10px;
 }
+.studio-copy-notice {
+  margin: 0 0 14px;
+  color: var(--s-accent);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.studio-copy-notice.error {
+  color: #8a362b;
+}
 .studio-loading {
   display: flex;
   min-height: 100dvh;
