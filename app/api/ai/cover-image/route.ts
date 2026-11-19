@@ -42,13 +42,13 @@ export async function POST(request: Request) {
     deadline = AbortSignal.timeout(generationTimeoutMs);
     const signal = AbortSignal.any([request.signal, deadline]);
     const { width, height, prompt } = input.data;
-    const { size, safeArea } = coverImageFrame(width, height);
+    const { size, safeWidth, safeHeight } = coverImageFrame(width, height);
     const response = await fetch(`${config.baseUrl.replace(/\/+$/, "")}/responses`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
       body: JSON.stringify({
         model: config.model,
-        instructions: `Use the image tool to create one complete publication-ready cover from the approved brief. Render the requested lettering and typography directly in the artwork, preserving the specified wording and language. Compose for a ${width} by ${height} center crop, with key subjects and all lettering inside ${safeArea}. Do not add unrequested words or watermarks.`,
+        instructions: `Create one complete editorial cover with the image tool. Follow the approved visual concept, subject, composition, typography, and finish. Letter only the specified copy, verbatim, directly in the artwork. Make the focal subject and the title legible at thumbnail size. Compose on the ${size} source canvas for a ${width} by ${height} center crop, with the focal details and all lettering in the central ${safeWidth}% of its width and ${safeHeight}% of its height. Extend the background into the margins. Do not draw the design instructions, guides, extra labels, or watermarks.`,
         input: prompt,
         tools: [{ type: "image_generation", size, quality: "medium", output_format: "png" }],
         tool_choice: { type: "image_generation" },

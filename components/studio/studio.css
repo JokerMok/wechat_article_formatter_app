@@ -1234,6 +1234,21 @@
   color: #8a362b;
   font-size: 13px;
 }
+.studio-cover-angle {
+  margin: 0 0 14px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--s-accent);
+  color: var(--s-ink);
+  font-size: 14px;
+  line-height: 1.65;
+}
+.studio-cover-prompt {
+  line-height: 1.65;
+}
+.studio-dialog-actions.studio-cover-review-actions {
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .studio-cover-frame {
   position: relative;
   width: 100%;

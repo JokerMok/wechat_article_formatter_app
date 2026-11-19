@@ -719,10 +719,17 @@ test("three editable covers, independent cover style and downloadable original P
 });
 
 test("AI cover waits for edited prompt approval and preserves the artwork pixels", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.route("**/api/ai/cover-prompt", (route) =>
-    route.fulfill({ json: { data: { prompt: "绘制标题「阅读新发现」，用靛蓝与金色构图。" } } }),
-  );
+  await page.setViewportSize({ width: 320, height: 844 });
+  const original = "绘制标题「阅读新发现」，用靛蓝与金色构图。";
+  const alternate = "把打开的纸页作为焦点，绘制标题「读书手记」。";
+  const promptRequests: unknown[] = [];
+  await page.route("**/api/ai/cover-prompt", (route) => {
+    const request = route.request().postDataJSON();
+    promptRequests.push(request);
+    return route.fulfill({
+      json: { data: { prompt: request.previousPrompt ? alternate : original, angle: "让纸页成为阅读体验的视觉线索。" } },
+    });
+  });
   const imageRequests: unknown[] = [];
   await page.route("**/api/ai/cover-image", (route) => {
     imageRequests.push(route.request().postDataJSON());
@@ -748,7 +755,12 @@ test("AI cover waits for edited prompt approval and preserves the artwork pixels
   expect(imageRequests).toHaveLength(0);
   await start.click();
   const prompt = review.getByRole("textbox", { name: "封面提示词" });
-  await expect(prompt).toHaveValue("绘制标题「阅读新发现」，用靛蓝与金色构图。");
+  await expect(prompt).toHaveValue(original);
+  await expect(review.getByText("让纸页成为阅读体验的视觉线索。")).toBeVisible();
+  await review.getByRole("button", { name: "换个构思" }).click();
+  await expect(prompt).toHaveValue(alternate);
+  expect(promptRequests.at(-1)).toMatchObject({ previousPrompt: original });
+  expect(await review.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   const edited = "绘制标题「读书手记」，用深蓝与暖橙构图。";
   await prompt.fill(edited);
   expect(imageRequests).toHaveLength(0);

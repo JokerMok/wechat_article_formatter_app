@@ -41,6 +41,24 @@ async function requestCoverAI(action: "prompt" | "image", data: object, signal: 
   return response;
 }
 
+function coverArticleExcerpt(article: ArticleDocument) {
+  const blocks = article.blocks.filter((block) => block.kind !== "title" && block.kind !== "divider");
+  const text = (block: ArticleDocument["blocks"][number]) =>
+    (block.kind === "image" ? block.caption || block.alt || "" : plainHTML(block.html)).trim();
+  if (blocks.length === 1) {
+    const paragraph = text(blocks[0]);
+    return paragraph.length <= 3600 ? paragraph : `${paragraph.slice(0, 2000)}\n…\n${paragraph.slice(-1500)}`;
+  }
+  const beginning = blocks.slice(0, 5).map((block) => text(block).slice(0, 380));
+  const endingAt = Math.max(5, blocks.length - 4);
+  const headings = blocks.slice(5, endingAt)
+    .filter((block) => block.kind === "heading" || block.kind === "subheading")
+    .slice(0, 8)
+    .map((block) => text(block).slice(0, 95));
+  const ending = blocks.slice(endingAt).map((block) => text(block).slice(0, 220));
+  return [...beginning, ...headings, ...ending].filter(Boolean).join("\n").slice(0, 3600);
+}
+
 function CoverCanvas({
   cover,
   assets,
@@ -113,7 +131,7 @@ export function CoverWorkbench({
   const [reference, setReference] = useState("");
   const [imageBrief, setImageBrief] = useState("");
   const [aiStep, setAIStep] = useState<"prompt" | "image" | null>(null);
-  const [review, setReview] = useState<{ prompt: string; width: number; height: number }>();
+  const [review, setReview] = useState<{ prompt: string; angle?: string; width: number; height: number }>();
   const [reviewError, setReviewError] = useState("");
   const generation = useRef<AbortController | null>(null);
   const currentCover = useRef<CoverDocument | undefined>(undefined);
@@ -171,7 +189,7 @@ export function CoverWorkbench({
     } catch (error) {
       if (!controller.signal.aborted) {
         const message = error instanceof Error ? error.message : "AI 封面生成失败，请稍后重试。";
-        if (step === "image") setReviewError(message);
+        if (step === "image" || review) setReviewError(message);
         else {
           setPanel(null);
           onError(message);
@@ -182,31 +200,33 @@ export function CoverWorkbench({
       setAIStep(null);
     }
   };
-  const generatePrompt = () => runCoverAI("prompt", async (signal) => {
-    const excerpt = article.blocks
-      .filter((block) => block.kind !== "title" && block.kind !== "image")
-      .slice(0, 24)
-      .map((block) => plainHTML(block.html).slice(0, 600))
-      .join("\n")
-      .slice(0, 2400);
-    const { name, background, foreground, accent, composition, fontFamily } = cover.style;
+  const generatePrompt = (previousPrompt?: string) => runCoverAI("prompt", async (signal) => {
+    const sourceTitle = article.blocks.find((block) => block.kind === "title");
+    const title = (sourceTitle ? plainHTML(sourceTitle.html) : article.name).trim();
+    const { name, background, foreground, accent, composition, fontFamily, confidence, notes } = cover.style;
     const response = await requestCoverAI("prompt", {
-      title: (cover.title.trim() || article.name).slice(0, 160),
+      title: (title || cover.title).slice(0, 160),
+      ...(cover.title.trim() !== title ? { draftTitle: cover.title.slice(0, 160) } : {}),
       subtitle: cover.subtitle.slice(0, 160),
-      excerpt,
+      excerpt: coverArticleExcerpt(article),
       brief: imageBrief,
-      style: JSON.stringify({ name, background, foreground, accent, composition, fontFamily }).slice(0, 240),
+      style: JSON.stringify({
+        name, background, foreground, accent, composition, fontFamily,
+        ...(confidence === "vision" ? { referenceNotes: notes.slice(0, 2).join(" ").slice(0, 220) } : {}),
+      }).slice(0, 500),
+      ...(previousPrompt ? { previousPrompt } : {}),
       width,
       height,
     }, signal);
-    const { data } = await response.json() as { data?: { prompt?: string } };
+    const { data } = await response.json() as { data?: { prompt?: string; angle?: string } };
     if (!data?.prompt) throw new Error("AI 未返回可用的封面提示词，请重试。");
-    if (!signal.aborted) setReview({ prompt: data.prompt, width, height });
+    if (!signal.aborted) setReview({ prompt: data.prompt, angle: data.angle, width, height });
   });
   const generateImage = () => {
     if (!review?.prompt.trim()) return;
     return runCoverAI("image", async (signal) => {
-      const response = await requestCoverAI("image", { ...review, confirmed: true }, signal);
+      const { prompt, width, height } = review;
+      const response = await requestCoverAI("image", { prompt, width, height, confirmed: true }, signal);
       const image = await response.blob();
       if (signal.aborted) return;
       const asset = await storeImage(new File([image], "AI 完整封面.png", { type: image.type }), "owned");
@@ -259,7 +279,7 @@ export function CoverWorkbench({
         {!artwork && (
           <>
             <label className="studio-field">
-              <span>文章标题</span>
+              <span>手动封面标题</span>
               <textarea
                 aria-label="封面标题"
                 rows={3}
@@ -307,7 +327,7 @@ export function CoverWorkbench({
             rows={2}
             maxLength={300}
             value={imageBrief}
-            placeholder="可选，描述风格、文案或画面"
+            placeholder="可选，填写画面、风格或「指定文案」"
             onChange={(event) => setImageBrief(event.target.value)}
           />
         </label>
@@ -317,7 +337,7 @@ export function CoverWorkbench({
           onClick={() => void generatePrompt()}
         >
           <Sparkles size={16} aria-hidden="true" />
-          {aiStep === "prompt" ? "正在生成提示词…" : "生成封面提示词"}
+          {aiStep === "prompt" ? "正在设计封面…" : "生成封面提示词"}
         </button>
         <h3>参考封面</h3>
         <label className="studio-upload compact">
@@ -434,7 +454,7 @@ export function CoverWorkbench({
       </WorkspacePanel>
       <main className="studio-cover-stage">
         <div className="studio-section-heading">
-          <h3>{artwork ? "AI 完整封面" : "封面预览"}</h3>
+          <h3>{artwork ? "AI 完整封面" : "手动封面预览"}</h3>
           {cover.aiArtwork && (
             <button className="studio-text-btn" type="button" onClick={() => change({ renderMode: artwork ? "manual" : "ai" })}>
               {artwork ? "切换到手动版式" : "查看 AI 封面"}
@@ -696,6 +716,7 @@ export function CoverWorkbench({
       </WorkspacePanel>}
       {review && (
         <StudioDialog title="确认封面提示词" wide onClose={closeReview}>
+          {review.angle && <p className="studio-cover-angle">{review.angle}</p>}
           <label className="studio-field">
             <span>封面提示词</span>
             <textarea
@@ -703,14 +724,24 @@ export function CoverWorkbench({
               rows={10}
               maxLength={coverPromptMaxLength}
               value={review.prompt}
-              disabled={aiStep === "image"}
+              readOnly={Boolean(aiStep)}
+              className="studio-cover-prompt"
               onChange={(event) => setReview({ ...review, prompt: event.target.value })}
             />
           </label>
           {reviewError && <p role="alert" className="studio-cover-prompt-error">{reviewError}</p>}
           {aiStep === "image" && <p role="status" className="studio-note">正在生成完整封面…</p>}
-          <div className="studio-dialog-actions">
+          {aiStep === "prompt" && <p role="status" className="studio-note">正在设计新的构思…</p>}
+          <div className="studio-dialog-actions studio-cover-review-actions">
             <button className="studio-btn" type="button" onClick={closeReview}>取消</button>
+            <button
+              className="studio-btn"
+              type="button"
+              disabled={Boolean(aiStep)}
+              onClick={() => void generatePrompt(review.prompt)}
+            >
+              换个构思
+            </button>
             <button
               className="studio-btn primary"
               type="button"
