@@ -4,9 +4,9 @@
 
 | 项目 | 实际部署 |
 | --- | --- |
-| 正式运行版本 | `563fa59f9e128bc3b8e9efbab5573dd2ac00bfdd` |
-| 发布包 SHA-256 | `3f340fd629aa7d0c2fd43634d233081d8eae602f1ce13f6ecd1d9b843b560785` |
-| 上一版 | `3922fe039bded3e5943c72cdb932fda511edc362`，差分基础仍为 `974f2b02d123ad1ba3b605828cc859d3097df969` |
+| 正式运行版本 | `f5de9422c5d2e7a7a35703745dd93fd1e3cfe498` |
+| 发布包 SHA-256 | `c8ca69355e66f38ac88711068ba48e7b3b15dd29323ad7dbfa15d486f2c9943d` |
+| 上一版 | `563fa59f9e128bc3b8e9efbab5573dd2ac00bfdd`，差分基础仍为 `974f2b02d123ad1ba3b605828cc859d3097df969` |
 | 服务器 | `ssh tencent-main`，`/srv/apps/formatter` |
 | 后端 | systemd `formatter.service`，`127.0.0.1:18877`，开机自启 |
 | 入口 | Caddy 提供哈希静态资源，风格工作台、受控 API 和账号回调走同源回环反代 |
@@ -27,7 +27,7 @@
 
 从 GitHub 维护分支更新时运行 `bash deploy/tencent/update.sh codex/product-readiness`，也可传入 `local:<提交SHA>`。需要差分构建时先从服务器取基础包，并将其路径和版本分别传入 `FORMATTER_DELTA_BASE`、`FORMATTER_DELTA_BASE_SHA`。基础版本 `974f2b02d123ad1ba3b605828cc859d3097df969` 的包位于 `/srv/apps/formatter/releases/974f2b02d123ad1ba3b605828cc859d3097df969/runtime.tar.gz`。独立构建需要保留当前部署工具和匹配的 Chromium 运行时。
 
-普通回退用 `ssh tencent-main 'sudo /srv/apps/formatter/shared/config/manage.sh rollback'`。当前上一版 `d7caaef` 支持正式回调。若继续回退至 `9265415`，先按 [账号回退步骤](docs/ACCOUNT_CENTER_INTEGRATION.md#正式环境回退) 暂停账号模式。此次 Caddy 的上一份配置在 `/srv/ops/rollback/caddy/formatter.Y4y0YZqE`。
+普通回退用 `ssh tencent-main 'sudo /srv/apps/formatter/shared/config/manage.sh rollback'`。当前上一版 `563fa59` 沿用相同账号配置和数据库结构。若继续回退至 `9265415`，先按 [账号回退步骤](docs/ACCOUNT_CENTER_INTEGRATION.md#正式环境回退) 暂停账号模式。旧版 Caddy 配置的恢复点在 `/srv/ops/rollback/caddy/formatter.Y4y0YZqE`。
 
 ## 2026-11-19 单点登录与平台所有者
 
@@ -40,3 +40,7 @@
 ## 2026-11-19 公众号图文复制修复
 
 正式运行 `563fa59`。原备用复制目标位于模态弹窗外，导致内容无法选中，命令却返回成功，实测剪贴板保留旧值。现在在弹窗内同步写入 HTML 和纯文本，并检查复制事件已填入数据，导出窗口内直接反馈结果。Chromium 的真实剪贴板读写、富文本粘贴及失败状态通过，WebKit 26.5 实际粘贴保留正文、可解码 PNG、链接与内联样式。定向检查和生产构建通过，线上前端文件逐字节匹配发布包。公众号后台保存草稿尚未实测。浏览器证据在 `artifacts/style-studio/clipboard-fix/`，上一版 `3922fe0` 可回退。
+
+## 2026-11-19 AI 封面设计
+
+正式运行 `f5de942`。AI 从正文提炼短标题和视觉构思，生成含构图、质感和文字排版的提示词。可编辑或换构思，确认后才生成完整封面。使用截图文章节选在本地 Chromium 通过真实网关生成两套构思，确认前零次生图，确认后一次，导出 900 × 383 PNG。证据在 `artifacts/style-studio/cover-design-20261119/`。定向测试、生产构建、公网资源摘要和接口鉴权通过。完整生图在本地验收。回退版本为 `563fa59`。
