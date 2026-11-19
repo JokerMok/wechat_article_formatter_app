@@ -65,7 +65,7 @@ async function oidcConfig() {
 }
 
 type LoginCredentials = { username: string; password: string };
-type SsoOptions = { sso: true; expectedUid?: string; owner?: boolean; interactive?: boolean };
+type SsoOptions = { sso: true; expectedUid?: string; prompt?: "none" | "login" };
 
 async function passwordLogin(credentials: LoginCredentials, authURL: URL) {
   const config = accountConfig();
@@ -136,13 +136,13 @@ export async function startLogin(options?: LoginCredentials | "register" | "swit
   const previous = jar.get(cookieName())?.value;
   const prior = await localSession();
   const sso = typeof options === "object" && "sso" in options ? options : undefined;
+  const prompt = options === "switch" ? "login" : sso?.prompt;
   const authURL = oidc.buildAuthorizationUrl(oidcClient, {
     response_type: "code", scope: "openid profile", redirect_uri: c.redirect.href,
     state, nonce, code_challenge: await oidc.calculatePKCECodeChallenge(verifier),
     code_challenge_method: "S256",
-    ...(sso && !sso.interactive ? { prompt: "none" } : options === "switch" ? { prompt: "login" } : {}),
+    ...(prompt ? { prompt } : {}),
   });
-  if (sso?.owner) authURL.searchParams.set("platform_owner", "1");
   let target = authURL;
   if (options === "register") {
     target = new URL("/signup/oauth/authorize", c.issuer);
@@ -151,8 +151,8 @@ export async function startLogin(options?: LoginCredentials | "register" | "swit
     target = await passwordLogin(options, authURL);
   }
   await accountDB().query(
-    "INSERT INTO formatter_accounts.attempts(state_hash,binding_hash,prior_session,verifier,nonce,expires_at,expected_uid,owner_signin,silent_signin) VALUES($1,$2,$3,$4,$5,now()+interval '8 minutes',$6,$7,$8)",
-    [digest(state), digest(browser), prior?.token_hash ?? null, verifier, nonce, sso?.expectedUid ?? null, sso?.owner === true, !!sso && !sso.interactive],
+    "INSERT INTO formatter_accounts.attempts(state_hash,binding_hash,prior_session,verifier,nonce,expires_at,expected_uid,silent_signin) VALUES($1,$2,$3,$4,$5,now()+interval '8 minutes',$6,$7)",
+    [digest(state), digest(browser), prior?.token_hash ?? null, verifier, nonce, sso?.expectedUid ?? null, prompt === "none"],
   );
   const response = noStore(NextResponse.redirect(target, 303));
   response.cookies.set(attemptCookie(), browser, { ...cookieOptions(), maxAge: 480 });
@@ -179,9 +179,9 @@ export async function completeLogin(request: Request) {
   if (!browser) throw invalidLogin();
   const previous = jar.get(cookieName())?.value;
   const priorHash = previous ? digest(previous) : null;
-  const attempt = (await accountDB().query<{ prior_session: string | null; verifier: string; nonce: string; expected_uid: string | null; owner_signin: boolean; silent_signin: boolean }>(
+  const attempt = (await accountDB().query<{ prior_session: string | null; verifier: string; nonce: string; expected_uid: string | null; silent_signin: boolean }>(
     `DELETE FROM formatter_accounts.attempts WHERE state_hash=$1 AND binding_hash=$2
-     AND expires_at>now() RETURNING prior_session,verifier,nonce,expected_uid,owner_signin,silent_signin`, [digest(state), digest(browser)],
+     AND expires_at>now() RETURNING prior_session,verifier,nonce,expected_uid,silent_signin`, [digest(state), digest(browser)],
   )).rows[0];
   if (!attempt || attempt.prior_session !== priorHash) throw invalidLogin();
   const finish = (reason?: string) => {
@@ -190,7 +190,7 @@ export async function completeLogin(request: Request) {
     return result;
   };
   if (attempt.silent_signin && ["login_required", "consent_required", "interaction_required"].includes(incoming.searchParams.get("error") ?? ""))
-    return startLogin({ sso: true, expectedUid: attempt.expected_uid ?? undefined, owner: attempt.owner_signin, interactive: true });
+    return startLogin({ sso: true, expectedUid: attempt.expected_uid ?? undefined });
   if (incoming.searchParams.has("error")) return finish(
     incoming.searchParams.get("error") === "access_denied" ? "cancelled" : "login-failed",
   );
@@ -204,7 +204,11 @@ export async function completeLogin(request: Request) {
         (claims.azp !== undefined && claims.azp !== c.clientId)) throw invalidLogin();
     const user = await center.identity(tokens.access_token);
     if (user.issuer !== claims.iss || user.subject !== claims.sub) throw invalidLogin();
-    if (attempt.expected_uid && user.uid !== attempt.expected_uid) return finish("account-mismatch");
+    if (attempt.expected_uid && user.uid !== attempt.expected_uid) {
+      if (attempt.silent_signin)
+        return await startLogin({ sso: true, expectedUid: attempt.expected_uid, prompt: "login" });
+      return finish("account-mismatch");
+    }
     const maxAge = Math.min(Math.floor(claims.exp - Date.now() / 1000), tokens.expiresIn() ?? 3600, 8 * 3600);
     if (maxAge < 1) throw invalidLogin();
 

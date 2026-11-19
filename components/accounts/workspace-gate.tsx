@@ -169,10 +169,6 @@ export function WorkspaceGate({ children }: {
                       <button className="formatter-signin-primary" type="submit">登录 <ArrowRight size={18} aria-hidden="true" /></button>
                     </form>
                     <div className="formatter-signin-links">
-                      <form method="get" action="/api/account/sso"><button type="submit">使用统一账号登录</button></form>
-                      <form method="get" action="/api/account/sso"><input type="hidden" name="mode" value="owner" /><button type="submit">平台管理员登录</button></form>
-                    </div>
-                    <div className="formatter-signin-links">
                       <form method="post" action="/api/account/register">
                         <button type="submit">注册账号</button>
                       </form>

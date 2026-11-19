@@ -26,9 +26,9 @@ export async function GET(request: Request, context: Context) {
       if (context) {
         if (!/^[A-Za-z0-9_-]{43}$/.test(context)) throw new AccountError(400, "INVALID_LAUNCH", "进入链接无效，请从个人中心重新打开。");
         const target = await center.launch(context);
-        return await startLogin({ sso: true, expectedUid: target.uid, owner: target.platform_owner });
+        return await startLogin({ sso: true, expectedUid: target.uid, prompt: "none" });
       }
-      return await startLogin({ sso: true, owner: url.searchParams.get("mode") === "owner" });
+      return await startLogin({ sso: true, prompt: "none" });
     }
     if (action === "reset") {
       const { issuer, application } = accountConfig();

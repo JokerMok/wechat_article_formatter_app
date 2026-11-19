@@ -72,7 +72,7 @@ async function call<T>(schema: z.ZodType<T>, path: string, token?: string, body?
 
 type Locator = { reservation_id: string } | { request_id: string };
 export const center = {
-  launch: (context: string) => call(z.object({ uid: z.uuid(), platform_owner: z.boolean() }), "/login-context", undefined, { context }),
+  launch: (context: string) => call(z.object({ uid: z.uuid() }), "/login-context", undefined, { context }),
   async identity(token: string) {
     const { user } = await call(z.object({ user: identity }), "/identity", token);
     if ((user.organization !== "consumers" && !(user.organization === "built-in" && user.platform_owner)) || user.blocked)
