@@ -20,6 +20,16 @@ export async function GET(request: Request, context: Context) {
   if (!accountEnabled()) return json({ code: "NOT_FOUND" }, 404);
   const { action } = await context.params;
   try {
+    if (action === "sso") {
+      const url = new URL(request.url);
+      const context = url.searchParams.get("launch");
+      if (context) {
+        if (!/^[A-Za-z0-9_-]{43}$/.test(context)) throw new AccountError(400, "INVALID_LAUNCH", "进入链接无效，请从个人中心重新打开。");
+        const target = await center.launch(context);
+        return await startLogin({ sso: true, expectedUid: target.uid, owner: target.platform_owner });
+      }
+      return await startLogin({ sso: true, owner: url.searchParams.get("mode") === "owner" });
+    }
     if (action === "reset") {
       const { issuer, application } = accountConfig();
       return noStore(NextResponse.redirect(new URL(`/forget/${application}`, issuer), 303));
@@ -68,7 +78,7 @@ export async function POST(request: Request, context: Context) {
       const session = await localSession();
       if (!session || !equal(binding ?? "", session.binding))
         throw new AccountError(409, "ACCOUNT_CHANGED", "账号已切换，请刷新当前页面。");
-      return await startLogin();
+      return await startLogin("switch");
     }
     if (action === "logout") {
       const session = await localSession();

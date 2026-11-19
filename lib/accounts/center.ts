@@ -20,14 +20,16 @@ const identity = z.object({
   display_name: z.string().nullish(),
   organization: z.string(),
   blocked: z.boolean().optional(),
+  platform_owner: z.boolean().default(false),
 });
 export const entitlementsSchema = z.object({
   product: z.object({ id: bounded }),
-  membership: z.object({ active: z.boolean(), expires_at: z.string().nullable() }),
+  membership: z.object({ active: z.boolean(), expires_at: z.string().nullable(), permanent: z.boolean().default(false) }),
   features: z.array(z.object({
     id: bounded, name: bounded, kind: z.enum(["access", "quota"]),
     allowed: z.boolean(), remaining: z.number().int().nonnegative(),
     held: z.number().int().nonnegative(),
+    unlimited: z.boolean().default(false),
   })),
 });
 export const reservationSchema = z.object({
@@ -70,9 +72,10 @@ async function call<T>(schema: z.ZodType<T>, path: string, token?: string, body?
 
 type Locator = { reservation_id: string } | { request_id: string };
 export const center = {
+  launch: (context: string) => call(z.object({ uid: z.uuid(), platform_owner: z.boolean() }), "/login-context", undefined, { context }),
   async identity(token: string) {
     const { user } = await call(z.object({ user: identity }), "/identity", token);
-    if (user.organization !== "consumers" || user.blocked)
+    if ((user.organization !== "consumers" && !(user.organization === "built-in" && user.platform_owner)) || user.blocked)
       throw new AccountError(403, "IDENTITY_INACTIVE", "该消费者账号当前不可用。");
     return user;
   },

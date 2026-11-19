@@ -16,6 +16,7 @@ const loginMessages: Record<string, string> = {
   "login-failed": "登录未完成，请重试。",
   "invalid-credentials": "账号或密码不正确，请重试。",
   "login-expired": "登录请求已过期、已使用或被另一个标签页替换，请重新登录。",
+  "account-mismatch": "统一账号与个人中心不一致，未切换账号或作品归属。请从个人中心重新打开。",
   "mapping-conflict": "账号关联未完成，已有作品归属未变更。",
   cancelled: "已取消登录。",
 };
@@ -168,6 +169,10 @@ export function WorkspaceGate({ children }: {
                       <button className="formatter-signin-primary" type="submit">登录 <ArrowRight size={18} aria-hidden="true" /></button>
                     </form>
                     <div className="formatter-signin-links">
+                      <form method="get" action="/api/account/sso"><button type="submit">使用统一账号登录</button></form>
+                      <form method="get" action="/api/account/sso"><input type="hidden" name="mode" value="owner" /><button type="submit">平台管理员登录</button></form>
+                    </div>
+                    <div className="formatter-signin-links">
                       <form method="post" action="/api/account/register">
                         <button type="submit">注册账号</button>
                       </form>
@@ -207,11 +212,11 @@ export function WorkspaceGate({ children }: {
         <strong>{state.name}</strong>
         {state.rights ? (
           <>
-            <p>{state.rights.membership.active ? "本产品会员" : state.rights.membership.expires_at ? "会员已到期" : "未开通会员"}
+            <p>{state.rights.membership.permanent ? "全产品会员 · 永久有效" : state.rights.membership.active ? "本产品会员" : state.rights.membership.expires_at ? "会员已到期" : "未开通会员"}
               {state.rights.membership.expires_at && <time dateTime={state.rights.membership.expires_at}> · {new Date(state.rights.membership.expires_at).toLocaleDateString("zh-CN")}</time>}
             </p>
             <ul aria-label="本产品额度">{state.rights.features.filter((feature) => feature.kind === "quota").map((feature) =>
-              <li key={feature.id}><span>{feature.name}</span><span>{feature.remaining} 次{feature.held ? ` · 预占 ${feature.held}` : ""}</span></li>,
+              <li key={feature.id}><span>{feature.name}</span><span>{feature.unlimited ? "不限次数" : `${feature.remaining} 次${feature.held ? ` · 预占 ${feature.held}` : ""}`}</span></li>,
             )}</ul>
           </>
         ) : <p role="status">{state.rightsError ?? "正在查询权益…"} <button onClick={() => void refresh()} type="button">重试</button></p>}

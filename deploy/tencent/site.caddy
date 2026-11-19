@@ -47,7 +47,7 @@ formatter.shizibandu.icu {
 
 	@account {
 		method GET POST
-		path /api/account/status /api/account/login /api/account/register /api/account/reset /api/account/switch /api/account/logout /api/account/logout-all /api/account/entry /auth/callback/wechat-article-formatter
+		path /api/account/sso /api/account/status /api/account/login /api/account/register /api/account/reset /api/account/switch /api/account/logout /api/account/logout-all /api/account/entry /auth/callback/wechat-article-formatter
 		file /.formatter-dynamic
 	}
 	handle @account {
