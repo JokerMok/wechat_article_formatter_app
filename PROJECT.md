@@ -4,9 +4,9 @@
 
 | 项目 | 实际部署 |
 | --- | --- |
-| 正式运行版本 | `f5de9422c5d2e7a7a35703745dd93fd1e3cfe498` |
-| 发布包 SHA-256 | `c8ca69355e66f38ac88711068ba48e7b3b15dd29323ad7dbfa15d486f2c9943d` |
-| 上一版 | `563fa59f9e128bc3b8e9efbab5573dd2ac00bfdd`，差分基础仍为 `974f2b02d123ad1ba3b605828cc859d3097df969` |
+| 正式运行版本 | `223ed2cde0c354503e13c6ab3cb0e325d0f22e3c` |
+| 发布包 SHA-256 | `a7f0e0664d3bb9aaa19cc244b6899c2390e63939913fb45fc9d492f2a4a86424` |
+| 上一版 | `f5de9422c5d2e7a7a35703745dd93fd1e3cfe498`，差分基础仍为 `974f2b02d123ad1ba3b605828cc859d3097df969` |
 | 服务器 | `ssh tencent-main`，`/srv/apps/formatter` |
 | 后端 | systemd `formatter.service`，`127.0.0.1:18877`，开机自启 |
 | 入口 | Caddy 提供哈希静态资源，风格工作台、受控 API 和账号回调走同源回环反代 |
@@ -27,7 +27,7 @@
 
 从 GitHub 维护分支更新时运行 `bash deploy/tencent/update.sh codex/product-readiness`，也可传入 `local:<提交SHA>`。需要差分构建时先从服务器取基础包，并将其路径和版本分别传入 `FORMATTER_DELTA_BASE`、`FORMATTER_DELTA_BASE_SHA`。基础版本 `974f2b02d123ad1ba3b605828cc859d3097df969` 的包位于 `/srv/apps/formatter/releases/974f2b02d123ad1ba3b605828cc859d3097df969/runtime.tar.gz`。独立构建需要保留当前部署工具和匹配的 Chromium 运行时。
 
-普通回退用 `ssh tencent-main 'sudo /srv/apps/formatter/shared/config/manage.sh rollback'`。当前上一版 `563fa59` 沿用相同账号配置和数据库结构。若继续回退至 `9265415`，先按 [账号回退步骤](docs/ACCOUNT_CENTER_INTEGRATION.md#正式环境回退) 暂停账号模式。旧版 Caddy 配置的恢复点在 `/srv/ops/rollback/caddy/formatter.Y4y0YZqE`。
+普通回退用 `ssh tencent-main 'sudo /srv/apps/formatter/shared/config/manage.sh rollback'`。当前上一版 `f5de942` 沿用相同账号配置和数据库结构。若继续回退至 `9265415`，先按 [账号回退步骤](docs/ACCOUNT_CENTER_INTEGRATION.md#正式环境回退) 暂停账号模式。旧版 Caddy 配置的恢复点在 `/srv/ops/rollback/caddy/formatter.Y4y0YZqE`。
 
 ## 2026-11-19 单点登录与平台所有者
 
@@ -44,3 +44,7 @@
 ## 2026-11-19 AI 封面设计
 
 正式运行 `f5de942`。AI 从正文提炼短标题和视觉构思，生成含构图、质感和文字排版的提示词。可编辑或换构思，确认后才生成完整封面。使用截图文章节选在本地 Chromium 通过真实网关生成两套构思，确认前零次生图，确认后一次，导出 900 × 383 PNG。证据在 `artifacts/style-studio/cover-design-20261119/`。定向测试、生产构建、公网资源摘要和接口鉴权通过。完整生图在本地验收。回退版本为 `563fa59`。
+
+## 2026-11-20 封面接入 Baoyu 提示词规则
+
+正式运行 `223ed2c`。内置 `baoyu-cover-image` 的自动选型、风格预设与兼容建议，工作台尺寸和用户指定文案优先。已分析参考的配色、布局和材质规则纳入提示词。浏览器通过真实网关生成并导出 900 × 383 封面，预设覆盖、纯图与参考规则通过真实提示词接口验证。证据在 `artifacts/style-studio/baoyu-cover-design-20261120/`。定向检查和正式构建通过，公网校验新版资源和接口鉴权。回退版本为 `f5de942`。
