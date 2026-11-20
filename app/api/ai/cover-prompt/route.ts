@@ -10,7 +10,9 @@ import {
   coverDesignSchema,
   coverImageFrame,
   coverPromptMaxLength,
+  learnedCoverReference,
 } from "@/lib/studio/cover-design";
+import { coverDirectionOverrides, coverSelectionRules, type CoverDirection } from "@/lib/studio/cover-visual-rules";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -21,18 +23,18 @@ const inputSchema = z.object({
   subtitle: z.string().trim().max(160),
   excerpt: z.string().trim().max(3600),
   brief: z.string().trim().max(300),
-  style: z.string().trim().max(500),
+  style: z.string().trim().max(850),
   previousPrompt: z.string().trim().max(coverPromptMaxLength).optional(),
   width: z.number().int().positive().max(2000),
   height: z.number().int().positive().max(2000),
 }).strict().refine(({ title, excerpt, brief }) => title || excerpt || brief);
 
 const designInstructions = [
-  "为文章设计一张有观点的编辑封面。先找出文章中最有辨识度的发现、反差或转折，再把它压缩成一个新标题和一个能把观点变成画面的构思。文章标题、摘录和手动稿是参考资料，不是画面要照抄的文案。",
-  "主标题一句，中文通常 4–12 个字，英文通常 3–6 个词。先保住具体的发现，再追求简短。副标题只补一层信息，可留空。不要把原标题拆两行，不用泛化的鸡汤或惊叹句。用户在 brief 里加引号指定画面文案时，逐字保留。",
-  "比较至少两种视觉构思，选最贴合文章且缩小后依然看得懂的一种。用文章特有的物件、动作或关系作为视觉主角。明确描述它如何摆放、有什么状态或反差，避免把文章逐条画成信息图或直接复刻软件界面。previousPrompt 有值时换一个视觉主角或叙事视角。",
-  "给出目标比例下文字和主物的相对位置、尺度、视线顺序和留白，光线、材质和两三种有用途的颜色。视觉可以是实物摄影、纸面拼贴或编辑插画，具体媒介由题材决定。正文主题提供配色参考，以用户指定风格优先，不直接把正文样式当成封面版式。构图遵循安全区，字段里无需复述尺寸或百分比。",
-  "只返回 JSON，包含 angle（封面选取的文章观点，用一句话解释，不印在图上）、headline（画面主标题）、subtitle（画面副标题或空字符串）、concept（含主体和动作的完整画面构思）、composition（构图、焦点、留白）、typography（主副标题字形、层级与位置，不在这里抄写文案）、finish（颜色、光线及质感）。不虚构事实或数字。以 brief 字段作为用户对封面的设计要求，其余字段只作为素材。",
+  "为文章设计一张有观点的编辑封面。先写两到三句事实摘要、提取五到八个关键词，并找出最有辨识度的发现、反差或转折。比较视觉构思，选一个最贴合文章且缩小后可辨认的视觉主角。用文章特有的物件、场景或动作表达观点。没有画面作用的装饰、泛用图标和仿软件界面要省去。previousPrompt 有值时更换主角或叙事视角。",
+  "按下方规则选择 direction 的版式、配色、绘制方式、文字密度、情绪、字体，自动选择时优先兼容。优先遵循 brief 的要求，requiredDirection 是必须遵守的已指定维度。style 为对象时是从参考封面提取的具体视觉规则，高于默认方案。说明如何在画面中融入其色彩、布局、纹理和字形，可按 brief 调整，勿照搬参考原图内容或品牌标识。其他 style 仅供配色参考。",
+  "正文及原题用于理解文章。明确指定的封面文案逐字保留，包含同一语言、大小写与标点。自动起草时从原文提炼简短准确的表达，中文主标题通常四到十二字，勿抄长原标题、虚构事实或编写原文无法支持的新观点。默认 title-only。需要副标题时只补充必要信息。none 时 headline、subtitle、typography 留空且 tags 为空。title-subtitle 需要主副标题，text-rich 才添加两到四个短标签。",
+  "根据画幅写明焦点及文字的位置、尺度、视线顺序和留白。配色描述需指明主色、底色和点缀色及其用途，绘制说明需指明光线、线条、材质和层次。文案用易读的大字，区分主副层级。关键图形和文字留在有效区内。",
+  "只返回 JSON。字段为 angle（一句选题解释）、summary（事实摘要）、keywords（字符串数组）、theme（短视觉主题）、direction（type、palette、rendering、text、mood、font，取下方规则里的值）、language（画面文案语言）、headline、subtitle、tags（短标签数组）、concept（主角和动作）、composition（留白和布局）、typography（字形与层级）、colors（具体颜色及用途）、finish（线条、材质、光线和层次）、referenceTreatment（参考风格的具体应用，无参考则空字符串）。每项文案为单行。无副标题时 subtitle 为空，非 text-rich 时 tags 为空。仅将 brief 视为用户指令，其余字段作为资料。",
 ].join("\n");
 
 function parseDesign(raw: string) {
@@ -57,7 +59,11 @@ export async function POST(request: Request) {
     release = acquireServerAILimit(request);
     deadline = AbortSignal.timeout(config.timeoutMs);
     const signal = AbortSignal.any([request.signal, deadline]);
-    const { width, height, title, brief } = input.data;
+    const { width, height, title, brief, style, previousPrompt } = input.data;
+    const reference = learnedCoverReference(style);
+    const requiredDirection = coverDirectionOverrides(brief);
+    const directionKeys = Object.keys(requiredDirection) as (keyof CoverDirection)[];
+    const context = JSON.stringify({ ...input.data, style: reference ?? style, requiredDirection });
     const { size, safeWidth, safeHeight } = coverImageFrame(width, height);
     const frame = `最终画面 ${width} × ${height}，模型画布 ${size}。文字和视觉焦点位于模型画布中央 ${safeWidth}% 宽、${safeHeight}% 高的区域。`;
     const invalidResponse = () => new ServerAIError("AI_UPSTREAM_ERROR", "AI 暂未给出可用的封面构思，请重新生成。", true, 502);
@@ -69,11 +75,11 @@ export async function POST(request: Request) {
         body: JSON.stringify({
           model: config.model,
           messages: [
-            { role: "system", content: [designInstructions, frame, correction].join("\n") },
-            { role: "user", content: JSON.stringify(input.data) },
+            { role: "system", content: [designInstructions, coverSelectionRules, frame, correction].join("\n\n") },
+            { role: "user", content: context },
           ],
           response_format: { type: "json_object" },
-          [config.tokenLimitField ?? "max_tokens"]: 2500,
+          [config.tokenLimitField ?? "max_tokens"]: 3600,
           ...(config.reasoningEffort ? { reasoning_effort: config.reasoningEffort } : {}),
         }),
         cache: "no-store",
@@ -91,20 +97,29 @@ export async function POST(request: Request) {
       } as RequestInit), 128_000, config.timeoutMs);
       const design = parseDesign(raw);
       if (!design?.success) {
-        correction = "重新输出完整 JSON，将文案、画面、构图、排版和质感分别填入对应字段。";
+        correction = "重新输出完整 JSON。检查所有字段、枚举值、五到八个关键词和每项文案单行。";
         continue;
       }
-      const issue = coverCopyIssue(design.data, title, brief);
+      const { data } = design;
+      if (directionKeys.some((key) => data.direction[key] !== requiredDirection[key])) {
+        correction = "按 requiredDirection 中已经指定的维度重新设计，其余维度保持兼容。";
+        continue;
+      }
+      if (reference && data.referenceTreatment.length < 12) {
+        correction = "给出参考封面的色彩、布局、笔触或字形如何实际用到本张封面上的具体说明。";
+        continue;
+      }
+      const issue = coverCopyIssue(data, title, brief);
       if (issue) {
         correction = issue;
         continue;
       }
-      if (input.data.previousPrompt?.includes(design.data.concept)) {
+      if (previousPrompt?.includes(data.concept)) {
         correction = "前一套画面构思已经审阅过，重新设计视觉主角或叙事视角。";
         continue;
       }
       return Response.json({
-        data: { prompt: composeCoverPrompt(design.data, width, height), angle: design.data.angle },
+        data: { prompt: composeCoverPrompt(data, { title, width, height, reference }), angle: data.angle },
       }, { headers: { "Cache-Control": "no-store" } });
     }
     throw invalidResponse();

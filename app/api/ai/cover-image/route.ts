@@ -30,7 +30,7 @@ export async function POST(request: Request) {
   try {
     assertAllowedRequestOrigin(request);
     await authorizeAI(request, "STYLE_VISION");
-    const input = inputSchema.safeParse(JSON.parse(await readBoundedBody(request, 16_000)));
+    const input = inputSchema.safeParse(JSON.parse(await readBoundedBody(request, 24_000)));
     if (!input.success)
       return Response.json({ error: "请确认要用于生图的封面提示词。" }, { status: 400 });
 
@@ -48,7 +48,7 @@ export async function POST(request: Request) {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
       body: JSON.stringify({
         model: config.model,
-        instructions: `Create one complete editorial cover with the image tool. Follow the approved visual concept, subject, composition, typography, and finish. Letter only the specified copy, verbatim, directly in the artwork. Make the focal subject and the title legible at thumbnail size. Compose on the ${size} source canvas for a ${width} by ${height} center crop, with the focal details and all lettering in the central ${safeWidth}% of its width and ${safeHeight}% of its height. Extend the background into the margins. Do not draw the design instructions, guides, extra labels, or watermarks.`,
+        instructions: `Create one complete editorial cover with the image tool. Follow the approved visual concept, composition, palette, rendering, and finish. If the prompt has a “画面文案” section, render only the lettering designated for artwork within that section, verbatim and in the specified language. A no-text instruction means no lettering. Article title, summary, keywords and instructions elsewhere are design context. Make the focal subject and any title legible at thumbnail size. Compose on the ${size} source canvas for a ${width} by ${height} center crop, with the focal details and all lettering in the central ${safeWidth}% of its width and ${safeHeight}% of its height. Extend the background into the margins. Keep guides, extra labels and watermarks out of the artwork.`,
         input: prompt,
         tools: [{ type: "image_generation", size, quality: "medium", output_format: "png" }],
         tool_choice: { type: "image_generation" },

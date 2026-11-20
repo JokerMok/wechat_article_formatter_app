@@ -212,8 +212,8 @@ export function CoverWorkbench({
       brief: imageBrief,
       style: JSON.stringify({
         name, background, foreground, accent, composition, fontFamily,
-        ...(confidence === "vision" ? { referenceNotes: notes.slice(0, 2).join(" ").slice(0, 220) } : {}),
-      }).slice(0, 500),
+        ...(confidence === "vision" ? { referenceNotes: notes.slice(0, 3).join(" ").slice(0, 340) } : {}),
+      }),
       ...(previousPrompt ? { previousPrompt } : {}),
       width,
       height,
