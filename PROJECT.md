@@ -4,9 +4,9 @@
 
 | 项目 | 实际部署 |
 | --- | --- |
-| 正式运行版本 | `ac92110802bbedf4804de7e3c289c4bc81de3fb3` |
-| 发布包 SHA-256 | `14c31d3c1a7f17eafe1a5c498a7855b2713b2e83824df7944e7e5882d2446be9` |
-| 上一版 | `223ed2cde0c354503e13c6ab3cb0e325d0f22e3c`，差分基础仍为 `974f2b02d123ad1ba3b605828cc859d3097df969` |
+| 正式运行版本 | `1fee8012339ebd7bd31decadbbaef20aadc7b48a` |
+| 发布包 SHA-256 | `4d949b3b627ca014944d2c1d79d4a00c69a6b5cbf357aa6bbab5327707aad72a` |
+| 上一版 | `ac92110802bbedf4804de7e3c289c4bc81de3fb3`，差分基础仍为 `974f2b02d123ad1ba3b605828cc859d3097df969` |
 | 服务器 | `ssh tencent-main`，`/srv/apps/formatter` |
 | 后端 | systemd `formatter.service`，`127.0.0.1:18877`，开机自启 |
 | 入口 | Caddy 提供哈希静态资源，风格工作台、受控 API 和账号回调走同源回环反代 |
@@ -29,7 +29,7 @@
 
 包含正文 AI 配图的版本需要同步安装 `deploy/tencent/site.caddy`，使 `/api/ai/article-image` 经产品域名转发。配图复用封面生图模型和现有 `style-vision` 权益。
 
-普通回退用 `ssh tencent-main 'sudo /srv/apps/formatter/shared/config/manage.sh rollback'`。当前上一版 `223ed2c` 沿用相同账号配置和数据库结构。配图路由的 Caddy 回退配置在 `/srv/ops/rollback/caddy/formatter.Y0GeImcB`。若继续回退至 `9265415`，先按 [账号回退步骤](docs/ACCOUNT_CENTER_INTEGRATION.md#正式环境回退) 暂停账号模式。
+普通回退用 `ssh tencent-main 'sudo /srv/apps/formatter/shared/config/manage.sh rollback'`。当前上一版 `ac92110` 沿用相同账号配置和数据库结构。配图路由的 Caddy 回退配置在 `/srv/ops/rollback/caddy/formatter.Y0GeImcB`。若继续回退至 `9265415`，先按 [账号回退步骤](docs/ACCOUNT_CENTER_INTEGRATION.md#正式环境回退) 暂停账号模式。
 
 ## 2026-11-19 单点登录与平台所有者
 
@@ -54,3 +54,7 @@
 ## 2026-11-23 正文 AI 配图与数值输入
 
 正式运行 `ac92110`。编辑器工具栏在「图片」右侧提供「AI 配图」，样式数值可直接输入。Caddy 仅新增配图 API 转发，已经校验并重载。公网首页及新版资源校验、两条图片接口鉴权和腾讯云到网关健康检查通过。完整生成和插入已由本地浏览器通过真实网关验收，原 Chrome 标签页的刷新验证超时。为保留备份空间，清理了两份可重建的 APT 二进制缓存，共回收 112381952 字节。回退版本为 `223ed2c`。
+
+## 2026-11-23 公众号标题与正文分开复制
+
+正式运行 `1fee801`。「复制标题」写入纯文本，「复制正文图文」写入排除主标题的富文本。正文预览与正文 HTML 保留章节、图片、链接和内联样式。Chromium 与 WebKit 实际剪贴板粘贴通过，覆盖拒绝访问与仅有标题的稿件。公网静态资源与发布包一致。回退版本为 `ac92110`。
