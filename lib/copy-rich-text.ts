@@ -17,7 +17,7 @@ function htmlToPlainText(html: string) {
   return container.value;
 }
 
-function copySelection(html: string, text: string) {
+function copySelection(text: string, html?: string) {
   if (typeof document === "undefined" || typeof document.execCommand !== "function") return false;
   const selection = window.getSelection();
   if (!selection) return false;
@@ -30,14 +30,15 @@ function copySelection(html: string, text: string) {
     position: "fixed", left: "0", top: "0", width: "1px", height: "1px",
     opacity: "0", overflow: "hidden", pointerEvents: "none",
   });
-  container.innerHTML = html;
+  if (html === undefined) container.textContent = text;
+  else container.innerHTML = html;
   // Modal dialogs make the rest of the document inert, including a body-level copy target.
   const host = focused?.closest("dialog[open]") ?? document.querySelector("dialog[open]") ?? document.body;
   let populated = false;
   const onCopy = (event: ClipboardEvent) => {
     if (!event.clipboardData) return;
     try {
-      event.clipboardData.setData("text/html", html);
+      if (html !== undefined) event.clipboardData.setData("text/html", html);
       event.clipboardData.setData("text/plain", text);
       event.preventDefault();
       populated = true;
@@ -63,6 +64,18 @@ function copySelection(html: string, text: string) {
   }
 }
 
+export async function copyPlainText(text: string): Promise<boolean> {
+  if (!text || typeof window === "undefined" || typeof navigator === "undefined") return false;
+  if (copySelection(text)) return true;
+  if (!navigator.clipboard?.writeText) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function copyRichText(html: string): Promise<CopyRichTextResult> {
   if (typeof window === "undefined" || typeof navigator === "undefined") {
     return { ok: false, method: "noop" };
@@ -70,7 +83,7 @@ export async function copyRichText(html: string): Promise<CopyRichTextResult> {
 
   const text = htmlToPlainText(html);
   // Run while the click still grants clipboard access, including in Safari.
-  if (copySelection(html, text)) return { ok: true, method: "selection" };
+  if (copySelection(text, html)) return { ok: true, method: "selection" };
 
   if ("ClipboardItem" in window && navigator.clipboard?.write) {
     try {

@@ -9,7 +9,7 @@ import type {
 import { layoutIndex, layoutStepFor } from "./article-layout";
 import type { LayoutStep } from "./layout-contract";
 import { blockStyle, effectiveTokens, fontStacks } from "./styles";
-import { sanitizeHTML, safeImage } from "./import";
+import { plainHTML, sanitizeHTML, safeImage } from "./import";
 
 export type AssetMap = Record<string, StudioAsset>;
 export function imageSource(src: string | undefined, assets: AssetMap) {
@@ -213,6 +213,24 @@ export function styleInlineContent(
     setCSS(child, styles[ordered ? "OL" : child.tagName]);
   }
 }
+export function splitWechatArticle(article: ArticleDocument, doc: Document = document) {
+  const editorial = layoutIndex(article.layout);
+  const titleBlock = article.blocks.find((block) => block.kind === "title")
+    ?? article.blocks.find((block) => layoutStepFor(block, article.layout, editorial)?.component === "title");
+  const title = titleBlock && plainHTML(
+    titleBlock.html.replace(/<br\b[^>]*>|<\/(?:p|div|h1)>/gi, " "),
+    doc,
+  ).replace(/\s+/g, " ").trim();
+  if (title) {
+    return {
+      title,
+      body: { ...article, blocks: article.blocks.filter((block) => block !== titleBlock) },
+    };
+  }
+  const name = article.name.trim();
+  return { title: name === "未命名文章" ? "" : name, body: article };
+}
+
 export function wechatHTML(
   article: ArticleDocument,
   profile: StyleProfile,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { JSDOM } from "jsdom";
-import { wechatHTML } from "./renderer";
+import { splitWechatArticle, wechatHTML } from "./renderer";
 import { builtInStyles } from "./styles";
 import { parseArticle } from "./import";
 import type { ArticleDocument } from "./types";
@@ -58,5 +58,27 @@ describe("WeChat studio renderer", () => {
       src: "asset:missing",
     });
     expect(() => wechatHTML(source, builtInStyles[0], {}, doc)).toThrow("缺失");
+  });
+
+  it("separates the edited main title from WeChat body export and retains chapter headings and images", () => {
+    const source = article("# 初始标题\n\n正文内容\n\n## 下一节\n\n![自有图](https://example.com/own.png)");
+    source.blocks[0].html = "<strong>新标题 &amp; 内容</strong><br>第二行";
+    const saved = JSON.stringify(source);
+    const { title, body } = splitWechatArticle(source, doc);
+    expect(title).toBe("新标题 & 内容 第二行");
+    expect(body.blocks.map((block) => block.kind)).toEqual(["paragraph", "heading", "image"]);
+    const html = wechatHTML(body, builtInStyles[0], {}, doc).html;
+    expect(html).not.toContain("新标题");
+    expect(html).toContain("下一节");
+    expect(html).toContain("https://example.com/own.png");
+    expect(JSON.stringify(source)).toBe(saved);
+  });
+
+  it("keeps the whole body when a draft has only a name and permits title-only drafts", () => {
+    const noTitle = article("正文第一段\n\n正文第二段");
+    expect(splitWechatArticle(noTitle, doc)).toEqual({ title: "稿件", body: noTitle });
+    const titleOnly = splitWechatArticle(article("# 唯一的标题"), doc);
+    expect(titleOnly.title).toBe("唯一的标题");
+    expect(titleOnly.body.blocks).toHaveLength(0);
   });
 });

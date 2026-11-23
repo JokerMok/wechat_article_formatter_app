@@ -1421,6 +1421,35 @@
   scrollbar-width: thin;
   scrollbar-color: var(--s-line-strong) var(--s-hover);
 }
+.studio-export-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--s-line);
+  border-radius: 7px;
+  background: var(--s-paper);
+}
+.studio-export-title span,
+.studio-export-empty {
+  color: var(--s-muted);
+  font-size: 12px;
+}
+.studio-export-title p {
+  margin: 4px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.studio-export-title .studio-btn {
+  flex-shrink: 0;
+}
+.studio-export-empty {
+  margin: 14px;
+}
 .studio-export-actions h3 {
   display: flex;
   gap: 7px;

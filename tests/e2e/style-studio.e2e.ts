@@ -448,9 +448,10 @@ test("whole import automatically attempts one semantic layout and retains rules 
   await expect(canvas).toContainText("一、记录现象");
 });
 for (const mode of ["selection", "clipboard-api", "denied"] as const) {
-  test(`WeChat copy writes and pastes real rich content from the export dialog (${mode})`, async ({ page, context }) => {
+  test(`WeChat copy separates the plain title and rich body (${mode})`, async ({ page, context }) => {
     await page.goto("/");
     await importSource(page);
+    await page.getByRole("textbox", { name: "稿件名称" }).fill("内部稿件名称");
     await page.evaluate((mode) => {
       if (mode !== "clipboard-api") {
         Object.defineProperty(navigator.clipboard, "write", {
@@ -465,15 +466,35 @@ for (const mode of ["selection", "clipboard-api", "denied"] as const) {
     }, mode);
     await page.getByRole("button", { name: "导出", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "导出到公众号" });
+    const bodyPreview = dialog.getByRole("region", { name: "正文预览" });
+    await expect(bodyPreview).not.toContainText("阅读里的新发现");
+    await expect(bodyPreview).toContainText("让设计服务内容");
     await page.evaluate(() => navigator.clipboard.writeText("CLIPBOARD_BEFORE_COPY"));
-    await dialog.getByRole("button", { name: "复制公众号图文", exact: true }).click();
+    if (mode === "denied") {
+      await page.evaluate(() => {
+        Object.defineProperty(navigator.clipboard, "writeText", {
+          configurable: true,
+          value: async () => { throw new DOMException("Denied", "NotAllowedError"); },
+        });
+      });
+    }
+    await dialog.getByRole("button", { name: "复制标题", exact: true }).click();
+    if (mode === "denied") {
+      await expect(dialog.getByRole("alert")).toContainText("复制失败");
+      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("CLIPBOARD_BEFORE_COPY");
+    } else {
+      await expect(dialog.getByRole("status")).toHaveText("标题已复制，可粘贴到公众号标题栏。");
+      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("阅读里的新发现");
+      expect(await page.evaluate(async () => (await navigator.clipboard.read()).flatMap((item) => item.types))).toEqual(["text/plain"]);
+    }
+    await dialog.getByRole("button", { name: "复制正文图文", exact: true }).click();
     if (mode === "denied") {
       await expect(dialog.getByRole("alert")).toContainText("复制失败");
       expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("CLIPBOARD_BEFORE_COPY");
       await expect(dialog.getByText("图文已复制", { exact: false })).toHaveCount(0);
       return;
     }
-    await expect(dialog.getByRole("status")).toHaveText("图文已复制，请在公众号后台粘贴并核对。");
+    await expect(dialog.getByRole("status")).toHaveText("正文图文已复制，可粘贴到公众号正文栏。");
     const payload = await page.evaluate(async () => {
       const items = await navigator.clipboard.read();
       const item = items.find((entry) => entry.types.includes("text/html"))!;
@@ -482,7 +503,10 @@ for (const mode of ["selection", "clipboard-api", "denied"] as const) {
     expect(payload.html).toContain("42%");
     expect(payload.html).toContain("<img");
     expect(payload.html).toContain("style=");
-    expect(payload.text).toContain("阅读里的新发现");
+    expect(payload.html).toContain("让设计服务内容");
+    expect(payload.html).not.toContain("阅读里的新发现");
+    expect(payload.text).toContain("让设计服务内容");
+    expect(payload.text).not.toContain("阅读里的新发现");
     expect(payload.text).not.toContain("<section");
     const target = await context.newPage();
     try {
@@ -501,6 +525,8 @@ for (const mode of ["selection", "clipboard-api", "denied"] as const) {
       await receiver.focus();
       await target.keyboard.press("ControlOrMeta+v");
       await expect(receiver).toContainText("42%");
+      await expect(receiver).toContainText("让设计服务内容");
+      await expect(receiver).not.toContainText("阅读里的新发现");
       await expect(receiver.locator("img")).toHaveCount(1);
       expect(await receiver.locator("[style]").count()).toBeGreaterThan(0);
     } finally {
@@ -585,10 +611,11 @@ test("article editing, themes, local overrides, history, refresh and WeChat expo
   expect(html).toContain("42%");
   expect(html).toContain("<img");
   expect(html).toContain("style=");
+  expect(html).not.toContain("阅读里的新发现");
   expect(html).not.toMatch(/class=|data-block-id|<script/);
-  await page.getByRole("button", { name: "复制公众号图文" }).click();
+  await page.getByRole("button", { name: "复制正文图文", exact: true }).click();
   await expect(
-    page.getByText("图文已复制，请在公众号后台粘贴并核对。", { exact: true }),
+    page.getByText("正文图文已复制，可粘贴到公众号正文栏。", { exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "关闭面板" }).click();
   await page.setViewportSize({ width: 390, height: 844 });

@@ -76,11 +76,12 @@ import {
   articleImages,
   checkImages,
   downloadBlob,
+  splitWechatArticle,
   wechatHTML,
 } from "@/lib/studio/renderer";
 import { studioDB, storeImage } from "@/lib/studio/storage";
 import { coverBlob } from "@/lib/studio/cover";
-import { copyRichText } from "@/lib/copy-rich-text";
+import { copyPlainText, copyRichText } from "@/lib/copy-rich-text";
 import {
   uid,
   kindLabels,
@@ -181,8 +182,13 @@ export default function Studio({
   );
   const [versionPicks, setVersionPicks] = useState<Record<string, number>>({});
   const [exportWidth, setExportWidth] = useState(390);
-  const [copyNotice, setCopyNotice] = useState<{ ok: boolean; message: string }>();
+  const [copyNotice, setCopyNotice] = useState<{
+    part: "title" | "body";
+    ok: boolean;
+    message: string;
+  }>();
   const [exportResult, setExportResult] = useState<{
+      title: string;
       html: string;
       warnings: string[];
     }>(),
@@ -591,10 +597,31 @@ export default function Studio({
   };
   const openExport = async () => {
     if (!article) return;
-    await checkImages(article, s.assets);
-    setExportResult(wechatHTML(article, profile, s.assets));
+    const { title, body } = splitWechatArticle(article);
+    await checkImages(body, s.assets);
+    const rendered = body.blocks.length
+      ? wechatHTML(body, profile, s.assets)
+      : { html: "", warnings: [] };
+    setExportResult({ title, ...rendered });
     setCopyNotice(undefined);
     setDialog("export");
+  };
+  const copyExport = (part: "title" | "body") => {
+    if (!exportResult) return;
+    void run(async () => {
+      setCopyNotice(undefined);
+      const ok = part === "title"
+        ? await copyPlainText(exportResult.title)
+        : (await copyRichText(exportResult.html)).ok;
+      const copied = part === "title"
+        ? "标题已复制，可粘贴到公众号标题栏。"
+        : "正文图文已复制，可粘贴到公众号正文栏。";
+      setCopyNotice({
+        part,
+        ok,
+        message: ok ? copied : "复制失败，请允许浏览器访问剪贴板后重试。",
+      });
+    });
   };
   const exportPackage = async () => {
     if (!article) return;
@@ -2021,7 +2048,7 @@ export default function Studio({
       {dialog === "export" && exportResult && (
         <StudioDialog title="导出到公众号" onClose={() => setDialog(null)} wide>
           <div className="studio-export-layout">
-            <div className="studio-export-preview">
+            <div className="studio-export-preview" role="region" aria-label="正文预览">
               <div className="studio-segment" aria-label="导出手机宽度">
                 {[320, 390, 430].map((width) => (
                   <button
@@ -2033,57 +2060,75 @@ export default function Studio({
                   </button>
                 ))}
               </div>
-              <div
-                className="studio-export-rendered"
-                style={{ width: exportWidth }}
-                onClick={(event) => {
-                  if ((event.target as HTMLElement).closest("a"))
-                    event.preventDefault();
-                }}
-                dangerouslySetInnerHTML={{ __html: exportResult.html }}
-              />
+              {exportResult.html ? (
+                <div
+                  className="studio-export-rendered"
+                  style={{ width: exportWidth }}
+                  onClick={(event) => {
+                    if ((event.target as HTMLElement).closest("a"))
+                      event.preventDefault();
+                  }}
+                  dangerouslySetInnerHTML={{ __html: exportResult.html }}
+                />
+              ) : (
+                <p className="studio-export-empty">暂无正文</p>
+              )}
             </div>
             <div className="studio-export-actions">
-              <h3>
-                <Check size={17} />
-                微信兼容检查
-              </h3>
-              <ul>
-                <li>仅导出文章正文</li>
-                <li>样式已内联</li>
-                <li>脚本与不安全属性已过滤</li>
-              </ul>
-              <div className="studio-export-warnings">
-                {exportResult.warnings.map((warning, index) => (
-                  <p key={index}>{warning}</p>
-                ))}
+              <div className="studio-export-title">
+                <div>
+                  <span>标题</span>
+                  <p>{exportResult.title || "未填写标题"}</p>
+                </div>
+                <button
+                  className="studio-btn"
+                  disabled={busy || !exportResult.title}
+                  onClick={() => copyExport("title")}
+                >
+                  <Copy size={16} aria-hidden="true" />
+                  复制标题
+                </button>
               </div>
-              <button
-                className="studio-btn primary"
-                disabled={busy}
-                onClick={() =>
-                  void run(async () => {
-                    setCopyNotice(undefined);
-                    const result = await copyRichText(exportResult.html);
-                    setCopyNotice({
-                      ok: result.ok,
-                      message: result.ok
-                        ? "图文已复制，请在公众号后台粘贴并核对。"
-                        : "复制失败，请允许浏览器访问剪贴板后重试。",
-                    });
-                  })
-                }
-              >
-                <Copy size={16} />
-                复制公众号图文
-              </button>
-              {copyNotice && (
+              {copyNotice?.part === "title" && (
                 <p className={`studio-copy-notice ${copyNotice.ok ? "" : "error"}`} role={copyNotice.ok ? "status" : "alert"}>
                   {copyNotice.message}
                 </p>
               )}
               <button
+                className="studio-btn primary"
+                disabled={busy || !exportResult.html}
+                onClick={() => copyExport("body")}
+              >
+                <Copy size={16} aria-hidden="true" />
+                复制正文图文
+              </button>
+              {copyNotice?.part === "body" && (
+                <p className={`studio-copy-notice ${copyNotice.ok ? "" : "error"}`} role={copyNotice.ok ? "status" : "alert"}>
+                  {copyNotice.message}
+                </p>
+              )}
+              {exportResult.html && (
+                <>
+                  <h3>
+                    <Check size={17} aria-hidden="true" />
+                    微信兼容检查
+                  </h3>
+                  <ul>
+                    <li>样式已内联</li>
+                    <li>脚本与不安全属性已过滤</li>
+                  </ul>
+                  {exportResult.warnings.length > 0 && (
+                    <div className="studio-export-warnings">
+                      {exportResult.warnings.map((warning) => (
+                        <p key={warning}>{warning}</p>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+              <button
                 className="studio-btn"
+                disabled={!exportResult.html}
                 onClick={() =>
                   downloadBlob(
                     new Blob([exportResult.html], {
