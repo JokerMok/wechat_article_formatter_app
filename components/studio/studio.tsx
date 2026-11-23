@@ -30,6 +30,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import JSZip from "jszip";
+import { ArticleImageDialog } from "./article-image-dialog";
 import { ArticleLayoutPanel } from "./article-layout-panel";
 import { seedLayout, useArticleLayout } from "./use-article-layout";
 import { layoutIndex, layoutStepFor } from "@/lib/studio/article-layout";
@@ -150,7 +151,7 @@ export default function Studio({
     [sideTab, setSideTab] = useState<"styles" | "outline">("outline"),
     [scope, setScope] = useState<"global" | "block">("global");
   const [dialog, setDialog] = useState<
-    "import" | "export" | "history" | "settings" | "account" | null
+    "import" | "export" | "history" | "settings" | "account" | "articleImage" | null
   >(null);
   const [importFormat, setImportFormat] = useState<
       "text" | "markdown" | "html"
@@ -210,12 +211,14 @@ export default function Studio({
       const canvas = document.querySelector<HTMLElement>(
         '[aria-label="文章编辑画布"]',
       );
+      const target = id
+        ? canvas?.querySelector<HTMLElement>(`[data-block-id="${id}"]`)
+        : undefined;
       const field = id
-        ? canvas?.querySelector<HTMLElement>(
-            `[data-block-id="${id}"] [contenteditable]`,
-          )
+        ? target?.querySelector<HTMLElement>("[contenteditable]")
         : canvas?.querySelector<HTMLElement>("[contenteditable]");
-      (field ?? canvas)?.focus({ preventScroll: !id });
+      if (target && !field) target.scrollIntoView({ block: "nearest" });
+      (field ?? canvas)?.focus({ preventScroll: !id || !field });
       if (field && end) {
         const range = document.createRange();
         range.selectNodeContents(field);
@@ -396,6 +399,44 @@ export default function Studio({
       }
     }
     return images;
+  };
+  const insertIllustration = async (
+    articleId: string,
+    after: string | undefined,
+    file: File,
+    alt: string,
+    signal: AbortSignal,
+  ) => {
+    const db = studioDB();
+    const asset = await storeImage(file);
+    let inserted = false;
+    try {
+      if (signal.aborted) return;
+      await s.refresh();
+      if (signal.aborted) return;
+      const illustration: ArticleBlock = {
+        id: uid("block"),
+        kind: "image",
+        html: "",
+        src: `asset:${asset.id}`,
+        alt,
+      };
+      inserted = s.update((current) => {
+        if (current.id !== articleId || current.deletedAt) return current;
+        const blocks = [...current.blocks];
+        const index = blocks.findIndex((item) => item.id === after);
+        blocks.splice(index < 0 ? blocks.length : index + 1, 0, illustration);
+        return { ...current, blocks };
+      });
+      if (!inserted) throw new Error("文章已切换，请在目标稿件中重新生成。");
+      setSelected(illustration.id);
+      setScope("block");
+      if (preview === "compare") setPreview(singlePreview.current);
+      s.setMessage("已插入 AI 配图。");
+      focusBlock(illustration.id);
+    } finally {
+      if (!inserted) await db.assets.delete(asset.id).catch(() => undefined);
+    }
   };
   const pasteIntoCanvas = (event: ClipboardEvent<HTMLElement>) => {
     const data = event.clipboardData;
@@ -1396,6 +1437,13 @@ export default function Studio({
                     <ImagePlus size={14} />
                     图片
                   </button>
+                  <button
+                    className="studio-text-btn"
+                    onClick={() => setDialog("articleImage")}
+                  >
+                    <Sparkles size={14} aria-hidden="true" />
+                    AI 配图
+                  </button>
                 </div>
               )}
               {canvasPreview === "compare" ? (
@@ -1752,6 +1800,17 @@ export default function Studio({
             </div>
           )}
         </StudioDialog>
+      )}
+      {view === "editor" && dialog === "articleImage" && (
+        <ArticleImageDialog
+          key={article.id}
+          article={article}
+          after={block?.id}
+          onInsert={(file, alt, signal) =>
+            insertIllustration(article.id, block?.id, file, alt, signal)
+          }
+          onClose={() => setDialog(null)}
+        />
       )}
       {dialog === "import" && (
         <StudioDialog title="导入我的文章" onClose={() => setDialog(null)} wide>

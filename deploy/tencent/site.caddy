@@ -29,7 +29,7 @@ formatter.shizibandu.icu {
 
 	@dynamicAI {
 		method GET POST
-		path /api/ai/session /api/ai/analyze /api/ai/generate /api/ai/article-layout /api/ai/style-capture /api/ai/style-vision /api/ai/cover-prompt /api/ai/cover-image
+		path /api/ai/session /api/ai/analyze /api/ai/generate /api/ai/article-layout /api/ai/style-capture /api/ai/style-vision /api/ai/cover-prompt /api/ai/cover-image /api/ai/article-image
 		file /.formatter-dynamic
 	}
 	handle @dynamicAI {

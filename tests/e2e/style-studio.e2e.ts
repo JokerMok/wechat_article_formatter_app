@@ -718,6 +718,88 @@ test("three editable covers, independent cover style and downloadable original P
   ).toHaveValue("64");
 });
 
+test("style numbers accept precise keyboard input and retain slider controls", async ({ page }) => {
+  await page.goto("/");
+  await importSource(page);
+  const canvas = canvasOf(page);
+  const bodySize = page.getByRole("spinbutton", { name: "正文字号", exact: true });
+  await bodySize.fill("19");
+  await bodySize.press("Enter");
+  await expect(canvas).toHaveCSS("font-size", "19px");
+  await expect(page.getByRole("slider", { name: "正文字号", exact: true })).toHaveValue("19");
+
+  const paragraph = canvas.getByRole("textbox", { name: "编辑正文", exact: true }).first();
+  await paragraph.click();
+  const lineHeight = page.getByRole("spinbutton", { name: "当前块行距", exact: true });
+  await lineHeight.fill("1.73");
+  await lineHeight.press("Tab");
+  await expect(lineHeight).toHaveValue("1.73");
+  expect(await paragraph.locator("..").evaluate((el) => el.style.lineHeight)).toBe("1.73");
+  await lineHeight.fill("");
+  await lineHeight.press("Tab");
+  await expect(lineHeight).toHaveValue("1.73");
+  await lineHeight.fill("2.25");
+  await lineHeight.press("Escape");
+  await lineHeight.press("Tab");
+  await expect(lineHeight).toHaveValue("1.73");
+  await lineHeight.fill("8");
+  await lineHeight.press("Enter");
+  await expect(lineHeight).toHaveValue("3");
+
+  await page.getByRole("button", { name: "封面", exact: true }).click();
+  const coverFont = page.getByRole("spinbutton", { name: "封面字号", exact: true });
+  await coverFont.fill("64");
+  await coverFont.press("Enter");
+  await expect(page.getByRole("slider", { name: "封面字号", exact: true })).toHaveValue("64");
+});
+
+test("AI article image retries in place, then inserts, undoes and exports a saved image", async ({ page }) => {
+  const requests: unknown[] = [];
+  await page.route("**/api/ai/article-image", async (route) => {
+    requests.push(route.request().postDataJSON());
+    if (requests.length === 1)
+      return route.fulfill({ status: 502, json: { error: { message: "暂时无法生成，请重试。" } } });
+    return route.fulfill({ contentType: "image/png", body: Buffer.from(ownPng, "base64") });
+  });
+  await page.goto("/");
+  await startBlank(page);
+  const first = "把测试样本放进两列，便于比较差异。";
+  const last = "接着记录每次调整前后的结果。";
+  await pasteClipboard(page, { text: `# 对照实验\n\n${first}\n\n${last}` });
+  const canvas = canvasOf(page);
+  await canvas.getByText(first, { exact: true }).click();
+  await page.getByRole("button", { name: "AI 配图", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "AI 配图" });
+  await expect(dialog).toContainText("插入到选中内容下方");
+  const brief = dialog.getByRole("textbox", { name: "配图要求（可选）" });
+  await brief.fill("左右两列对照");
+  expect(requests).toHaveLength(0);
+  await dialog.getByRole("button", { name: "生成并插入" }).click();
+  await expect(dialog.getByRole("alert")).toHaveText("暂时无法生成，请重试。");
+  await expect(brief).toHaveValue("左右两列对照");
+  await dialog.getByRole("button", { name: "生成并插入" }).click();
+  await expect(dialog).not.toBeVisible();
+  expect(requests).toEqual(Array(2).fill({ title: "对照实验", focus: first, context: last, brief: "左右两列对照" }));
+
+  const blocks = canvas.locator("section[data-block-id]");
+  await expect(blocks.nth(1)).toHaveText(first);
+  const generated = blocks.nth(2).getByRole("img", { name: "配图 · 左右两列对照" });
+  await expect(generated).toBeVisible();
+  await expect(blocks.nth(3)).toHaveText(last);
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  await expect(canvas.locator("img")).toHaveCount(0);
+  await page.getByRole("button", { name: "重做", exact: true }).click();
+  await expect(generated).toBeVisible();
+  await expect(page.getByText("已自动保存", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(generated).toBeVisible();
+
+  await page.getByRole("button", { name: "导出", exact: true }).click();
+  const exported = page.getByRole("dialog", { name: "导出到公众号" });
+  const image = exported.getByRole("img", { name: "配图 · 左右两列对照" });
+  await expect(image).toHaveAttribute("src", /^data:image\/png;base64,/);
+});
+
 test("AI cover waits for edited prompt approval and preserves the artwork pixels", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 844 });
   const original = "绘制标题「阅读新发现」，用靛蓝与金色构图。";

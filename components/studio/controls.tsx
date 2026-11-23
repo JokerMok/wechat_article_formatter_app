@@ -1,4 +1,5 @@
 "use client";
+import { useId, useState } from "react";
 import type { StyleTokens } from "@/lib/studio/types";
 export function RangeField({
   label,
@@ -17,15 +18,45 @@ export function RangeField({
   unit?: string;
   onChange: (value: number) => void;
 }) {
+  const id = useId();
+  const [draft, setDraft] = useState<string>();
   return (
-    <label className="studio-field">
-      <span>
-        {label}
-        <output>
-          {Number(value.toFixed(2))}
-          {unit}
-        </output>
-      </span>
+    <div className="studio-field studio-range-field">
+      <div className="studio-range-heading">
+        <label htmlFor={id}>{label}</label>
+        <div className="studio-range-value">
+          <input
+            id={id}
+            type="number"
+            inputMode="decimal"
+            min={min}
+            max={max}
+            step="any"
+            aria-describedby={unit ? `${id}-unit` : undefined}
+            value={draft ?? String(value)}
+            onChange={(event) => setDraft(event.currentTarget.value)}
+            onBlur={(event) => {
+              if (draft === undefined) return;
+              const typed = event.currentTarget.valueAsNumber;
+              setDraft(undefined);
+              if (!Number.isFinite(typed)) return;
+              const next = Math.max(min, Math.min(max, typed));
+              if (next !== value) onChange(next);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                event.currentTarget.blur();
+              } else if (event.key === "Escape" && draft !== undefined) {
+                event.preventDefault();
+                event.stopPropagation();
+                setDraft(undefined);
+              }
+            }}
+          />
+          {unit && <span id={`${id}-unit`}>{unit}</span>}
+        </div>
+      </div>
       <input
         type="range"
         aria-label={label}
@@ -33,9 +64,10 @@ export function RangeField({
         max={max}
         step={step}
         value={value}
+        aria-valuetext={`${value}${unit}`}
         onChange={(e) => onChange(Number(e.target.value))}
       />
-    </label>
+    </div>
   );
 }
 export function ColorField({

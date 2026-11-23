@@ -27,6 +27,8 @@
 
 从 GitHub 维护分支更新时运行 `bash deploy/tencent/update.sh codex/product-readiness`，也可传入 `local:<提交SHA>`。需要差分构建时先从服务器取基础包，并将其路径和版本分别传入 `FORMATTER_DELTA_BASE`、`FORMATTER_DELTA_BASE_SHA`。基础版本 `974f2b02d123ad1ba3b605828cc859d3097df969` 的包位于 `/srv/apps/formatter/releases/974f2b02d123ad1ba3b605828cc859d3097df969/runtime.tar.gz`。独立构建需要保留当前部署工具和匹配的 Chromium 运行时。
 
+包含正文 AI 配图的版本需要同步安装 `deploy/tencent/site.caddy`，使 `/api/ai/article-image` 经产品域名转发。配图复用封面生图模型和现有 `style-vision` 权益。
+
 普通回退用 `ssh tencent-main 'sudo /srv/apps/formatter/shared/config/manage.sh rollback'`。当前上一版 `f5de942` 沿用相同账号配置和数据库结构。若继续回退至 `9265415`，先按 [账号回退步骤](docs/ACCOUNT_CENTER_INTEGRATION.md#正式环境回退) 暂停账号模式。旧版 Caddy 配置的恢复点在 `/srv/ops/rollback/caddy/formatter.Y4y0YZqE`。
 
 ## 2026-11-19 单点登录与平台所有者

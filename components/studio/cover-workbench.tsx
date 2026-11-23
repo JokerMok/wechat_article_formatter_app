@@ -729,7 +729,7 @@ export function CoverWorkbench({
               onChange={(event) => setReview({ ...review, prompt: event.target.value })}
             />
           </label>
-          {reviewError && <p role="alert" className="studio-cover-prompt-error">{reviewError}</p>}
+          {reviewError && <p role="alert" className="studio-dialog-error">{reviewError}</p>}
           {aiStep === "image" && <p role="status" className="studio-note">正在生成完整封面…</p>}
           {aiStep === "prompt" && <p role="status" className="studio-note">正在设计新的构思…</p>}
           <div className="studio-dialog-actions studio-cover-review-actions">
